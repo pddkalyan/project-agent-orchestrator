@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "run_id": "20261003_0001",
-  "phase": "AUDIT_REVIEW_PENDING",
-  "status": "TASK_0001_COMPLETED_PENDING_ASTRA_REVIEW",
+  "phase": "AWAITING_ASTRA_REVIEW",
+  "status": "TASK_0001_AUDIT_PACKET_READY",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",
