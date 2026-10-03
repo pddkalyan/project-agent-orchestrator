@@ -24,30 +24,27 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "acceptance_criteria": [
-    "External AgentOwnedCandidateRoots are actually enumerated and audited.",
-    "ActiveProjectRoot is protected and is not the default cleanup search scope.",
-    "No candidate roots supplied means no external filesystem scan beyond reading the local provenance registry.",
-    "Path containment is boundary-safe, not naive prefix matching.",
-    "Overlapping candidate roots do not produce duplicate item records.",
-    "Files in candidate roots are review-only, never automatically removable; files inside active project are KEEP_ACTIVE.",
-    "Script has no destructive or system-modifying operations and emits JSON to stdout only.",
-    "Schema and review packet match the script behavior and remain PENDING_ASTRA_REVIEW."
+    "No Split-Path -Leaf or filename-only provenance matching exists.",
+    "provenance_match is true only for exact normalized absolute path membership.",
+    "Active-project membership does not automatically set provenance_match=true.",
+    "External candidate roots are independently scanned and correctly classified.",
+    "No candidate roots means no candidate-file scan.",
+    "Docs, schema, script, and Astra review packet are mutually consistent.",
+    "No destructive/system-modifying operations; stdout only; PENDING_ASTRA_REVIEW."
   ],
   "astra_review_required": true,
-  "retry_attempt": 8,
-  "retry_reason": "Final pre-Astra functional correction: the latest script only enumerates TargetDirectory, so AgentOwnedCandidateRoots outside the active project are never scanned. As written, almost every default-scanned file becomes KEEP_ACTIVE and the audit cannot discover previous agent-owned installations elsewhere on the PC.",
+  "retry_attempt": 9,
+  "retry_reason": "Final pre-Astra semantic correction: latest script still uses relative-path OR filename fallback for provenance matching and marks every active-project file provenance_match=true. That contradicts exact normalized path provenance semantics and the review packet.",
   "preferred_worker_model": "gemini-3.1-flash-lite",
   "orchestrator_corrections": [
-    "Restore separate ActiveProjectRoot and AgentOwnedCandidateRoots parameters. ActiveProjectRoot defaults to current directory. AgentOwnedCandidateRoots defaults empty.",
-    "Enumerate each explicitly supplied AgentOwnedCandidateRoot independently even when it is outside ActiveProjectRoot. These roots are the actual cleanup-audit search scope.",
-    "Do not recursively inventory the entire ActiveProjectRoot just to create cleanup candidates. ActiveProjectRoot exists primarily as a protected exclusion boundary and as the location of PROVENANCE_REGISTRY.jsonl.",
-    "For every file found under an AgentOwnedCandidateRoot: if it is inside ActiveProjectRoot, status KEEP_ACTIVE and evidence_source ACTIVE_PROJECT; otherwise if exact normalized provenance match, CANDIDATE_REVIEW_ONLY and evidence_source EXACT_PROVENANCE_MATCH; otherwise CANDIDATE_REVIEW_ONLY and evidence_source EXPLICIT_AGENT_OWNED_ROOT.",
-    "Use a path-boundary-safe containment test based on GetRelativePath or equivalent. Do not use naive string StartsWith that can confuse C:\\Project with C:\\Project2.",
-    "Deduplicate files when candidate roots overlap.",
-    "AgentOwnedCandidateRoots must remain empty by default, so the default invocation scans no external candidate paths and cannot wander across home/system drives.",
-    "Unknown paths outside explicitly supplied candidate roots must not be scanned or classified. No whole-drive/home/system scan.",
-    "Keep the script strictly non-destructive and stdout-only. Do not add OutputPath/file-writing behavior in this candidate.",
-    "Keep required size_bytes, evidence_source, provenance_match, status, reason, exact path provenance, Google Drive state, zero spend, and PENDING_ASTRA_REVIEW.",
-    "Use exact model gemini-3.1-flash-lite in provenance metadata and filenames."
+    "Build a HashSet of exact normalized absolute provenance paths. For registry records with an absolute_path field, normalize that directly. For existing relative file fields, join them to ActiveProjectRoot and normalize. Never compare only file names and never compare a candidate-root-relative path to a repository-relative record.",
+    "Set provenance_match solely from exact normalized absolute-path membership in that HashSet. Being inside ActiveProjectRoot does NOT imply provenance_match=true.",
+    "KEEP_ACTIVE still takes precedence for any file inside ActiveProjectRoot, but evidence_source should be ACTIVE_PROJECT. provenance_match may independently be true or false.",
+    "For external files under explicit AgentOwnedCandidateRoots: if exact absolute provenance match -> CANDIDATE_REVIEW_ONLY / EXACT_PROVENANCE_MATCH / provenance_match=true; otherwise -> CANDIDATE_REVIEW_ONLY / EXPLICIT_AGENT_OWNED_ROOT / provenance_match=false.",
+    "Remove all filename-only fallback logic such as Split-Path -Leaf matching.",
+    "Keep candidate-root independent enumeration, overlap deduplication, boundary-safe containment, empty roots by default, stdout-only output, and zero destructive operations.",
+    "Correct documentation default-invocation wording: with no AgentOwnedCandidateRoots, the script should scan no candidate files; ActiveProjectRoot is a protected boundary and provenance-registry base, not recursively scanned by default.",
+    "The Astra review packet may claim exact provenance matching only if the implementation follows these rules.",
+    "Use gemini-3.1-flash-lite exact provenance/model naming."
   ]
 }
