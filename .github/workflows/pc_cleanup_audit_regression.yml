@@ -1,0 +1,177 @@
+name: PC Cleanup Audit Regression
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/pc_cleanup_audit__created_by_worker_gemini_cli__model_*__task_TASK-0001.ps1"
+      - "schemas/pc_cleanup_audit.schema.json"
+      - "docs/pc_cleanup_discovery__created_by_worker_gemini_cli__model_*__task_TASK-0001.md"
+      - "review_packets/astra_review_TASK-0001__created_by_worker_gemini_cli__model_*.json"
+      - "memory/**"
+      - "PROVENANCE_REGISTRY.jsonl"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout PR candidate
+        uses: actions/checkout@v4
+
+      - name: Run PowerShell 7 regression fixtures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $script = Get-ChildItem "scripts" -Filter "pc_cleanup_audit__created_by_worker_gemini_cli__model_*__task_TASK-0001.ps1" |
+            Sort-Object Name -Descending |
+            Select-Object -First 1
+          if (-not $script) { throw "TASK-0001 audit script not found" }
+          $scriptPath = $script.FullName
+          $schemaPath = (Resolve-Path "schemas/pc_cleanup_audit.schema.json").Path
+          Write-Host "Testing script: $scriptPath"
+          Write-Host "PowerShell: $($PSVersionTable.PSVersion)"
+
+          $root = Join-Path $env:RUNNER_TEMP "task0001-fixtures"
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+          New-Item -ItemType Directory -Path $root | Out-Null
+
+          $candidate = Join-Path $root "agent-owned"
+          $child = Join-Path $candidate "child"
+          New-Item -ItemType Directory -Path $child -Force | Out-Null
+          "a" | Set-Content -LiteralPath (Join-Path $candidate "a.tmp")
+          "b" | Set-Content -LiteralPath (Join-Path $child "b.tmp")
+
+          # Default stdout: no report file created and roots serialize as an array.
+          $defaultJson = & $scriptPath -ActiveProjectRoot $PWD 2>$null
+          if ($LASTEXITCODE) { throw "Default invocation failed" }
+          $defaultObj = $defaultJson | ConvertFrom-Json
+          if ($defaultObj.agent_owned_candidate_roots -isnot [System.Array]) {
+            throw "agent_owned_candidate_roots must serialize as an array for zero roots"
+          }
+          if ($defaultObj.agent_owned_candidate_roots.Count -ne 0) {
+            throw "Default invocation must have zero candidate roots"
+          }
+          if ($defaultObj.items.Count -ne 0) {
+            throw "Default invocation must scan zero candidate files"
+          }
+          if (Test-Path "pc_cleanup_audit_report.json") {
+            throw "Default invocation created an unexpected file"
+          }
+
+          # One root must remain a one-element JSON array.
+          $oneJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($candidate) 2>$null
+          if ($LASTEXITCODE) { throw "One-root invocation failed" }
+          $oneObj = $oneJson | ConvertFrom-Json
+          if ($oneObj.agent_owned_candidate_roots -isnot [System.Array] -or $oneObj.agent_owned_candidate_roots.Count -ne 1) {
+            throw "One candidate root did not serialize as a one-element array"
+          }
+
+          # Overlapping / duplicate roots must deduplicate absolute files.
+          $multiJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($candidate, $candidate, $child) 2>$null
+          if ($LASTEXITCODE) { throw "Multi-root invocation failed" }
+          $multiObj = $multiJson | ConvertFrom-Json
+          $unique = @($multiObj.items.path | Sort-Object -Unique)
+          if ($unique.Count -ne $multiObj.items.Count) {
+            throw "Overlapping roots produced duplicate items"
+          }
+          if ($multiObj.summary.total_scanned -ne $multiObj.items.Count) {
+            throw "Summary total does not equal unique item count"
+          }
+
+          # Active project infrastructure must remain KEEP_ACTIVE even if project root is supplied as a candidate root.
+          $activeJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($PWD) 2>$null
+          if ($LASTEXITCODE) { throw "Active-root overlap invocation failed" }
+          $activeObj = $activeJson | ConvertFrom-Json
+          $mustKeep = @(
+            ".gitignore",
+            ".github\workflows\manual_worker_smoke.yml",
+            ".github\workflows\worker_task.yml"
+          )
+          foreach ($rel in $mustKeep) {
+            $hit = @($activeObj.items | Where-Object { $_.path -eq $rel })
+            if ($hit.Count -ne 1) { throw "Expected exactly one active item for $rel" }
+            if ($hit[0].recommendation -ne "KEEP_ACTIVE") { throw "$rel was not KEEP_ACTIVE" }
+          }
+
+          # A generic worker result for another task must also be protected.
+          $workerResult = Join-Path $PWD "worker_result_TASK-9999.json"
+          "{}" | Set-Content -LiteralPath $workerResult
+          try {
+            $activeJson2 = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($PWD) 2>$null
+            $activeObj2 = $activeJson2 | ConvertFrom-Json
+            $rel = "worker_result_TASK-9999.json"
+            $hit = @($activeObj2.items | Where-Object { $_.path -eq $rel })
+            if ($hit.Count -ne 1 -or $hit[0].recommendation -ne "KEEP_ACTIVE") {
+              throw "Current worker-result artifact was not protected"
+            }
+          } finally {
+            Remove-Item -LiteralPath $workerResult -Force
+          }
+
+          # Missing root must fail clearly.
+          $missing = Join-Path $root "does-not-exist"
+          $missingOutput = & pwsh -NoProfile -File $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots $missing 2>&1
+          if ($LASTEXITCODE -eq 0) { throw "Missing candidate root appeared successful" }
+
+          # File-valued root must fail clearly.
+          $fileRoot = Join-Path $root "not-a-directory.txt"
+          "x" | Set-Content -LiteralPath $fileRoot
+          $fileOutput = & pwsh -NoProfile -File $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots $fileRoot 2>&1
+          if ($LASTEXITCODE -eq 0) { throw "File-valued candidate root appeared successful" }
+
+          # Existing OutputPath must never be overwritten.
+          $collision = Join-Path $root "protected.txt"
+          "ORIGINAL-CONTENT" | Set-Content -LiteralPath $collision
+          $beforeHash = (Get-FileHash -LiteralPath $collision -Algorithm SHA256).Hash
+          $collisionOutput = & pwsh -NoProfile -File $scriptPath -ActiveProjectRoot $PWD -OutputPath $collision 2>&1
+          if ($LASTEXITCODE -eq 0) { throw "Existing output path was accepted" }
+          $afterHash = (Get-FileHash -LiteralPath $collision -Algorithm SHA256).Hash
+          if ($beforeHash -ne $afterHash) { throw "Existing output path was modified" }
+
+          # New report destination must succeed.
+          $newReport = Join-Path $root "new-report.json"
+          & pwsh -NoProfile -File $scriptPath -ActiveProjectRoot $PWD -OutputPath $newReport | Out-Null
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $newReport)) {
+            throw "New output destination failed"
+          }
+
+          # Validate representative reports against JSON Schema.
+          @($defaultJson, $oneJson, $multiJson, $activeJson) | ForEach-Object -Begin { $i = 0 } -Process {
+            $p = Join-Path $root ("schema-" + $i + ".json")
+            Set-Content -LiteralPath $p -Value $_ -Encoding utf8
+            python -m pip install --disable-pip-version-check --quiet jsonschema
+            python -m jsonschema -i $p $schemaPath
+            if ($LASTEXITCODE -ne 0) { throw "Schema validation failed for fixture $i" }
+            $i++
+          }
+
+          # Unsupported built-in Windows PowerShell 5.1 must fail immediately with a clear prerequisite message.
+          $legacy = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -ActiveProjectRoot $PWD 2>&1
+          if ($LASTEXITCODE -eq 0) { throw "Windows PowerShell 5.1 unexpectedly succeeded" }
+          if (($legacy -join "`n") -notmatch "PowerShell 7") {
+            throw "Unsupported runtime did not emit a clear PowerShell 7 prerequisite message"
+          }
+
+          Write-Host "All TASK-0001 regression fixtures passed."
+
+      - name: Record runtime evidence
+        shell: pwsh
+        run: |
+          @{
+            workflow_run_id = $env:GITHUB_RUN_ID
+            runner_os = $env:RUNNER_OS
+            powershell_7 = $PSVersionTable.PSVersion.ToString()
+            result = "PASS"
+          } | ConvertTo-Json | Set-Content "pc_cleanup_audit_test_evidence.json"
+
+      - name: Upload runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: pc-cleanup-audit-test-evidence
+          path: pc_cleanup_audit_test_evidence.json
+          retention-days: 30
