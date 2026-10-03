@@ -6,7 +6,7 @@ on:
       - "tasks/queue/*.json"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   worker:
@@ -82,22 +82,26 @@ jobs:
           set -euo pipefail
           test -n "$(git status --porcelain | grep -v 'worker_result_' | grep -v 'changed-files.txt' || true)"
 
-      - name: Commit worker changes
+      - name: Stage worker bundle
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "project-agent-worker"
-          git config user.email "project-agent-worker@users.noreply.github.com"
-          git add --all
-          git reset -- "worker_result_${{ steps.task.outputs.task_id }}.json" changed-files.txt
-          git commit -m "worker: complete ${{ steps.task.outputs.task_id }} [${{ steps.task.outputs.worker_model }}]"
-          git push origin "$WORKER_BRANCH"
+          mkdir -p worker_bundle
+          cp "worker_result_${{ steps.task.outputs.task_id }}.json" worker_bundle/
+          cp changed-files.txt worker_bundle/
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            if [[ "$file" == worker_result_*.json || "$file" == "changed-files.txt" ]]; then
+              continue
+            fi
+            mkdir -p "worker_bundle/$(dirname "$file")"
+            cp "$file" "worker_bundle/$file"
+          done < changed-files.txt
+          git diff --binary > "worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
 
-      - name: Upload worker evidence
+      - name: Upload worker bundle
         uses: actions/upload-artifact@v4
         with:
-          name: "worker-evidence-${{ steps.task.outputs.task_id }}"
-          path: |
-            worker_result_${{ steps.task.outputs.task_id }}.json
-            changed-files.txt
+          name: "worker-bundle-${{ steps.task.outputs.task_id }}"
+          path: worker_bundle/
           retention-days: 30
