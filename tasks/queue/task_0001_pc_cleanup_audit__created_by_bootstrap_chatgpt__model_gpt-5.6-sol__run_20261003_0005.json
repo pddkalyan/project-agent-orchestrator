@@ -24,33 +24,24 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "acceptance_criteria": [
-    "With empty AgentOwnedCandidateRoots, the script enumerates zero candidate files and does not recurse ActiveProjectRoot.",
-    "Only explicit candidate roots are recursively enumerated.",
-    "KEEP_ACTIVE has first precedence for files inside ActiveProjectRoot.",
-    "Overlapping candidate roots produce one entry per normalized absolute file path.",
-    "Exact provenance is exact normalized absolute path only; no filename or relative-candidate fallback.",
-    "Entry schema requires path, size_bytes, last_modified_utc, evidence_source, recommendation, provenance_match, reason.",
-    "External candidate files are always review-only, never auto-remove.",
-    "Script is stdout-only and non-destructive.",
-    "Docs/schema/script/review packet are mutually consistent and review_status remains PENDING_ASTRA_REVIEW."
+    "Active-project membership never forces provenance_match=true.",
+    "provenance_match always means exact normalized absolute registry membership.",
+    "HashSet construction is valid PowerShell/.NET syntax using ::new(comparer).",
+    "Exact match summary count follows deduplicated exact matches.",
+    "Docs/schema/script/review packet are mutually consistent.",
+    "All prior non-destructive and scope controls remain intact."
   ],
   "astra_review_required": true,
-  "retry_attempt": 10,
-  "retry_reason": "Escalating this correction to the stronger free Gemini 3.5 Flash-Lite worker. The prior candidate still recursively scans ActiveProjectRoot, does not enforce KEEP_ACTIVE precedence for candidate roots inside the project, and does not deduplicate overlapping roots.",
+  "retry_attempt": 11,
+  "retry_reason": "One final pre-Astra semantic/runtime correction. The candidate is nearly ready, but it still sets provenance_match=true for every KEEP_ACTIVE file even if no exact registry path exists, and its HashSet construction should use the explicit comparer constructor.",
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "orchestrator_corrections": [
-    "Do NOT enumerate ActiveProjectRoot. It is only a protected boundary and provenance-registry base. With AgentOwnedCandidateRoots empty, entries must be empty and no recursive filesystem scan should occur.",
-    "Enumerate only explicitly supplied AgentOwnedCandidateRoots.",
-    "Implement a boundary-safe Test-IsInsidePath helper. For every file found in a candidate root, FIRST test whether it is inside ActiveProjectRoot. If yes: KEEP_ACTIVE / ACTIVE_PROJECT, regardless of candidate-root membership or provenance.",
-    "Use a case-insensitive HashSet or Dictionary keyed by normalized absolute file path to deduplicate overlapping candidate roots.",
-    "Load provenance into a case-insensitive HashSet of exact normalized absolute paths: absolute_path records directly; relative file records joined to ActiveProjectRoot. No filename fallback and no candidate-root-relative matching.",
-    "For an external candidate file not inside active project: exact provenance match -> CANDIDATE_REVIEW_ONLY / EXACT_PROVENANCE_MATCH / provenance_match=true; otherwise -> CANDIDATE_REVIEW_ONLY / EXPLICIT_AGENT_OWNED_ROOT / provenance_match=false.",
-    "Each entry must include path, size_bytes, last_modified_utc, evidence_source, recommendation, provenance_match, and reason.",
-    "Schema must require all entry fields. evidence_source enum must include ACTIVE_PROJECT, EXACT_PROVENANCE_MATCH, EXPLICIT_AGENT_OWNED_ROOT.",
-    "Report summary should include total_scanned, keep_active_count, candidate_review_count, exact_provenance_match_count, explicit_root_count.",
-    "Script must perform no deletion, uninstall, registry write, service stop, process kill, package removal, or file write. Emit JSON to stdout only.",
-    "Docs must explicitly state default invocation scans zero candidate files and ActiveProjectRoot is not recursively enumerated.",
-    "Astra packet stays PENDING_ASTRA_REVIEW and accurately describes only implemented behavior.",
-    "Use exact model gemini-3.5-flash-lite in all provenance-bearing filenames and metadata for this regenerated candidate."
+    "For a file inside ActiveProjectRoot, recommendation remains KEEP_ACTIVE and evidence_source remains ACTIVE_PROJECT, but provenance_match MUST equal provenanceSet.Contains(absFilePath). Active-project membership alone must never imply a provenance match.",
+    "Increment exact_provenance_match_count whenever provenanceSet.Contains(absFilePath) is true, regardless of whether the file is KEEP_ACTIVE or CANDIDATE_REVIEW_ONLY. Do not double-count deduplicated paths.",
+    "Construct the provenance HashSet explicitly with [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase). Do not cast a comparer object into HashSet.",
+    "Update documentation so the active-project classification states provenance_match is true only on an exact registry match, otherwise false.",
+    "Keep all existing successful behavior unchanged: no ActiveProjectRoot recursion, explicit candidate roots only, active boundary first precedence, case-insensitive dictionary dedup, exact absolute provenance, size/mtime fields, stdout-only, zero destructive actions.",
+    "Astra packet stays PENDING_ASTRA_REVIEW and must not overclaim behavior.",
+    "Use exact model gemini-3.5-flash-lite in provenance-bearing names/metadata."
   ]
 }
