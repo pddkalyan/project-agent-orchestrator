@@ -24,24 +24,30 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "acceptance_criteria": [
-    "Explicitly supplied AgentOwnedCandidateRoots are sufficient for CANDIDATE_REVIEW_ONLY outside the active project even without a ledger match.",
-    "KEEP_ACTIVE has higher precedence than candidate-root membership.",
-    "Each item includes required evidence_source and required size_bytes.",
-    "Exact provenance match remains exact normalized path only; no filename heuristics.",
-    "Unknown/user/system paths remain UNVERIFIED_DO_NOT_REMOVE.",
-    "Script remains non-destructive and default output is stdout.",
-    "Astra review packet remains PENDING_ASTRA_REVIEW."
+    "External AgentOwnedCandidateRoots are actually enumerated and audited.",
+    "ActiveProjectRoot is protected and is not the default cleanup search scope.",
+    "No candidate roots supplied means no external filesystem scan beyond reading the local provenance registry.",
+    "Path containment is boundary-safe, not naive prefix matching.",
+    "Overlapping candidate roots do not produce duplicate item records.",
+    "Files in candidate roots are review-only, never automatically removable; files inside active project are KEEP_ACTIVE.",
+    "Script has no destructive or system-modifying operations and emits JSON to stdout only.",
+    "Schema and review packet match the script behavior and remain PENDING_ASTRA_REVIEW."
   ],
   "astra_review_required": true,
-  "retry_attempt": 7,
-  "retry_reason": "Final pre-Astra consistency correction: documentation says an explicitly supplied AgentOwnedCandidateRoot is sufficient for CANDIDATE_REVIEW_ONLY, but the external-root scan currently requires a provenance ledger match. Align implementation and schema evidence before Astra review.",
+  "retry_attempt": 8,
+  "retry_reason": "Final pre-Astra functional correction: the latest script only enumerates TargetDirectory, so AgentOwnedCandidateRoots outside the active project are never scanned. As written, almost every default-scanned file becomes KEEP_ACTIVE and the audit cannot discover previous agent-owned installations elsewhere on the PC.",
   "preferred_worker_model": "gemini-3.1-flash-lite",
   "orchestrator_corrections": [
-    "For any file under an explicitly supplied AgentOwnedCandidateRoot, classify it CANDIDATE_REVIEW_ONLY even when provenance_match=false. This is review-only, never automatic removal.",
-    "Preserve KEEP_ACTIVE precedence for any active orchestrator file, even if it also falls under a supplied candidate root.",
-    "Add an evidence_source field to each audit item with enum values EXACT_PROVENANCE_MATCH, EXPLICIT_AGENT_OWNED_ROOT, ACTIVE_PROJECT, or NONE, and require it in the JSON schema.",
-    "Require size_bytes in the JSON schema because the script always emits it.",
-    "Keep all other safety controls unchanged: no deletion/uninstall/registry/service changes, empty candidate roots by default, stdout by default, Google Drive state, pending Astra review.",
-    "Use exact worker model gemini-3.1-flash-lite in provenance-bearing filenames and metadata."
+    "Restore separate ActiveProjectRoot and AgentOwnedCandidateRoots parameters. ActiveProjectRoot defaults to current directory. AgentOwnedCandidateRoots defaults empty.",
+    "Enumerate each explicitly supplied AgentOwnedCandidateRoot independently even when it is outside ActiveProjectRoot. These roots are the actual cleanup-audit search scope.",
+    "Do not recursively inventory the entire ActiveProjectRoot just to create cleanup candidates. ActiveProjectRoot exists primarily as a protected exclusion boundary and as the location of PROVENANCE_REGISTRY.jsonl.",
+    "For every file found under an AgentOwnedCandidateRoot: if it is inside ActiveProjectRoot, status KEEP_ACTIVE and evidence_source ACTIVE_PROJECT; otherwise if exact normalized provenance match, CANDIDATE_REVIEW_ONLY and evidence_source EXACT_PROVENANCE_MATCH; otherwise CANDIDATE_REVIEW_ONLY and evidence_source EXPLICIT_AGENT_OWNED_ROOT.",
+    "Use a path-boundary-safe containment test based on GetRelativePath or equivalent. Do not use naive string StartsWith that can confuse C:\\Project with C:\\Project2.",
+    "Deduplicate files when candidate roots overlap.",
+    "AgentOwnedCandidateRoots must remain empty by default, so the default invocation scans no external candidate paths and cannot wander across home/system drives.",
+    "Unknown paths outside explicitly supplied candidate roots must not be scanned or classified. No whole-drive/home/system scan.",
+    "Keep the script strictly non-destructive and stdout-only. Do not add OutputPath/file-writing behavior in this candidate.",
+    "Keep required size_bytes, evidence_source, provenance_match, status, reason, exact path provenance, Google Drive state, zero spend, and PENDING_ASTRA_REVIEW.",
+    "Use exact model gemini-3.1-flash-lite in provenance metadata and filenames."
   ]
 }
