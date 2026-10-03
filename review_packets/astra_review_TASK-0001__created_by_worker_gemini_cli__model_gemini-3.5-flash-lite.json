@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0001",
+  "review_status": "PENDING_ASTRA_REVIEW",
+  "worker": {
+    "agent": "worker_gemini_cli",
+    "model": "gemini-3.5-flash-lite"
+  },
+  "astra_review_addressed": {
+    "reviewer": "gpt-6-astra",
+    "reviewed_commit": "2ef4c6eb6362b6273a138a2e74cf2d01efcd9b4d",
+    "resolutions": [
+      {
+        "issue_id": "P1-atomic-output",
+        "resolution": "Implemented strict atomic file creation using [System.IO.FileStream]::new with FileMode::CreateNew, failing on collisions without modifying bytes, and outputting to stdout when OutputPath is omitted."
+      },
+      {
+        "issue_id": "P1-active-infrastructure-protection",
+        "resolution": "Enforced KEEP_ACTIVE evaluation for all active infrastructure (.github, .gitignore, active directories/control files, triggers, and worker_result_*.json anywhere under ActiveProjectRoot) prior to candidate classification."
+      },
+      {
+        "issue_id": "P2-array-serialization",
+        "resolution": "Ensured agent_owned_candidate_roots and items always serialize as JSON arrays for zero, one, or many roots."
+      },
+      {
+        "issue_id": "P2-root-deduplication",
+        "resolution": "Deduplicated all scanned files by normalized absolute path in a case-insensitive HashSet, guaranteeing summary total matches unique item count."
+      },
+      {
+        "issue_id": "P2-root-validation",
+        "resolution": "Validated supplied roots exist and are directories using ErrorAction Stop, failing immediately on missing or file-valued roots."
+      },
+      {
+        "issue_id": "P2-powershell-7-requirement",
+        "resolution": "Added explicit PowerShell 7+ prerequisite check at script startup, causing Windows PowerShell 5.1 to fail immediately with a clear message."
+      }
+    ]
+  },
+  "candidate_artifacts": [
+    "schemas/pc_cleanup_audit.schema.json",
+    "docs/pc_cleanup_discovery__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.md",
+    "scripts/pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.ps1",
+    "review_packets/astra_review_TASK-0001__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json",
+    "memory/CURRENT_STATE.json",
+    "memory/NEXT_ACTIONS.json",
+    "PROVENANCE_REGISTRY.jsonl"
+  ],
+  "ci_evidence": {
+    "status": "PASS",
+    "run_id": 37101624679,
+    "tested_commit": "85b38229d0cfe40dc136d60ee256a3caddc91f11",
+    "runner_os": "Windows",
+    "powershell_version": "7.6.6",
+    "result": "PASS",
+    "artifact_id": 11266022335,
+    "artifact_name": "pc-cleanup-audit-test-evidence",
+    "artifact_digest": "sha256:f3e3d635f62f8dc8d6f2cac9fc885f3f2b3ab67d8abdef588d490c629a583b69",
+    "workflow": "PC Cleanup Audit Regression",
+    "note": "All TASK-0001 regression fixtures passed on the corrected PR candidate. This packet update only records evidence; a follow-up PR regression run is expected on the metadata-only packet commit."
+  },
+  "known_limitations": [
+    "Audit-only policy: no automated file deletion or service/registry modification is performed.",
+    "External candidate roots require explicit parameter input."
+  ],
+  "worker_preflight_evidence": {
+    "status": "PASS",
+    "run_id": 37101027798,
+    "tested_source_commit": "a01f8e149020130cbdb82d40138498cb02040ebe",
+    "workflow": "Cloud Worker Task / TASK-0001 deterministic preflight",
+    "result": "PASS",
+    "note": "Worker generation, deterministic preflight, allowed-path validation, bundle staging, and artifact upload all completed successfully before PR application."
+  }
+}

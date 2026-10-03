@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PcCleanupAuditReport",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "audit_timestamp",
+    "active_project_root",
+    "agent_owned_candidate_roots",
+    "summary",
+    "items"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer"
+    },
+    "audit_timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "active_project_root": {
+      "type": "string"
+    },
+    "agent_owned_candidate_roots": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "total_scanned",
+        "keep_active_count",
+        "candidate_review_only_count",
+        "unverified_do_not_remove_count"
+      ],
+      "properties": {
+        "total_scanned": {
+          "type": "integer"
+        },
+        "keep_active_count": {
+          "type": "integer"
+        },
+        "candidate_review_only_count": {
+          "type": "integer"
+        },
+        "unverified_do_not_remove_count": {
+          "type": "integer"
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "absolute_path",
+          "size_bytes",
+          "last_modified_utc",
+          "provenance_match",
+          "evidence_source",
+          "recommendation",
+          "reason"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "absolute_path": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "last_modified_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "provenance_match": {
+            "type": "boolean"
+          },
+          "evidence_source": {
+            "type": "string",
+            "enum": [
+              "ACTIVE_PROJECT",
+              "EXACT_PROVENANCE_MATCH",
+              "EXPLICIT_AGENT_OWNED_ROOT"
+            ]
+          },
+          "recommendation": {
+            "type": "string",
+            "enum": [
+              "KEEP_ACTIVE",
+              "CANDIDATE_REVIEW_ONLY",
+              "UNVERIFIED_DO_NOT_REMOVE"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -7,3 +7,10 @@
 {"file":"memory/CURRENT_STATE.json","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
 {"file":"memory/NEXT_ACTIONS.json","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
 {"file":".github/workflows/manual_worker_smoke.yml","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
+{"file":"schemas/pc_cleanup_audit.schema.json","created_by":"worker_gemini_cli","model":"gemini-3.5-flash-lite","run":"TASK-0001","kind":"generated"}
+{"file":"docs/pc_cleanup_discovery__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.md","created_by":"worker_gemini_cli","model":"gemini-3.5-flash-lite","run":"TASK-0001","kind":"generated"}
+{"file":"scripts/pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.ps1","created_by":"worker_gemini_cli","model":"gemini-3.5-flash-lite","run":"TASK-0001","kind":"generated"}
+{"file":"review_packets/astra_review_TASK-0001__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json","created_by":"worker_gemini_cli","model":"gemini-3.5-flash-lite","run":"TASK-0001","kind":"generated"}
+{"file":"memory/CURRENT_STATE.json","actor":"worker_gemini_cli","model":"gemini-3.5-flash-lite","task":"TASK-0001","kind":"modified"}
+{"file":"memory/NEXT_ACTIONS.json","actor":"worker_gemini_cli","model":"gemini-3.5-flash-lite","task":"TASK-0001","kind":"modified"}
+{"file":"PROVENANCE_REGISTRY.jsonl","actor":"worker_gemini_cli","model":"gemini-3.5-flash-lite","task":"TASK-0001","kind":"modified"}
