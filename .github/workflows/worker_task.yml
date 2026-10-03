@@ -55,7 +55,7 @@ jobs:
           set -euo pipefail
           TASK_FILE="${{ steps.task.outputs.task_file }}"
           mapfile -t ALLOWED < <(jq -r '.allowed_paths[]' "$TASK_FILE")
-          mapfile -t CHANGED < <(git status --porcelain | awk '{print $2}')
+          mapfile -t CHANGED < <(git status --porcelain -uall | awk '{print $2}')
           printf '%s\n' "${CHANGED[@]}" > changed-files.txt
           for file in "${CHANGED[@]}"; do
             if [[ "$file" == "$TASK_FILE" || "$file" == worker_result_*.json || "$file" == "changed-files.txt" ]]; then
