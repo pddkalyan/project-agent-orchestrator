@@ -50,10 +50,19 @@
     "run_id": null,
     "tested_commit": null,
     "powershell_version": null,
-    "result": null
+    "result": null,
+    "note": "PR regression CI is being rerun after correcting a workflow harness false-negative where an expected failing legacy PowerShell child process left a non-zero native exit code after all fixtures had passed."
   },
   "known_limitations": [
     "Audit-only policy: no automated file deletion or service/registry modification is performed.",
     "External candidate roots require explicit parameter input."
-  ]
+  ],
+  "worker_preflight_evidence": {
+    "status": "PASS",
+    "run_id": 37101027798,
+    "tested_source_commit": "a01f8e149020130cbdb82d40138498cb02040ebe",
+    "workflow": "Cloud Worker Task / TASK-0001 deterministic preflight",
+    "result": "PASS",
+    "note": "Worker generation, deterministic preflight, allowed-path validation, bundle staging, and artifact upload all completed successfully before PR application."
+  }
 }
