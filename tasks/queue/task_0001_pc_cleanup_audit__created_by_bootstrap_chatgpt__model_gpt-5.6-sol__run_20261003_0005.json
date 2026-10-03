@@ -31,7 +31,7 @@
     "Memory records TASK-0001 as awaiting Astra review."
   ],
   "astra_review_required": true,
-  "retry_attempt": 2,
-  "retry_reason": "Gemini 3 Flash free-tier quota exhausted after smoke test; retry with separate free Gemini 3.5 Flash-Lite quota.",
+  "retry_attempt": 3,
+  "retry_reason": "Worker completed successfully on Gemini 3.5 Flash-Lite; boundary validator incorrectly saw an untracked directory instead of its files. Retry after fixing validator to enumerate untracked files.",
   "preferred_worker_model": "gemini-3.5-flash-lite"
 }
