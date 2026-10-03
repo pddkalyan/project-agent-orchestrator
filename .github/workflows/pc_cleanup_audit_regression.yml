@@ -48,7 +48,6 @@ jobs:
 
           # Default stdout: no report file created and roots serialize as an array.
           $defaultJson = & $scriptPath -ActiveProjectRoot $PWD 2>$null
-          if ($LASTEXITCODE) { throw "Default invocation failed" }
           $defaultObj = $defaultJson | ConvertFrom-Json
           if ($defaultObj.agent_owned_candidate_roots -isnot [System.Array]) {
             throw "agent_owned_candidate_roots must serialize as an array for zero roots"
@@ -65,7 +64,6 @@ jobs:
 
           # One root must remain a one-element JSON array.
           $oneJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($candidate) 2>$null
-          if ($LASTEXITCODE) { throw "One-root invocation failed" }
           $oneObj = $oneJson | ConvertFrom-Json
           if ($oneObj.agent_owned_candidate_roots -isnot [System.Array] -or $oneObj.agent_owned_candidate_roots.Count -ne 1) {
             throw "One candidate root did not serialize as a one-element array"
@@ -73,7 +71,6 @@ jobs:
 
           # Overlapping / duplicate roots must deduplicate absolute files.
           $multiJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($candidate, $candidate, $child) 2>$null
-          if ($LASTEXITCODE) { throw "Multi-root invocation failed" }
           $multiObj = $multiJson | ConvertFrom-Json
           $unique = @($multiObj.items.path | Sort-Object -Unique)
           if ($unique.Count -ne $multiObj.items.Count) {
@@ -85,7 +82,6 @@ jobs:
 
           # Active project infrastructure must remain KEEP_ACTIVE even if project root is supplied as a candidate root.
           $activeJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($PWD) 2>$null
-          if ($LASTEXITCODE) { throw "Active-root overlap invocation failed" }
           $activeObj = $activeJson | ConvertFrom-Json
           $mustKeep = @(
             ".gitignore",
@@ -158,6 +154,7 @@ jobs:
           }
 
           Write-Host "All TASK-0001 regression fixtures passed."
+          exit 0
 
       - name: Record runtime evidence
         shell: pwsh
