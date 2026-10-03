@@ -28,8 +28,10 @@ jobs:
           TASK_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^tasks/queue/.*\.json$' | head -n 1)"
           test -n "$TASK_FILE"
           TASK_ID="$(jq -r '.task_id' "$TASK_FILE")"
+          WORKER_MODEL="$(jq -r '.preferred_worker_model // "gemini-3.5-flash-lite"' "$TASK_FILE")"
           echo "task_file=$TASK_FILE" >> "$GITHUB_OUTPUT"
           echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
+          echo "worker_model=$WORKER_MODEL" >> "$GITHUB_OUTPUT"
 
       - name: Create isolated worker branch
         shell: bash
