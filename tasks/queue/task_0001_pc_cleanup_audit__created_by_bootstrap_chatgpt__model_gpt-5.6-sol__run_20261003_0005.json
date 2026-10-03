@@ -35,11 +35,15 @@
     "Zero/one/many candidate roots serialize as arrays.",
     "Schema requires all item fields and enums recommendation/evidence_source with date-time formats.",
     "CURRENT_STATE records Google Drive and configured Gemini repository secret; NEXT_ACTIONS removes completed manual setup.",
-    "Review packet is pending with truthful CI evidence placeholders."
+    "Review packet is pending with truthful CI evidence placeholders.",
+    "When AgentOwnedCandidateRoots includes ActiveProjectRoot, hidden/dot files are enumerated; .gitignore appears exactly once and is KEEP_ACTIVE.",
+    ".github/workflows/manual_worker_smoke.yml appears exactly once and is KEEP_ACTIVE.",
+    "nested worker_result_TASK-*.json anywhere under ActiveProjectRoot appears exactly once and is KEEP_ACTIVE.",
+    "Cloud Worker Task deterministic preflight completes successfully."
   ],
   "astra_review_required": true,
-  "retry_attempt": 16,
-  "retry_reason": "Run 37099964293 completed, but deterministic preflight review found the candidate still diverges from Astra's accepted conservative model: it scans the active project by default, lacks exact provenance fields/statuses, uses deprecated CANDIDATE_FOR_AUDIT, and leaves memory setup stale. A deterministic worker preflight is now enforced in CI; produce a candidate that passes it before bundling.",
+  "retry_attempt": 17,
+  "retry_reason": "Deterministic preflight run 37100258483 failed at active-project overlap because .gitignore was not emitted. The worker itself completed; the generated audit script omitted hidden/dot files from candidate-root enumeration.",
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "orchestrator_corrections": [
     "Follow Astra Review #1 exactly and also pass the new TASK-0001 deterministic preflight in .github/workflows/worker_task.yml.",
@@ -60,7 +64,11 @@
     "Review packet stays PENDING_ASTRA_REVIEW. ci_evidence.status=PENDING, run_id/tested_commit/powershell_version/result all null until PR regression CI passes. Do not claim tests have passed or corrections are verified.",
     "Review packet must list all seven candidate artifacts, planned regression workflow, PowerShell 7+ requirement, known limitations, and Astra Review #1 issues being addressed.",
     "Provenance registry: new generated TASK-0001 files may use created_by=worker_gemini_cli/model=gemini-3.5-flash-lite. For canonical files memory/CURRENT_STATE.json and memory/NEXT_ACTIONS.json append modification events with actor/model/task; do not claim they were originally created by Gemini.",
-    "Do not delete/uninstall/stop services/write registry/kill processes/remove packages/change user files. Audit only."
+    "Do not delete/uninstall/stop services/write registry/kill processes/remove packages/change user files. Audit only.",
+    "Enumerate candidate roots with hidden/dot files included. In PowerShell use Get-ChildItem -Force -Recurse -File -ErrorAction Stop (or equivalent) so files such as .gitignore are present in the audit when ActiveProjectRoot is explicitly supplied as an AgentOwnedCandidateRoot.",
+    "Do not exclude dot-prefixed directories/files from active-project protection. .github and .gitignore must be emitted and classified KEEP_ACTIVE when the active project overlaps a candidate root.",
+    "Keep default invocation behavior unchanged: with AgentOwnedCandidateRoots empty, do not recursively inventory ActiveProjectRoot.",
+    "The deterministic preflight must pass the active-overlap fixtures for .gitignore, .github/workflows/manual_worker_smoke.yml, and nested-preflight/worker_result_TASK-9999.json."
   ],
   "astra_review_01": {
     "reviewer_model": "gpt-6-astra",
