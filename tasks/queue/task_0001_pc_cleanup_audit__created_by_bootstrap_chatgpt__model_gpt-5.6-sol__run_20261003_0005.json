@@ -24,31 +24,24 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "acceptance_criteria": [
-    "All provenance-bearing filenames/metadata use gemini-3.1-flash-lite exactly.",
-    "Exact normalized path matching is the only way provenance_match can become true; no filename-only matching.",
-    "All active orchestrator folders and control files are KEEP_ACTIVE.",
-    "CANDIDATE_REVIEW_ONLY requires exact ledger/provenance match or containment under an explicitly supplied AgentOwnedCandidateRoot.",
-    "AgentOwnedCandidateRoots defaults empty; no arbitrary home/system scan occurs by default.",
-    "Unknown/user/system paths default to UNVERIFIED_DO_NOT_REMOVE.",
-    "Script is non-destructive and default output is stdout; file output requires explicit OutputPath.",
-    "Canonical-file provenance uses modification events with actor/model, not contradictory created_by/model combinations.",
-    "Astra review packet remains pending and states the safety controls.",
-    "CURRENT_STATE and NEXT_ACTIONS reflect completed manual setup and Google Drive."
+    "Explicitly supplied AgentOwnedCandidateRoots are sufficient for CANDIDATE_REVIEW_ONLY outside the active project even without a ledger match.",
+    "KEEP_ACTIVE has higher precedence than candidate-root membership.",
+    "Each item includes required evidence_source and required size_bytes.",
+    "Exact provenance match remains exact normalized path only; no filename heuristics.",
+    "Unknown/user/system paths remain UNVERIFIED_DO_NOT_REMOVE.",
+    "Script remains non-destructive and default output is stdout.",
+    "Astra review packet remains PENDING_ASTRA_REVIEW."
   ],
   "astra_review_required": true,
-  "retry_attempt": 6,
-  "retry_reason": "Pre-Astra safety gate found two remaining classification/provenance defects. Use a separate free worker-model quota to correct them before spending Astra review usage.",
+  "retry_attempt": 7,
+  "retry_reason": "Final pre-Astra consistency correction: documentation says an explicitly supplied AgentOwnedCandidateRoot is sufficient for CANDIDATE_REVIEW_ONLY, but the external-root scan currently requires a provenance ledger match. Align implementation and schema evidence before Astra review.",
   "preferred_worker_model": "gemini-3.1-flash-lite",
   "orchestrator_corrections": [
-    "Use exact actual worker model gemini-3.1-flash-lite in all provenance-bearing filenames and metadata for this regenerated candidate.",
-    "The PowerShell script must perform provenance matching ONLY by exact normalized path. Remove any filename-only fallback such as comparing $file.Name to registry entries.",
-    "The active orchestrator folders .git, memory, tasks, docs, triggers, review_packets, schemas, scripts and root control files are KEEP_ACTIVE. Never classify current triggers or worker-result files inside the active project as cleanup candidates.",
-    "CANDIDATE_REVIEW_ONLY is allowed only when there is strong ownership evidence: an exact provenance/installation-ledger match OR the path is under an explicitly supplied AgentOwnedCandidateRoot. Do not infer ownership merely from words like trigger, cache, worker_result, temp, model, or similar names.",
-    "Split input parameters into ActiveProjectRoot (default current directory) and AgentOwnedCandidateRoots (default empty). The default run must not scan arbitrary home/system locations or propose anything for removal.",
-    "Unknown/user/system/app/driver/registry/unrelated paths remain UNVERIFIED_DO_NOT_REMOVE.",
-    "Default output is stdout. Optional file output is permitted only when an OutputPath is explicitly supplied.",
-    "For PROVENANCE_REGISTRY.jsonl: generated files may use created_by=worker_gemini_cli. For canonical files originally created by bootstrap_chatgpt, do NOT append an internally inconsistent created_by bootstrap_chatgpt + worker model record. Instead append a modification event with fields event=modified, file, actor=worker_gemini_cli, model=gemini-3.1-flash-lite, task=TASK-0001.",
-    "Astra review packet must remain PENDING_ASTRA_REVIEW and explicitly mention exact-path provenance matching and explicit candidate roots as safety controls.",
-    "Keep CURRENT_STATE Google Drive + configured Gemini secret status. Keep NEXT_ACTIONS free of already-completed manual steps."
+    "For any file under an explicitly supplied AgentOwnedCandidateRoot, classify it CANDIDATE_REVIEW_ONLY even when provenance_match=false. This is review-only, never automatic removal.",
+    "Preserve KEEP_ACTIVE precedence for any active orchestrator file, even if it also falls under a supplied candidate root.",
+    "Add an evidence_source field to each audit item with enum values EXACT_PROVENANCE_MATCH, EXPLICIT_AGENT_OWNED_ROOT, ACTIVE_PROJECT, or NONE, and require it in the JSON schema.",
+    "Require size_bytes in the JSON schema because the script always emits it.",
+    "Keep all other safety controls unchanged: no deletion/uninstall/registry/service changes, empty candidate roots by default, stdout by default, Google Drive state, pending Astra review.",
+    "Use exact worker model gemini-3.1-flash-lite in provenance-bearing filenames and metadata."
   ]
 }
