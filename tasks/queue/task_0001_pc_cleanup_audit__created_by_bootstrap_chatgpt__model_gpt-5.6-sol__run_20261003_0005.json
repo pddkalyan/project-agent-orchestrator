@@ -39,11 +39,12 @@
     "When AgentOwnedCandidateRoots includes ActiveProjectRoot, hidden/dot files are enumerated; .gitignore appears exactly once and is KEEP_ACTIVE.",
     ".github/workflows/manual_worker_smoke.yml appears exactly once and is KEEP_ACTIVE.",
     "nested worker_result_TASK-*.json anywhere under ActiveProjectRoot appears exactly once and is KEEP_ACTIVE.",
-    "Cloud Worker Task deterministic preflight completes successfully."
+    "Cloud Worker Task deterministic preflight completes successfully.",
+    "Cloud Worker Task completes with the corrected deterministic preflight harness passing."
   ],
   "astra_review_required": true,
-  "retry_attempt": 17,
-  "retry_reason": "Deterministic preflight run 37100258483 failed at active-project overlap because .gitignore was not emitted. The worker itself completed; the generated audit script omitted hidden/dot files from candidate-root enumeration.",
+  "retry_attempt": 18,
+  "retry_reason": "Run 37100462315 failed in the deterministic preflight at the default invocation. Investigation found a harness defect: the preflight checked $LASTEXITCODE after invoking the PowerShell audit script in-process, where $LASTEXITCODE may be null even on success. The workflow harness is now fixed to rely on thrown PowerShell errors for in-process calls and to upload failed candidate evidence. Re-run the same corrected task and satisfy the deterministic preflight.",
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "orchestrator_corrections": [
     "Follow Astra Review #1 exactly and also pass the new TASK-0001 deterministic preflight in .github/workflows/worker_task.yml.",
@@ -68,7 +69,10 @@
     "Enumerate candidate roots with hidden/dot files included. In PowerShell use Get-ChildItem -Force -Recurse -File -ErrorAction Stop (or equivalent) so files such as .gitignore are present in the audit when ActiveProjectRoot is explicitly supplied as an AgentOwnedCandidateRoot.",
     "Do not exclude dot-prefixed directories/files from active-project protection. .github and .gitignore must be emitted and classified KEEP_ACTIVE when the active project overlaps a candidate root.",
     "Keep default invocation behavior unchanged: with AgentOwnedCandidateRoots empty, do not recursively inventory ActiveProjectRoot.",
-    "The deterministic preflight must pass the active-overlap fixtures for .gitignore, .github/workflows/manual_worker_smoke.yml, and nested-preflight/worker_result_TASK-9999.json."
+    "The deterministic preflight must pass the active-overlap fixtures for .gitignore, .github/workflows/manual_worker_smoke.yml, and nested-preflight/worker_result_TASK-9999.json.",
+    "No special workaround for the old $LASTEXITCODE harness bug is needed. Keep the audit script behavior correct and allow PowerShell errors to throw normally.",
+    "Do not add exit-code hacks solely to satisfy CI. The corrected harness now distinguishes in-process PowerShell calls from child pwsh process exit codes.",
+    "Preserve all prior TASK-0001 safety/correctness requirements, including hidden/dot file enumeration when ActiveProjectRoot is explicitly supplied as a candidate root."
   ],
   "astra_review_01": {
     "reviewer_model": "gpt-6-astra",
