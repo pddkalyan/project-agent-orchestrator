@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PCCleanupAuditReport",
+  "description": "Schema for the read-only PC cleanup audit report produced by project-agent-orchestrator",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "audit_timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "worker_model": {
+      "type": "string",
+      "const": "gemini-3.1-flash-lite"
+    },
+    "active_project_root": {
+      "type": "string"
+    },
+    "agent_owned_candidate_roots": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "total_scanned": { "type": "integer" },
+        "keep_active_count": { "type": "integer" },
+        "candidate_review_only_count": { "type": "integer" },
+        "unverified_do_not_remove_count": { "type": "integer" }
+      },
+      "required": ["total_scanned", "keep_active_count", "candidate_review_only_count", "unverified_do_not_remove_count"]
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "classification": {
+            "type": "string",
+            "enum": ["KEEP_ACTIVE", "CANDIDATE_REVIEW_ONLY", "UNVERIFIED_DO_NOT_REMOVE"]
+          },
+          "reason": { "type": "string" },
+          "provenance_match": { "type": "boolean" },
+          "size_bytes": { "type": "integer" }
+        },
+        "required": ["path", "classification", "reason", "provenance_match"]
+      }
+    }
+  },
+  "required": ["schema_version", "audit_timestamp", "worker_model", "active_project_root", "agent_owned_candidate_roots", "summary", "items"]
+}
