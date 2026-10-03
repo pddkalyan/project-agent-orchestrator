@@ -46,12 +46,17 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "ci_evidence": {
-    "status": "PENDING",
-    "run_id": null,
-    "tested_commit": null,
-    "powershell_version": null,
-    "result": null,
-    "note": "PR regression CI is being rerun after correcting a workflow harness false-negative where an expected failing legacy PowerShell child process left a non-zero native exit code after all fixtures had passed."
+    "status": "PASS",
+    "run_id": 37101624679,
+    "tested_commit": "85b38229d0cfe40dc136d60ee256a3caddc91f11",
+    "runner_os": "Windows",
+    "powershell_version": "7.6.6",
+    "result": "PASS",
+    "artifact_id": 11266022335,
+    "artifact_name": "pc-cleanup-audit-test-evidence",
+    "artifact_digest": "sha256:f3e3d635f62f8dc8d6f2cac9fc885f3f2b3ab67d8abdef588d490c629a583b69",
+    "workflow": "PC Cleanup Audit Regression",
+    "note": "All TASK-0001 regression fixtures passed on the corrected PR candidate. This packet update only records evidence; a follow-up PR regression run is expected on the metadata-only packet commit."
   },
   "known_limitations": [
     "Audit-only policy: no automated file deletion or service/registry modification is performed.",
