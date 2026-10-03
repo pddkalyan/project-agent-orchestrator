@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0001",
+  "review_status": "PENDING_ASTRA_REVIEW",
+  "worker_model": "gemini-3.1-flash-lite",
+  "created_by": "worker_gemini_cli",
+  "description": "Astra review packet for TASK-0001 (PC Cleanup Audit Specification and Script). Implements exact-path provenance matching, explicit AgentOwnedCandidateRoots parameterization, active orchestrator protection (KEEP_ACTIVE), non-destructive read-only audit behavior, and stdout default output.",
+  "artifacts_included": [
+    "schemas/pc_cleanup_audit.schema.json",
+    "docs/pc_cleanup_discovery__created_by_worker_gemini_cli__model_gemini-3.1-flash-lite__task_TASK-0001.md",
+    "scripts/pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3.1-flash-lite__task_TASK-0001.ps1"
+  ],
+  "safety_controls_verified": [
+    "Zero-spend (USD 0.00)",
+    "No local AI video inference",
+    "Audit-only cleanup rule (zero deletion/removal actions)",
+    "Exact normalized path matching against PROVENANCE_REGISTRY.jsonl (no heuristic filename guessing)",
+    "Explicit candidate roots (AgentOwnedCandidateRoots defaults to empty; no arbitrary home/system scans)",
+    "Active project directories (.git, memory, tasks, docs, triggers, review_packets, schemas, scripts) and control files classified as KEEP_ACTIVE",
+    "Default output to stdout with optional explicit OutputPath"
+  ],
+  "notes": "Awaiting review and approval from GPT-6 Astra. Do not claim Astra approval."
+}
