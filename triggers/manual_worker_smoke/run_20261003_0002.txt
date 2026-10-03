@@ -1,0 +1,1 @@
+Trigger the read-only Gemini worker smoke test. No paid spend. No repository modifications by the worker. No local PC access.
