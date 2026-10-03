@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0001",
+  "created_by": "bootstrap_chatgpt",
+  "created_by_model": "gpt-5.6-sol",
+  "created_run": "20261003_0005",
+  "objective": "Create the safe PC cleanup audit package. This is design and inventory tooling only: no deletion, no local execution, no paid services. Define a structured audit schema, a discovery procedure, a read-only PowerShell inventory script that can later be run manually on Windows, and an Astra review packet. Update project memory/provenance. The audit script must never delete, uninstall, modify registry, stop services, or alter files.",
+  "constraints": [
+    "USD 0 spend",
+    "No AI video inference on local PC",
+    "No cleanup deletion or uninstall actions",
+    "No user/system file modification",
+    "Astra is reviewer, not worker",
+    "Do not claim Astra approval",
+    "PowerShell script must be read-only and output an inventory report only"
+  ],
+  "allowed_paths": [
+    "schemas/pc_cleanup_audit.schema.json",
+    "docs/pc_cleanup_discovery__created_by_worker_gemini_cli__model_gemini-3-flash-preview__task_TASK-0001.md",
+    "scripts/pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3-flash-preview__task_TASK-0001.ps1",
+    "review_packets/astra_review_TASK-0001__created_by_worker_gemini_cli__model_gemini-3-flash-preview.json",
+    "memory/CURRENT_STATE.json",
+    "memory/NEXT_ACTIONS.json",
+    "PROVENANCE_REGISTRY.jsonl"
+  ],
+  "acceptance_criteria": [
+    "Audit schema records candidate path, category, evidence signals, confidence, size, last modified time, provenance match, safe-removal status, and review state.",
+    "Discovery procedure explicitly distinguishes verified agent-owned artifacts from unknown/user/system artifacts.",
+    "PowerShell script performs discovery/inventory only and contains no deletion, uninstall, registry write, service-stop, package-removal, or file-modification commands.",
+    "Astra review packet contains objective, artifacts, evidence, risks, open questions, and explicit approval/rejection criteria.",
+    "Memory records TASK-0001 as awaiting Astra review."
+  ],
+  "astra_review_required": true
+}
