@@ -1,0 +1,33 @@
+# Secrets and local credentials
+.env
+.env.*
+*.key
+*.pem
+credentials*.json
+gha-creds-*.json
+
+# Gemini CLI local state
+.gemini/
+
+# Python / Node local artifacts
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.pyc
+
+# Agent temporary work
+.tmp/
+temp/
+scratch/
+
+# Large generated media must live in cloud storage, not this public repo
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.wav
+*.flac
+*.safetensors
+*.ckpt
+*.bin
