@@ -1,0 +1,1 @@
+Retry after fixing Gemini CLI headless workspace trust. Still plan-only, zero spend, no local PC access.
