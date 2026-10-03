@@ -24,24 +24,80 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "acceptance_criteria": [
-    "Active-project membership never forces provenance_match=true.",
-    "provenance_match always means exact normalized absolute registry membership.",
-    "HashSet construction is valid PowerShell/.NET syntax using ::new(comparer).",
-    "Exact match summary count follows deduplicated exact matches.",
-    "Docs/schema/script/review packet are mutually consistent.",
-    "All prior non-destructive and scope controls remain intact."
+    "Existing OutputPath collision fails clearly and leaves the existing file byte-for-byte unchanged.",
+    "A brand-new OutputPath succeeds using create-new semantics; default stdout creates no report file.",
+    ".github, .gitignore, active control files/directories, current triggers, and arbitrary worker_result_TASK-*.json are KEEP_ACTIVE when candidate roots overlap the project.",
+    "AgentOwnedCandidateRoots serializes as [] for zero roots, a one-element array for one root, and an array for many roots.",
+    "Duplicate/overlapping roots emit each normalized absolute file exactly once and summary counts equal unique item count.",
+    "Missing and file-valued supplied roots cannot produce an apparently successful complete audit; enumeration errors are surfaced.",
+    "PowerShell 7+ is enforced before unsupported APIs; Windows PowerShell 5.1 fails immediately with a clear PowerShell 7 prerequisite message.",
+    "Reports produced by zero-, one-, and multi-root fixtures validate against schemas/pc_cleanup_audit.schema.json.",
+    "provenance_match means exact normalized absolute provenance membership only.",
+    "Documentation matches conservative external-root behavior and runtime requirement.",
+    "Astra packet remains PENDING_ASTRA_REVIEW and contains commands/runtime expectations/known limitations/all seven artifacts without fabricating test results.",
+    "No destructive/system-modifying operations are introduced."
   ],
   "astra_review_required": true,
-  "retry_attempt": 11,
-  "retry_reason": "One final pre-Astra semantic/runtime correction. The candidate is nearly ready, but it still sets provenance_match=true for every KEEP_ACTIVE file even if no exact registry path exists, and its HashSet construction should use the explicit comparer constructor.",
+  "retry_attempt": 12,
+  "retry_reason": "GPT-6 Astra final review #1 rejected the candidate with six reproduced defects. Apply Astra's correction package exactly; do not widen cleanup permissions.",
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "orchestrator_corrections": [
-    "For a file inside ActiveProjectRoot, recommendation remains KEEP_ACTIVE and evidence_source remains ACTIVE_PROJECT, but provenance_match MUST equal provenanceSet.Contains(absFilePath). Active-project membership alone must never imply a provenance match.",
-    "Increment exact_provenance_match_count whenever provenanceSet.Contains(absFilePath) is true, regardless of whether the file is KEEP_ACTIVE or CANDIDATE_REVIEW_ONLY. Do not double-count deduplicated paths.",
-    "Construct the provenance HashSet explicitly with [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase). Do not cast a comparer object into HashSet.",
-    "Update documentation so the active-project classification states provenance_match is true only on an exact registry match, otherwise false.",
-    "Keep all existing successful behavior unchanged: no ActiveProjectRoot recursion, explicit candidate roots only, active boundary first precedence, case-insensitive dictionary dedup, exact absolute provenance, size/mtime fields, stdout-only, zero destructive actions.",
-    "Astra packet stays PENDING_ASTRA_REVIEW and must not overclaim behavior.",
-    "Use exact model gemini-3.5-flash-lite in provenance-bearing names/metadata."
-  ]
+    "Implement Astra review #1 exactly. Do not delete, uninstall, modify registry, stop services, kill processes, remove packages, or alter candidate files.",
+    "Support an optional OutputPath, but never overwrite. Use literal-path-safe atomic CREATE-NEW behavior so an existing destination fails before content can be changed. Default behavior remains stdout only.",
+    "Protect the entire active orchestrator tree before candidate classification. At minimum protect .git, .github, memory, tasks, docs, triggers, review_packets, schemas, scripts, README.md, AGENTS.md, GEMINI.md, .gitignore, PROVENANCE_REGISTRY.jsonl, all workflow files, and any worker_result_*.json present under ActiveProjectRoot.",
+    "KEEP_ACTIVE precedence applies even when AgentOwnedCandidateRoots overlaps ActiveProjectRoot.",
+    "AgentOwnedCandidateRoots must serialize as JSON arrays for 0, 1, and N values. Preserve array shape explicitly.",
+    "Deduplicate candidate files by normalized absolute path using a case-insensitive HashSet/Dictionary before adding report entries.",
+    "Validate ActiveProjectRoot and every AgentOwnedCandidateRoot before scanning: each must exist and be a directory. Missing roots and file-valued roots must fail clearly. Enumeration exceptions must not be silently suppressed; fail the audit or report explicit incomplete status/errors.",
+    "Require PowerShell 7 or later at the top of the script, before calling APIs unavailable in Windows PowerShell 5.1. Error message must explicitly say PowerShell 7 is required.",
+    "Keep provenance_match semantics exact normalized absolute path only. No filename-only matching.",
+    "Conservative external-root fallback to UNVERIFIED_DO_NOT_REMOVE is acceptable and preferred if no exact provenance match; documentation must say this consistently.",
+    "Update the Astra review packet with exact regression commands to be run by the repository CI gate, supported runtime requirement, known limitations, and all seven candidate artifacts. Leave actual CI result fields pending until the CI run completes; do not fabricate PASS.",
+    "Use exact model gemini-3.5-flash-lite in every new provenance-bearing filename and metadata record for this revision."
+  ],
+  "astra_review_01": {
+    "reviewer_model": "gpt-6-astra",
+    "status": "REJECTED",
+    "reviewed_commit": "2ef4c6eb6362b6273a138a2e74cf2d01efcd9b4d",
+    "blocking_issues": [
+      {
+        "severity": "P1",
+        "issue": "Existing OutputPath can be overwritten.",
+        "required_correction": "Use create-new/atomic semantics with literal-path handling. Existing destinations must fail without modification; default stdout creates no file; new destination succeeds."
+      },
+      {
+        "severity": "P1",
+        "issue": "Active infrastructure can become cleanup candidates.",
+        "required_correction": "Protect .github, .gitignore, all active directories/control files, current triggers, and all current worker_result_*.json. KEEP_ACTIVE must be evaluated before candidate classification in every scan path."
+      },
+      {
+        "severity": "P2",
+        "issue": "Zero/one candidate roots serialize as null/string instead of array.",
+        "required_correction": "Always preserve JSON array shape for zero, one, and many roots."
+      },
+      {
+        "severity": "P2",
+        "issue": "Overlapping roots double-count files.",
+        "required_correction": "Deduplicate using normalized absolute file paths in a case-insensitive set; summary count must equal unique item count."
+      },
+      {
+        "severity": "P2",
+        "issue": "Missing/failed scans appear successful.",
+        "required_correction": "Validate supplied roots exist and are directories. Missing/file-valued/unreadable roots must fail clearly or produce structured incomplete status/errors; empty readable directory must be distinguishable."
+      },
+      {
+        "severity": "P2",
+        "issue": "Windows runtime requirement undeclared.",
+        "required_correction": "Require PowerShell 7 explicitly, enforce before unsupported APIs are used, document invocation, and make Windows PowerShell 5.1 fail immediately with a clear prerequisite message."
+      }
+    ],
+    "required_resubmission_evidence": [
+      "actual test commands",
+      "runtime versions",
+      "actual test results",
+      "known limitations",
+      "all seven candidate artifacts",
+      "review_status=PENDING_ASTRA_REVIEW"
+    ]
+  }
 }
