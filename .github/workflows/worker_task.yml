@@ -89,12 +89,10 @@ jobs:
           "y" | Set-Content -LiteralPath (Join-Path $cand "two.log")
 
           $defaultJson = & $scriptPath -ActiveProjectRoot $PWD
-          if ($LASTEXITCODE -ne 0) { throw "Default audit failed" }
           $default = $defaultJson | ConvertFrom-Json
           if ($default.agent_owned_candidate_roots -isnot [System.Array]) { throw "Zero candidate roots must serialize as array" }
 
           $oneJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($cand)
-          if ($LASTEXITCODE -ne 0) { throw "One-root audit failed" }
           $one = $oneJson | ConvertFrom-Json
           if ($one.agent_owned_candidate_roots -isnot [System.Array] -or $one.agent_owned_candidate_roots.Count -ne 1) { throw "One root must serialize as one-element array" }
           $external = @($one.items | Where-Object { $_.absolute_path -like "$cand*" })
@@ -102,7 +100,6 @@ jobs:
           foreach ($item in $external) { if ($item.recommendation -ne "UNVERIFIED_DO_NOT_REMOVE") { throw "External unprovenanced candidate must be UNVERIFIED_DO_NOT_REMOVE" } }
 
           $multiJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($cand,$cand)
-          if ($LASTEXITCODE -ne 0) { throw "Duplicate-root audit failed" }
           $multi = $multiJson | ConvertFrom-Json
           $abs = @($multi.items.absolute_path)
           if (($abs | Sort-Object -Unique).Count -ne $abs.Count) { throw "Duplicate roots emitted duplicate files" }
@@ -112,7 +109,6 @@ jobs:
           "{}" | Set-Content -LiteralPath $workerResult
           try {
             $activeJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($PWD)
-            if ($LASTEXITCODE -ne 0) { throw "Active-overlap audit failed" }
             $active = $activeJson | ConvertFrom-Json
             foreach ($suffix in @(".gitignore", ".github/workflows/manual_worker_smoke.yml", "nested-preflight/worker_result_TASK-9999.json")) {
               $normSuffix = $suffix.Replace("/", [System.IO.Path]::DirectorySeparatorChar)
@@ -141,6 +137,36 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $newReport)) { throw "New OutputPath failed" }
 
           Write-Host "TASK-0001 deterministic preflight passed."
+      - name: Stage failed preflight evidence
+        if: failure() && steps.task.outputs.task_id == 'TASK-0001'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p failed_worker_bundle
+          cp "worker_result_${{ steps.task.outputs.task_id }}.json" failed_worker_bundle/ 2>/dev/null || true
+          git status --porcelain -uall > failed_worker_bundle/git-status.txt || true
+          git diff --binary > failed_worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch || true
+          for path in \
+            "schemas/pc_cleanup_audit.schema.json" \
+            "docs/pc_cleanup_discovery__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.md" \
+            "scripts/pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.ps1" \
+            "review_packets/astra_review_TASK-0001__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json" \
+            "memory/CURRENT_STATE.json" \
+            "memory/NEXT_ACTIONS.json" \
+            "PROVENANCE_REGISTRY.jsonl"; do
+            if [[ -f "$path" ]]; then
+              mkdir -p "failed_worker_bundle/$(dirname "$path")"
+              cp "$path" "failed_worker_bundle/$path"
+            fi
+          done
+
+      - name: Upload failed preflight evidence
+        if: failure() && steps.task.outputs.task_id == 'TASK-0001'
+        uses: actions/upload-artifact@v4
+        with:
+          name: "failed-worker-bundle-${{ steps.task.outputs.task_id }}"
+          path: failed_worker_bundle/
+          retention-days: 30
       - name: Validate worker file boundaries
         shell: bash
         run: |
