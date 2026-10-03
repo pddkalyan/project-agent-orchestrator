@@ -1,0 +1,9 @@
+{"file":"README.md","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
+{"file":"AGENTS.md","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
+{"file":"GEMINI.md","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
+{"file":".gitignore","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
+{"file":"PROVENANCE_REGISTRY.jsonl","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
+{"file":"memory/MASTER_GOAL.md","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
+{"file":"memory/CURRENT_STATE.json","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
+{"file":"memory/NEXT_ACTIONS.json","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
+{"file":".github/workflows/manual_worker_smoke.yml","created_by":"bootstrap_chatgpt","model":"gpt-5.6-sol","run":"20261003_0001","kind":"canonical"}
