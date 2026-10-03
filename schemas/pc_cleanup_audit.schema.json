@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PcCleanupAuditEntry",
+  "type": "object",
+  "properties": {
+    "candidate_path": {
+      "type": "string",
+      "description": "Absolute or relative path to the scanned file or directory."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "project_folder",
+        "virtual_environment",
+        "downloaded_model",
+        "cache",
+        "container",
+        "temporary_render",
+        "agent_service",
+        "unknown"
+      ],
+      "description": "Classification category of the candidate artifact."
+    },
+    "evidence_signals": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of ownership signals (e.g. provenance ledger match, known task path, agent manifest)."
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["HIGH", "MEDIUM", "LOW"],
+      "description": "Confidence level that the artifact is agent-owned."
+    },
+    "size_bytes": {
+      "type": "integer",
+      "description": "Total size in bytes of the file or directory."
+    },
+    "last_modified_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last modified timestamp in UTC."
+    },
+    "provenance_match": {
+      "type": "boolean",
+      "description": "Whether the artifact is recorded in PROVENANCE_REGISTRY.jsonl or known task manifests."
+    },
+    "safe_removal_status": {
+      "type": "string",
+      "enum": [
+        "AUDIT_ONLY_SAFE",
+        "REQUIRE_MANUAL_VERIFICATION",
+        "UNSAFE_DO_NOT_REMOVE"
+      ],
+      "description": "Evaluation of whether removal would be safe once cleanup authorization is granted."
+    },
+    "review_state": {
+      "type": "string",
+      "enum": [
+        "PENDING_ASTRA_REVIEW",
+        "APPROVED",
+        "REJECTED"
+      ],
+      "description": "Review status by Astra reviewer."
+    }
+  },
+  "required": [
+    "candidate_path",
+    "category",
+    "evidence_signals",
+    "confidence",
+    "size_bytes",
+    "last_modified_utc",
+    "provenance_match",
+    "safe_removal_status",
+    "review_state"
+  ],
+  "additionalProperties": false
+}

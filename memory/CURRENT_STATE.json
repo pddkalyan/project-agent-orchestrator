@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "run_id": "20261003_0001",
-  "phase": "BOOTSTRAP",
-  "status": "REPOSITORY_INITIALIZED",
+  "phase": "TASK_EXECUTION",
+  "status": "TASK_0001_COMPLETED_AWAITING_ASTRA_REVIEW",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0001",
+  "worker": "gemini-cli",
+  "worker_model": "gemini-3-flash-preview",
+  "review_status": "PENDING_ASTRA_REVIEW",
+  "objective": "Create the safe PC cleanup audit package (schema, discovery procedure, read-only PowerShell inventory script, and review packet).",
+  "artifacts_created": [
+    "schemas/pc_cleanup_audit.schema.json",
+    "docs/pc_cleanup_discovery__created_by_worker_gemini_cli__model_gemini-3-flash-preview__task_TASK-0001.md",
+    "scripts/pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3-flash-preview__task_TASK-0001.ps1"
+  ],
+  "evidence": [
+    "Audit schema rigorously defines required fields including candidate path, category, evidence signals, confidence, size, last modified time, provenance match, safe removal status, and review state.",
+    "Discovery document establishes clear separation between verified agent-owned artifacts and unknown/user/system files.",
+    "PowerShell inventory script is strictly read-only, containing zero destructive commands (no deletion, uninstallation, registry updates, or file modifications)."
+  ],
+  "risks": [
+    "Potential edge cases in path resolution on non-Windows platforms (mitigated by designing script for Windows execution environments while adhering to repo constraints).",
+    "Accidental inclusion of non-agent paths (mitigated by strict evidence requirements and safe classification defaults)."
+  ],
+  "open_questions": [
+    "Should future cleanup execution require dual-key authorization alongside Astra approval?"
+  ],
+  "approval_criteria": [
+    "All schema properties match audit requirements.",
+    "PowerShell script is 100% read-only with no side effects.",
+    "Discovery guide correctly enforces audit-only constraints."
+  ],
+  "rejection_criteria": [
+    "Any destructive command found in inventory script.",
+    "Missing required fields in audit schema."
+  ],
+  "claimed_approval": false
+}

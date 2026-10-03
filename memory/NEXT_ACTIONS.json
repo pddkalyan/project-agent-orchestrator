@@ -1,12 +1,10 @@
 {
   "schema_version": 1,
   "next": [
+    "Astra reviews TASK-0001 audit package (schema, discovery doc, read-only PowerShell script, review packet).",
     "User adds GEMINI_API_KEY as a GitHub Actions repository secret.",
     "User confirms the provider for the 5 TB cloud storage.",
     "Optionally add Kaggle credentials only when the first cloud GPU experiment is ready.",
-    "Run manual_worker_smoke workflow in read-only planning mode.",
-    "Create PC cleanup audit specification and collect evidence before any deletion.",
-    "Implement provider-neutral media contracts.",
-    "Create Astra review packet/correction schemas."
+    "Implement provider-neutral media contracts."
   ]
 }
