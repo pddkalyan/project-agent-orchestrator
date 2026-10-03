@@ -36,8 +36,8 @@
     "Memory records TASK-0001 as awaiting Astra review."
   ],
   "astra_review_required": true,
-  "retry_attempt": 4,
-  "retry_reason": "Pre-Astra safety/provenance gate found issues in the previous candidate. Regenerate the audit package with the corrections below before spending Astra reviewer usage.",
+  "retry_attempt": 5,
+  "retry_reason": "Worker produced corrected files, but GitHub Actions token could not push a branch containing workflow history due workflow-scope protection. Retry with artifact-bundle handoff; orchestrator will inspect/apply the bundle via the connected GitHub app.",
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "orchestrator_corrections": [
     "Use the exact actual worker model identifier gemini-3.5-flash-lite in every provenance field and provenance-bearing filename. Do not claim gemini-3-flash-preview.",
