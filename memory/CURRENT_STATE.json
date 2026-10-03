@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "run_id": "20261003_0001",
-  "phase": "BOOTSTRAP",
-  "status": "REPOSITORY_INITIALIZED",
+  "phase": "AUDIT_REVIEW_PENDING",
+  "status": "TASK_0001_COMPLETED_PENDING_ASTRA_REVIEW",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",
   "worker_role": "free_cloud_worker",
   "pc_cleanup_mode": "AUDIT_ONLY",
   "active_video_provider": "UNSELECTED",
-  "persistent_storage_provider": "UNCONFIRMED",
+  "persistent_storage_provider": "Google Drive",
   "secrets": {
-    "gemini_api_key": "NOT_CONFIGURED_IN_REPO_STATE",
+    "gemini_api_key": "CONFIGURED_VIA_REPOSITORY_SECRET",
     "kaggle_api_token": "NOT_CONFIGURED_IN_REPO_STATE"
   }
 }
