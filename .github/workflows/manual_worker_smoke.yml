@@ -1,0 +1,30 @@
+name: Manual Worker Smoke Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plan-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Gemini CLI
+        run: npm install --global @google/gemini-cli
+
+      - name: Read-only worker planning smoke test
+        run: |
+          gemini --prompt "Read AGENTS.md, GEMINI.md, memory/MASTER_GOAL.md, memory/CURRENT_STATE.json, and memory/NEXT_ACTIONS.json. Do not modify files. Produce a concise plan for the next safe project step, explicitly confirming zero paid spend, cloud-only video inference, Astra reviewer role, and audit-only PC cleanup." --approval-mode plan --output-format json > worker-smoke-result.json
+
+      - name: Upload smoke result
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-smoke-result
+          path: worker-smoke-result.json
