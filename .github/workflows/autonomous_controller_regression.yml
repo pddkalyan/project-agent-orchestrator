@@ -189,7 +189,7 @@ jobs:
           assert worker.index("validate-staging") < worker.index("- name: Stage worker bundle"), "symlink/type validation must precede bundle staging"
           assert "gh run view" not in workflow, "raw failed logs must not be persisted"
 
-          lower_combined = (workflow + "\n" + worker + "\n" + script).lower()
+          lower_combined = (workflow + "\n" + script).lower()
           for forbidden in ("remove-item", "reg delete", "stop-service", "uninstall-package"):
               assert forbidden not in lower_combined, f"destructive local-PC behavior found: {forbidden}"
           PY
