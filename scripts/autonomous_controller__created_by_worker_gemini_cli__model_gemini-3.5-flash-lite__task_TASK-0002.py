@@ -47,13 +47,28 @@ def _has_direct_secret(value: str) -> bool:
     return any(pattern.search(value) for pattern in DIRECT_SECRET_PATTERNS)
 
 
-def sanitize_log_line(line: str) -> str:
-    """Sanitize one structured diagnostic field conservatively."""
-    if "\n" in line or "\r" in line:
-        return sanitize_text(line, max_lines=4, max_chars=500)
-    if _has_direct_secret(line) or CREDENTIAL_LABEL.search(line):
+def sanitize_structured_field(value: str, max_chars: int = 300) -> str:
+    """Redact an entire structured metadata field if any credential marker appears.
+
+    Job and step names are attacker/worker-controlled strings. If a field is
+    multiline or uses YAML-style block syntax, trying to preserve individual
+    continuation lines is unsafe. A credential label/token/private-key marker
+    anywhere in the field therefore redacts the whole field.
+    """
+    text = str(value)
+    if (
+        _has_direct_secret(text)
+        or CREDENTIAL_LABEL.search(text)
+        or PRIVATE_KEY_BEGIN.search(text)
+        or PRIVATE_KEY_END.search(text)
+    ):
         return "[REDACTED-POTENTIAL-SECRET]"
-    return line
+    return sanitize_text(text, max_lines=4, max_chars=max_chars)
+
+
+def sanitize_log_line(line: str) -> str:
+    """Backward-compatible alias for structured metadata sanitization."""
+    return sanitize_structured_field(line, max_chars=500)
 
 
 def sanitize_text(text: str, max_lines: int = 80, max_chars: int = 8000) -> str:
@@ -359,12 +374,12 @@ def summarize_jobs(jobs_payload: dict) -> dict:
         for step in job.get("steps") or []:
             if step.get("conclusion") in ("failure", "cancelled", "timed_out", "action_required"):
                 steps.append({
-                    "name": sanitize_text(str(step.get("name", "")), max_lines=4, max_chars=300),
+                    "name": sanitize_structured_field(str(step.get("name", "")), max_chars=300),
                     "conclusion": step.get("conclusion"),
                     "number": step.get("number"),
                 })
         result.append({
-            "name": sanitize_text(str(job.get("name", "")), max_lines=4, max_chars=300),
+            "name": sanitize_structured_field(str(job.get("name", "")), max_chars=300),
             "conclusion": job.get("conclusion"),
             "steps": steps,
         })
