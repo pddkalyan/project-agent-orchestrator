@@ -559,5 +559,53 @@ class TestTask0004(unittest.TestCase):
         self.assertTrue(req["stream"])
 
 
+    def test_50_private_key_block_and_auth_code_are_redacted(self):
+        text = (
+            "ordinary before\n"
+            "auth_code: AUTH_CODE_SENTINEL\n"
+            "-----BEGIN PRIVATE KEY-----\n"
+            "PRIVATE_KEY_SENTINEL\n"
+            "-----END PRIVATE KEY-----\n"
+            "ordinary after"
+        )
+        clean = adapter.sanitize_text(text)
+        self.assertNotIn("AUTH_CODE_SENTINEL", clean)
+        self.assertNotIn("PRIVATE_KEY_SENTINEL", clean)
+        self.assertIn("ordinary before", clean)
+        self.assertIn("ordinary after", clean)
+
+    def test_51_refresh_invalid_grant_maps_to_auth_required(self):
+        class InvalidGrantTransport:
+            def post_form(self, *args, **kwargs):
+                raise RuntimeError('{"http_status":400,"body":{"error":"invalid_grant"}}')
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+            storage.save_profile_atomic({
+                "client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0",
+                "scopes":["offline_access","chatgpt.tokens.use.direct"]
+            })
+            result = adapter.refresh_profile(storage, InvalidGrantTransport())
+            self.assertEqual(result["status"], adapter.BLOCKED_AUTH_REQUIRED)
+
+    def test_52_cli_supports_separate_profile_labels(self):
+        cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
+        self.assertIn('--profile', cli)
+        self.assertIn('DEFAULT_PROFILES_DIR', cli)
+        self.assertIn('sub.add_parser("profiles")', cli)
+
+    def test_53_cli_sign_in_is_user_initiated_and_ci_blocked(self):
+        cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
+        self.assertIn('os.environ.get("CI"', cli)
+        self.assertIn('not sys.stdin.isatty()', cli)
+        self.assertIn('webbrowser.open(url)', cli)
+
+    def test_54_no_secret_or_paid_api_identifiers_in_public_self_check(self):
+        encoded=json.dumps(adapter.self_check())
+        self.assertNotIn("access_token", encoded)
+        self.assertNotIn("refresh_token", encoded)
+        self.assertNotIn("OPENAI_API_KEY", encoded)
+        self.assertIn('"paid_fallback": false', encoded.lower())
+
+
 if __name__ == "__main__":
     unittest.main()
