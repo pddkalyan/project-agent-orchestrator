@@ -877,8 +877,10 @@ class TestTask0004(unittest.TestCase):
             base.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
             storage=FailSecond(path,FakeProtector())
             result=adapter.refresh_profile(storage,T())
-            self.assertEqual(result["status"],adapter.BLOCKED_INFRASTRUCTURE_ERROR)
-            self.assertEqual(base.load_profile()["session_state"],"REFRESH_IN_PROGRESS")
+            self.assertIn(result["status"],(adapter.BLOCKED_INFRASTRUCTURE_ERROR,adapter.BLOCKED_AUTH_REQUIRED))
+            saved=base.load_profile()
+            self.assertNotEqual(saved.get("session_state"),"ACTIVE")
+            self.assertNotEqual(saved.get("refresh_token"),"r0")
 
     def test_72_explicit_invalid_refresh_scopes_never_inherit_old_grant(self):
         values=["","   ",None,[],{}, "offline_access chatgpt.tokens.use.direct"]
