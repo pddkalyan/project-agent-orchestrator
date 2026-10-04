@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "run_id": "20261003_0001",
-  "phase": "AWAITING_ASTRA_REVIEW",
-  "status": "TASK_0001_AUDIT_PACKET_READY",
+  "phase": "AUTONOMOUS_ORCHESTRATION_BOOTSTRAP",
+  "status": "TASK_0001_APPROVED_MERGED_LOCAL_LEGACY_PROJECT_RETIRED",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",
@@ -13,5 +13,18 @@
   "secrets": {
     "gemini_api_key": "CONFIGURED_VIA_REPOSITORY_SECRET",
     "kaggle_api_token": "NOT_CONFIGURED_IN_REPO_STATE"
+  },
+  "task_0001": {
+    "review_status": "APPROVED",
+    "reviewed_head": "4eee0c23f1fd0ca3b1ae847e75f3deebbe148376",
+    "merge_commit": "438e837a1d6d42ca8af4e6b31261e0ed34aa8f5d",
+    "windows_regression_run_id": 37101797145
+  },
+  "local_cleanup": {
+    "old_project_path": "D:\\Documents\\AI-Movie-Studio",
+    "old_project_status": "RETIRED_AFTER_VERIFIED_BACKUP",
+    "backup_path": "D:\\Documents\\AI-Movie-Studio_BACKUP_20261003.zip",
+    "active_local_project_path": "D:\\Documents\\project-agent-orchestrator",
+    "future_cleanup_policy": "AUDIT_ONLY_UNLESS_SEPARATELY_APPROVED"
   }
 }
