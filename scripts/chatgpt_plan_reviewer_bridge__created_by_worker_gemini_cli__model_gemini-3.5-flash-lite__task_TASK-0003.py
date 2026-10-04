@@ -15,6 +15,7 @@ import argparse
 import hashlib
 import json
 import re
+from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 EXACT_REVIEWER_MODEL = "gpt-6-astra"
@@ -148,8 +149,12 @@ def sanitize_text(text: Any, max_chars: int = 5000) -> str:
 
         if CREDENTIAL_LABEL_RE.search(line):
             out.append("[REDACTED-POTENTIAL-SECRET]")
-            # YAML block scalar: redact every indented continuation line.
-            if re.search(r"[:=]\s*[|>][+-]?\s*(?:#.*)?$", line):
+            # Any credential-bearing YAML block scalar is treated
+            # conservatively. This intentionally accepts chomping and explicit
+            # indentation indicators in either valid order (e.g. |2, |2-,
+            # |-2, >2, >+2) and unknown variants after "|" or ">" rather than
+            # risking a partial parse that leaks continuation lines.
+            if re.search(r"[:=]\s*[|>]", line):
                 block_indent = indent
             # Label-only / value-on-following-lines form: conservatively redact
             # every continuation line until a blank separator.
@@ -366,8 +371,9 @@ def _normalize_finding(finding: Mapping[str, Any]) -> dict[str, Any] | None:
         or any(not _nonblank_string(item) for item in criteria)
     ):
         return None
+    guidance_supplied = "implementation_guidance" in finding
     guidance = finding.get("implementation_guidance")
-    if guidance is not None and not _nonblank_string(guidance):
+    if guidance_supplied and not _nonblank_string(guidance):
         return None
 
     result: dict[str, Any] = {
@@ -378,7 +384,7 @@ def _normalize_finding(finding: Mapping[str, Any]) -> dict[str, Any] | None:
         "required_correction": sanitize_text(finding["required_correction"], 3000),
         "acceptance_criteria": [sanitize_text(item, 1000) for item in criteria],
     }
-    if guidance is not None:
+    if guidance_supplied:
         result["implementation_guidance"] = sanitize_text(guidance, 2000)
     return result
 
@@ -576,41 +582,159 @@ def evaluate_review(
     return _finalize_result(result)
 
 
-def validate_emitted_result(result: Mapping[str, Any]) -> tuple[bool, str]:
-    """Runtime invariant mirror of REVIEW_CONTRACT.schema.json."""
+def _schema_type_matches(value: Any, expected_type: str) -> bool:
+    if expected_type == "object":
+        return isinstance(value, Mapping)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected_type == "boolean":
+        return isinstance(value, bool)
+    if expected_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected_type == "null":
+        return value is None
+    raise ValueError(f"unsupported schema type: {expected_type}")
+
+
+def _resolve_local_ref(root_schema: Mapping[str, Any], ref: str) -> Mapping[str, Any]:
+    if not ref.startswith("#/"):
+        raise ValueError("only local schema refs are supported")
+    node: Any = root_schema
+    for token in ref[2:].split("/"):
+        token = token.replace("~1", "/").replace("~0", "~")
+        if not isinstance(node, Mapping) or token not in node:
+            raise ValueError(f"invalid schema ref: {ref}")
+        node = node[token]
+    if not isinstance(node, Mapping):
+        raise ValueError(f"schema ref is not an object: {ref}")
+    return node
+
+
+def _schema_validate(
+    value: Any,
+    schema: Mapping[str, Any],
+    root_schema: Mapping[str, Any],
+    path: str = "$",
+) -> list[str]:
+    """Validate the Draft-07 subset used by REVIEW_CONTRACT.schema.json."""
+    errors: list[str] = []
+
+    if "$ref" in schema:
+        try:
+            target = _resolve_local_ref(root_schema, str(schema["$ref"]))
+        except ValueError as exc:
+            return [f"{path}: {exc}"]
+        return _schema_validate(value, target, root_schema, path)
+
+    if "allOf" in schema:
+        for index, subschema in enumerate(schema["allOf"]):
+            errors.extend(_schema_validate(value, subschema, root_schema, f"{path}.allOf[{index}]"))
+
+    if "anyOf" in schema:
+        matches = [
+            not _schema_validate(value, subschema, root_schema, path)
+            for subschema in schema["anyOf"]
+        ]
+        if not any(matches):
+            errors.append(f"{path}: anyOf did not match")
+
+    if "oneOf" in schema:
+        matches = sum(
+            1
+            for subschema in schema["oneOf"]
+            if not _schema_validate(value, subschema, root_schema, path)
+        )
+        if matches != 1:
+            errors.append(f"{path}: oneOf matched {matches} branches")
+
+    if "not" in schema and not _schema_validate(value, schema["not"], root_schema, path):
+        errors.append(f"{path}: prohibited by not")
+
+    if "if" in schema:
+        condition_matches = not _schema_validate(value, schema["if"], root_schema, path)
+        if condition_matches and "then" in schema:
+            errors.extend(_schema_validate(value, schema["then"], root_schema, path))
+        elif not condition_matches and "else" in schema:
+            errors.extend(_schema_validate(value, schema["else"], root_schema, path))
+
+    expected_type = schema.get("type")
+    if expected_type is not None and not _schema_type_matches(value, str(expected_type)):
+        errors.append(f"{path}: expected type {expected_type}")
+        return errors
+
+    if "const" in schema and value != schema["const"]:
+        errors.append(f"{path}: const mismatch")
+    if "enum" in schema and value not in schema["enum"]:
+        errors.append(f"{path}: enum mismatch")
+
+    if isinstance(value, str):
+        if "minLength" in schema and len(value) < int(schema["minLength"]):
+            errors.append(f"{path}: minLength")
+        if "pattern" in schema and re.search(str(schema["pattern"]), value) is None:
+            errors.append(f"{path}: pattern mismatch")
+
+    if isinstance(value, int) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            errors.append(f"{path}: below minimum")
+
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < int(schema["minItems"]):
+            errors.append(f"{path}: minItems")
+        if "maxItems" in schema and len(value) > int(schema["maxItems"]):
+            errors.append(f"{path}: maxItems")
+        if "items" in schema:
+            for index, item in enumerate(value):
+                errors.extend(
+                    _schema_validate(item, schema["items"], root_schema, f"{path}[{index}]")
+                )
+
+    if isinstance(value, Mapping):
+        required = schema.get("required", [])
+        for key in required:
+            if key not in value:
+                errors.append(f"{path}: missing required property {key}")
+
+        properties = schema.get("properties", {})
+        if schema.get("additionalProperties") is False:
+            for key in value:
+                if key not in properties:
+                    errors.append(f"{path}: additional property {key}")
+
+        for key, subschema in properties.items():
+            if key in value:
+                errors.extend(
+                    _schema_validate(value[key], subschema, root_schema, f"{path}.{key}")
+                )
+
+    return errors
+
+
+def validate_against_published_schema(
+    result: Mapping[str, Any],
+    schema_path: Path | None = None,
+) -> tuple[bool, str]:
+    """Validate directly against the published REVIEW_CONTRACT schema."""
+    path = schema_path or (
+        Path(__file__).resolve().parent.parent / "reviewer" / "REVIEW_CONTRACT.schema.json"
+    )
+    try:
+        schema = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"schema unavailable: {exc}"
+    errors = _schema_validate(result, schema, schema)
+    if errors:
+        return False, "; ".join(errors[:8])
+    return True, "SCHEMA_VALID"
+
+
+def validate_runtime_invariants(result: Mapping[str, Any]) -> tuple[bool, str]:
+    """Enforce semantic invariants that complement the published schema."""
     if not isinstance(result, Mapping):
         return False, "not object"
-    common_required = {
-        "schema_version",
-        "task_id",
-        "repository",
-        "pr_number",
-        "base_sha",
-        "reviewed_sha",
-        "reviewer_context_version",
-        "reviewer_model",
-        "review_identity_digest",
-        "result_digest",
-        "idempotency_key",
-        "status",
-        "findings",
-    }
-    if not common_required.issubset(result.keys()):
-        return False, "missing common field"
-    if result.get("schema_version") != 1:
-        return False, "schema_version"
-    if not TASK_RE.fullmatch(str(result.get("task_id", ""))):
-        return False, "task_id"
-    if not SHA_RE.fullmatch(str(result.get("base_sha", ""))) or not SHA_RE.fullmatch(str(result.get("reviewed_sha", ""))):
-        return False, "sha"
-    if result.get("reviewer_model") != EXACT_REVIEWER_MODEL:
-        return False, "reviewer_model"
-    if not HEX64_RE.fullmatch(str(result.get("review_identity_digest", ""))):
-        return False, "identity digest"
-    if not HEX64_RE.fullmatch(str(result.get("result_digest", ""))):
-        return False, "result digest"
-    if not HEX64_RE.fullmatch(str(result.get("idempotency_key", ""))):
-        return False, "idempotency key"
 
     status = result.get("status")
     blocked = {
@@ -620,43 +744,67 @@ def validate_emitted_result(result: Mapping[str, Any]) -> tuple[bool, str]:
         BLOCKED_EVIDENCE_MISMATCH,
         BLOCKED_INVALID_VERDICT,
     }
+
     if status in blocked:
-        if not _nonblank_string(result.get("reason")):
-            return False, "blocked reason"
         if result.get("findings") != []:
             return False, "blocked findings"
         if "approval_confirmation" in result or "correction_package" in result:
             return False, "blocked side payload"
-        return True, "VALID"
+        return True, "RUNTIME_VALID"
 
     if status == "APPROVED":
         if result.get("findings") != []:
             return False, "approval findings"
         approval = result.get("approval_confirmation")
-        if not isinstance(approval, Mapping):
-            return False, "approval confirmation"
         if approval != {
             "exact_sha_bound": True,
             "exact_snapshot_bound": True,
             "merge_allowed": False,
             "auto_merge_allowed": False,
         }:
-            return False, "approval confirmation values"
-        if "correction_package" in result or "reason" in result:
-            return False, "approval extra status payload"
-        return True, "VALID"
+            return False, "approval confirmation"
+        return True, "RUNTIME_VALID"
 
     if status == "REJECTED":
-        if not isinstance(result.get("findings"), list) or not result["findings"]:
+        findings = result.get("findings")
+        if not isinstance(findings, list) or not findings:
             return False, "rejection findings"
-        if not isinstance(result.get("correction_package"), Mapping):
+        for finding in findings:
+            if _normalize_finding(finding) != finding:
+                return False, "malformed normalized finding"
+
+        package = result.get("correction_package")
+        if not isinstance(package, Mapping):
             return False, "correction package"
-        if "approval_confirmation" in result or "reason" in result:
-            return False, "rejection extra status payload"
-        return True, "VALID"
+        if package.get("task_id") != result.get("task_id"):
+            return False, "correction task mismatch"
+        if package.get("reviewed_sha") != result.get("reviewed_sha"):
+            return False, "correction sha mismatch"
+        corrections = package.get("corrections")
+        if not isinstance(corrections, list):
+            return False, "corrections type"
+        if package.get("action") == "QUEUE_CORRECTION":
+            if corrections != findings:
+                return False, "corrections findings mismatch"
+        elif package.get("action") == BLOCKED_RETRY_LIMIT:
+            if corrections != []:
+                return False, "retry-limit corrections must be empty"
+        else:
+            return False, "correction action"
+        return True, "RUNTIME_VALID"
 
     return False, "unsupported status"
 
+
+def validate_emitted_result(result: Mapping[str, Any]) -> tuple[bool, str]:
+    """Require both published-schema and full semantic validation."""
+    schema_ok, schema_reason = validate_against_published_schema(result)
+    if not schema_ok:
+        return False, schema_reason
+    runtime_ok, runtime_reason = validate_runtime_invariants(result)
+    if not runtime_ok:
+        return False, runtime_reason
+    return True, "VALID"
 
 def deduplicate_result(
     result: Mapping[str, Any],
@@ -672,6 +820,9 @@ def deduplicate_result(
     for record in existing_records:
         if not isinstance(record, Mapping):
             raise ValueError("existing record must be an object")
+        existing_valid, existing_reason = validate_emitted_result(record)
+        if not existing_valid:
+            raise ValueError(f"invalid existing result: {existing_reason}")
         if record.get("review_identity_digest") != identity:
             continue
         if record.get("result_digest") == result_digest:
