@@ -142,7 +142,8 @@ jobs:
           grep -q 'validate-retry-record' "$FAILURE_FLOW"
           grep -q 'concurrency:' "$WORKFLOW"
           grep -q 'worker-context' "$WORKER"
-          grep -q 'worker-execution-receipts/' "$WORKER"
+          grep -q 'claim-worker-execution' "$WORKER"
+          grep -q 'claim-worker-execution' "$SCRIPT"
           grep -q 'persist-credentials: false' "$WORKER"
           grep -q 'validate-staging' "$WORKER"
           grep -q 'task_sha' "$WORKER"
@@ -215,7 +216,7 @@ jobs:
 
           echo "TASK-0002 autonomous controller regression passed."
 
-      - name: "Run Astra Review #3 production-path fixtures"
+      - name: "Run Astra Review #4 production-path fixtures"
         shell: bash
         run: |
           set -euo pipefail
@@ -392,7 +393,110 @@ jobs:
           test ! -e "$ROOT/safe-failure-evidence/worker_result_TASK-0002.json"
           jq -e '.task_id == "TASK-0002" and .worker_run_id == "12345"' "$ROOT/safe-failure-evidence/failure-metadata.json" >/dev/null
 
-          echo "Production fixture 4: execute=false is valid and all controller side effects are gated"
+          echo "Production fixture 4: concurrent/repeated worker deliveries use one production execution claim"
+          RECEIPT_STATE="$ROOT/receipt-state"
+          mkdir -p "$RECEIPT_STATE"
+          cat > "$ROOT/bin/fake-gh-receipt" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "${RECEIPT_STATE:?}"
+          : "${RECEIPT_API_COUNT:?}"
+          [[ "$1" == "api" ]] || exit 90
+          shift
+
+          exec 9>"$RECEIPT_STATE/.lock"
+          flock 9
+          count=0
+          [[ -f "$RECEIPT_API_COUNT" ]] && count="$(cat "$RECEIPT_API_COUNT")"
+          echo "$((count + 1))" > "$RECEIPT_API_COUNT"
+
+          if [[ "${1:-}" == "--method" ]]; then
+            [[ "${2:-}" == "POST" ]] || exit 91
+            endpoint="${3:-}"
+            shift 3
+            ref=""
+            sha=""
+            while [[ "$#" -gt 0 ]]; do
+              case "$1" in
+                -f)
+                  case "$2" in
+                    ref=*) ref="${2#ref=}" ;;
+                    sha=*) sha="${2#sha=}" ;;
+                  esac
+                  shift 2
+                  ;;
+                *) shift ;;
+              esac
+            done
+            [[ "$endpoint" == */git/refs ]] || exit 92
+            key="${ref##*/}"
+            file="$RECEIPT_STATE/$key"
+            if [[ -e "$file" ]]; then
+              exit 1
+            fi
+            printf '%s\n' "$sha" > "$file"
+            printf '{"ref":"%s","object":{"sha":"%s"}}\n' "$ref" "$sha"
+            exit 0
+          fi
+
+          endpoint="${1:-}"
+          key="${endpoint##*/}"
+          file="$RECEIPT_STATE/$key"
+          [[ -f "$file" ]] || exit 1
+          sha="$(cat "$file")"
+          printf '{"object":{"sha":"%s"}}\n' "$sha"
+          SH
+          chmod 700 "$ROOT/bin/fake-gh-receipt"
+          export RECEIPT_STATE
+          export RECEIPT_API_COUNT="$ROOT/receipt-api-count"
+          : > "$RECEIPT_API_COUNT"
+
+          CLAIM_KEY="$(python "$HELPER" dispatch-key TASK-0002 "$SOURCE_SHA" 2 999)"
+          MODEL_MARKERS="$ROOT/model-executions.log"
+          SIDE_EFFECT_MARKERS="$ROOT/duplicate-side-effects.log"
+          : > "$MODEL_MARKERS"
+          : > "$SIDE_EFFECT_MARKERS"
+
+          claim_delivery() {
+            local idx="$1"
+            local result_file="$ROOT/claim-$idx.json"
+            python "$HELPER" claim-worker-execution fixture/repo "$CLAIM_KEY" "$SOURCE_SHA" "$ROOT/bin/fake-gh-receipt" > "$result_file"
+            local execute
+            execute="$(jq -r '.execute | tostring' "$result_file")"
+            if [[ "$execute" == "true" ]]; then
+              {
+                flock 8
+                echo "model-invocation-$idx" >> "$MODEL_MARKERS"
+              } 8>"$ROOT/model-marker.lock"
+            else
+              # This branch models the production execute=false path. Controller
+              # effectful steps are separately required to be execute=true-gated.
+              :
+            fi
+          }
+          export -f claim_delivery
+          export ROOT HELPER CLAIM_KEY SOURCE_SHA MODEL_MARKERS SIDE_EFFECT_MARKERS
+
+          claim_delivery one &
+          P1=$!
+          claim_delivery two &
+          P2=$!
+          wait "$P1"
+          wait "$P2"
+
+          TRUE_COUNT="$(jq -r '.execute' "$ROOT"/claim-{one,two}.json | grep -c '^true$' || true)"
+          FALSE_COUNT="$(jq -r '.execute' "$ROOT"/claim-{one,two}.json | grep -c '^false$' || true)"
+          test "$TRUE_COUNT" = "1"
+          test "$FALSE_COUNT" = "1"
+          test "$(wc -l < "$MODEL_MARKERS" | tr -d ' ')" = "1"
+
+          # Repeated delivery, including the case where dispatch succeeded but
+          # the controller receipt write failed, must not execute the model again.
+          claim_delivery replay
+          test "$(jq -r '.execute' "$ROOT/claim-replay.json")" = "false"
+          test "$(wc -l < "$MODEL_MARKERS" | tr -d ' ')" = "1"
+
+          # Duplicate controller context is valid false; malformed type fails.
           cat > "$ROOT/context-false.json" <<'JSON'
           {"execute":false}
           JSON
@@ -404,6 +508,24 @@ jobs:
             echo "Malformed execute value unexpectedly passed" >&2
             exit 62
           fi
+
+          # A conflicting immutable receipt must fail closed before model work.
+          CONFLICT_KEY="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          printf '%s\n' "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" > "$RECEIPT_STATE/$CONFLICT_KEY"
+          if python "$HELPER" claim-worker-execution fixture/repo "$CONFLICT_KEY" "$SOURCE_SHA" "$ROOT/bin/fake-gh-receipt" >/dev/null 2>&1; then
+            echo "Conflicting receipt SHA unexpectedly passed" >&2
+            exit 64
+          fi
+          test "$(wc -l < "$MODEL_MARKERS" | tr -d ' ')" = "1"
+
+          # Malformed bindings fail before any GitHub API side effect.
+          API_BEFORE="$(cat "$RECEIPT_API_COUNT")"
+          if python "$HELPER" claim-worker-execution fixture/repo bad-key "$SOURCE_SHA" "$ROOT/bin/fake-gh-receipt" >/dev/null 2>&1; then
+            echo "Malformed dispatch key unexpectedly passed" >&2
+            exit 65
+          fi
+          test "$(cat "$RECEIPT_API_COUNT")" = "$API_BEFORE"
+
           python - "$CONTROLLER" <<'PY'
           import sys
           text = open(sys.argv[1], encoding="utf-8").read()
@@ -420,6 +542,7 @@ jobs:
               window = text[pos:pos + 500]
               assert "steps.task.outputs.execute == 'true'" in window, name
           PY
+          test ! -s "$SIDE_EFFECT_MARKERS"
 
           echo "Production fixture 5: worker trusted staging rejects symlink metadata and copies normal files via same command used in workflow"
           mkdir -p "$ROOT/staging/scripts"
@@ -441,7 +564,7 @@ jobs:
           test ! -e "$ROOT/staged-bundle"
           test "$(grep -c 'write-worker-failure-evidence' "$WORKER")" -ge 1
 
-          echo "All Astra Review #3 production-path fixtures passed."
+          echo "All Astra Review #4 production-path fixtures passed."
 
       - name: Record regression evidence
         shell: bash
