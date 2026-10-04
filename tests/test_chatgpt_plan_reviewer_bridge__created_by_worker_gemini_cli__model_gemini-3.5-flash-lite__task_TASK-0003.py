@@ -400,5 +400,188 @@ class TestChatGPTPlanReviewerBridge(unittest.TestCase):
         self.assertEqual(state["required_model"], "gpt-6-astra")
 
 
+    # Astra Review #2 credential-block variants.
+    def test_52_block_scalar_explicit_indent_variants_redact_all_secret_lines(self):
+        variants = ["|2", "|2-", "|-2", "|2+", "|+2", ">2", ">2-", ">-2", ">2+", ">+2"]
+        for variant in variants:
+            with self.subTest(variant=variant):
+                finding = deepcopy(self.finding)
+                finding["exact_problem"] = (
+                    f"api_key: {variant}\n"
+                    "  FIRST_BLOCK_SENTINEL\n"
+                    "  SECOND_BLOCK_SENTINEL\n"
+                    "ordinary diagnostic"
+                )
+                result = self.evaluate(self.rejection(finding))
+                encoded = json.dumps(result)
+                self.assertNotIn("FIRST_BLOCK_SENTINEL", encoded)
+                self.assertNotIn("SECOND_BLOCK_SENTINEL", encoded)
+                self.assertIn("ordinary diagnostic", encoded)
+
+    def test_53_block_scalar_variants_with_comments_redact_end_to_end(self):
+        variants = ["| # comment", "|2 # comment", "|2- # comment", ">2 # comment", ">+2 # comment"]
+        for variant in variants:
+            with self.subTest(variant=variant):
+                finding = deepcopy(self.finding)
+                finding["exact_problem"] = (
+                    f"client_secret: {variant}\n"
+                    "  COMMENTED_BLOCK_SENTINEL_ONE\n"
+                    "  COMMENTED_BLOCK_SENTINEL_TWO\n"
+                    "outside diagnostic"
+                )
+                result = self.evaluate(self.rejection(finding))
+                encoded = json.dumps(result)
+                self.assertNotIn("COMMENTED_BLOCK_SENTINEL_ONE", encoded)
+                self.assertNotIn("COMMENTED_BLOCK_SENTINEL_TWO", encoded)
+                self.assertIn("outside diagnostic", encoded)
+
+    def test_54_folded_and_literal_plain_variants_preserve_outside_diagnostics(self):
+        for variant in ["|", ">"]:
+            with self.subTest(variant=variant):
+                text = f"before\napi_key: {variant}\n  SECRET_A\n  SECRET_B\nafter"
+                clean = bridge.sanitize_text(text)
+                self.assertNotIn("SECRET_A", clean)
+                self.assertNotIn("SECRET_B", clean)
+                self.assertIn("before", clean)
+                self.assertIn("after", clean)
+
+    # Explicitly supplied optional guidance must be a nonblank string.
+    def test_55_absent_implementation_guidance_is_valid(self):
+        finding = deepcopy(self.finding)
+        finding.pop("implementation_guidance")
+        result = self.evaluate(self.rejection(finding))
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertNotIn("implementation_guidance", result["findings"][0])
+
+    def test_56_null_implementation_guidance_blocks(self):
+        finding = deepcopy(self.finding); finding["implementation_guidance"] = None
+        result = self.evaluate(self.rejection(finding))
+        self.assertEqual(result["status"], bridge.BLOCKED_INVALID_VERDICT)
+        self.assertNotIn("correction_package", result)
+
+    def test_57_numeric_implementation_guidance_blocks(self):
+        finding = deepcopy(self.finding); finding["implementation_guidance"] = 123
+        result = self.evaluate(self.rejection(finding))
+        self.assertEqual(result["status"], bridge.BLOCKED_INVALID_VERDICT)
+        self.assertNotIn("correction_package", result)
+
+    def test_58_object_implementation_guidance_blocks(self):
+        finding = deepcopy(self.finding); finding["implementation_guidance"] = {"bad": "shape"}
+        result = self.evaluate(self.rejection(finding))
+        self.assertEqual(result["status"], bridge.BLOCKED_INVALID_VERDICT)
+        self.assertNotIn("correction_package", result)
+
+    def test_59_whitespace_implementation_guidance_blocks(self):
+        finding = deepcopy(self.finding); finding["implementation_guidance"] = "   "
+        result = self.evaluate(self.rejection(finding))
+        self.assertEqual(result["status"], bridge.BLOCKED_INVALID_VERDICT)
+        self.assertNotIn("correction_package", result)
+
+    # Persistence uses the published schema itself plus semantic validation.
+    def test_60_valid_result_classes_pass_schema_and_runtime_validators(self):
+        cases = [
+            self.evaluate(self.approval()),
+            self.evaluate(self.rejection(), current_attempt=1, max_retries=3),
+            self.evaluate(self.rejection(), current_attempt=3, max_retries=3),
+            self.evaluate(auth_profile=None),
+            self.evaluate(model_catalog={"authorized_models": [], "user_authorized": True}),
+            self.evaluate(plan_allowance=dict(self.allowance, remaining_requests=0)),
+            self.evaluate(review_request=dict(self.request, repository="wrong/repo")),
+            self.evaluate(self.approval(reviewed_sha="0" * 40)),
+        ]
+        for result in cases:
+            with self.subTest(status=result["status"], action=result.get("correction_package", {}).get("action")):
+                self.assertTrue(bridge.validate_against_published_schema(result)[0], result)
+                self.assertTrue(bridge.validate_runtime_invariants(result)[0], result)
+                self.assertTrue(bridge.validate_emitted_result(result)[0], result)
+
+    def test_61_missing_finding_fields_fail_schema_runtime_and_persistence(self):
+        result = self.evaluate(self.rejection())
+        malformed = deepcopy(result)
+        malformed["findings"] = [{}]
+        malformed["correction_package"]["corrections"] = [{}]
+        # Keep integrity digests coherent so structural validation is what fails.
+        malformed.pop("result_digest")
+        malformed.pop("idempotency_key")
+        malformed = bridge._finalize_result(malformed)
+        self.assertFalse(bridge.validate_against_published_schema(malformed)[0])
+        self.assertFalse(bridge.validate_runtime_invariants(malformed)[0])
+        self.assertFalse(bridge.validate_emitted_result(malformed)[0])
+        with self.assertRaises(ValueError):
+            bridge.deduplicate_result(malformed, [])
+
+    def test_62_malformed_correction_package_fails_both_validators_and_persistence(self):
+        result = self.evaluate(self.rejection())
+        malformed = deepcopy(result)
+        malformed["correction_package"] = {}
+        malformed.pop("result_digest")
+        malformed.pop("idempotency_key")
+        malformed = bridge._finalize_result(malformed)
+        self.assertFalse(bridge.validate_against_published_schema(malformed)[0])
+        self.assertFalse(bridge.validate_runtime_invariants(malformed)[0])
+        with self.assertRaises(ValueError):
+            bridge.deduplicate_result(malformed, [])
+
+    def test_63_prohibited_root_property_fails_schema_and_persistence(self):
+        result = self.evaluate(self.approval())
+        malformed = deepcopy(result)
+        malformed["unexpected_property"] = "should fail"
+        malformed.pop("result_digest")
+        malformed.pop("idempotency_key")
+        malformed = bridge._finalize_result(malformed)
+        self.assertFalse(bridge.validate_against_published_schema(malformed)[0])
+        self.assertFalse(bridge.validate_emitted_result(malformed)[0])
+        with self.assertRaises(ValueError):
+            bridge.deduplicate_result(malformed, [])
+
+    def test_64_invalid_correction_types_fail_schema_and_runtime(self):
+        result = self.evaluate(self.rejection())
+        malformed = deepcopy(result)
+        malformed["correction_package"]["next_attempt"] = "2"
+        malformed.pop("result_digest")
+        malformed.pop("idempotency_key")
+        malformed = bridge._finalize_result(malformed)
+        self.assertFalse(bridge.validate_against_published_schema(malformed)[0])
+        self.assertFalse(bridge.validate_emitted_result(malformed)[0])
+
+    def test_65_incorrect_status_payload_fails_schema_and_runtime(self):
+        approved = self.evaluate(self.approval())
+        malformed = deepcopy(approved)
+        malformed["reason"] = "APPROVED may not carry blocked reason"
+        malformed.pop("result_digest")
+        malformed.pop("idempotency_key")
+        malformed = bridge._finalize_result(malformed)
+        self.assertFalse(bridge.validate_against_published_schema(malformed)[0])
+        self.assertFalse(bridge.validate_emitted_result(malformed)[0])
+
+    def test_66_mutated_result_digest_cannot_reach_persistence(self):
+        result = self.evaluate(self.approval())
+        malformed = deepcopy(result)
+        malformed["result_digest"] = "0" * 64
+        self.assertTrue(bridge.validate_against_published_schema(malformed)[0])
+        self.assertFalse(bridge.validate_runtime_invariants(malformed)[0])
+        with self.assertRaises(ValueError):
+            bridge.deduplicate_result(malformed, [])
+
+    def test_67_mutated_idempotency_key_cannot_reach_persistence(self):
+        result = self.evaluate(self.approval())
+        malformed = deepcopy(result)
+        malformed["idempotency_key"] = "0" * 64
+        self.assertTrue(bridge.validate_against_published_schema(malformed)[0])
+        self.assertFalse(bridge.validate_runtime_invariants(malformed)[0])
+        with self.assertRaises(ValueError):
+            bridge.deduplicate_result(malformed, [])
+
+    def test_68_malformed_existing_record_is_not_trusted_for_dedup(self):
+        result = self.evaluate(self.approval())
+        malformed_existing = deepcopy(result)
+        malformed_existing["findings"] = [{}]
+        malformed_existing.pop("result_digest")
+        malformed_existing.pop("idempotency_key")
+        malformed_existing = bridge._finalize_result(malformed_existing)
+        with self.assertRaises(ValueError):
+            bridge.deduplicate_result(result, [malformed_existing])
+
+
 if __name__ == "__main__":
     unittest.main()
