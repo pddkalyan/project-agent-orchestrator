@@ -15,6 +15,7 @@
   "candidate_artifacts": [
     ".github/workflows/autonomous_controller.yml",
     ".github/workflows/worker_task.yml",
+    ".github/workflows/autonomous_controller_regression.yml",
     "scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py",
     "tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py",
     "docs/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.md",
@@ -31,13 +32,13 @@
     "note": "No worker preflight PASS is claimed. Recovery validation is separate from worker evidence."
   },
   "recovery_validation": {
-    "status": "LOCAL_DETERMINISTIC_PASS",
-    "tests": 18,
-    "network_used": false,
-    "note": "Helper/test files compile and 18 deterministic offline unit tests pass in the recovery workspace. GitHub candidate regression remains pending."
+    "status": "PENDING_CORRECTED_CI",
+    "tests_expected": 30,
+    "workflow_level_fixtures_expected": 4,
+    "note": "Astra rejection corrections are implemented on the draft PR. No PASS is claimed until exact-head GitHub regression completes."
   },
   "ci_evidence": {
-    "status": "PENDING_FINAL_REBASE_RECHECK",
+    "status": "PENDING_CORRECTED_HEAD_RECHECK",
     "run_id": null,
     "tested_commit": null,
     "runner_os": null,
@@ -45,28 +46,56 @@
     "workflow": "Autonomous Controller Regression"
   },
   "review_focus": [
-    "workflow_run trust boundary and exact source commit/task derivation",
-    "cross-run artifact download and exact manifest-to-bundle validation",
-    "symlink/path traversal/allowlist defenses",
-    "bounded retry and source-run idempotency",
-    "secret-like failure-log sanitization",
-    "repository_dispatch use for controller-created retry/regression events",
+    "immutable task binding across repository_dispatch and intervening default-branch commits",
+    "structured diagnostics and credential redaction including github_pat, multiline credentials and private-key blocks",
+    "retry commit versus dispatch receipt recovery and repeated/concurrent delivery deduplication",
+    "pre-copy worker symlink/file-type checks and promotion destination checks",
+    "exact manifest allowlist validation",
+    "retry ceiling and fail-closed source guards",
     "draft-PR-only promotion and absence of merge/auto-merge behavior",
     "truthful evidence and USD 0 / no-local-inference boundaries"
   ],
   "known_limitations": [
     "Astra review and a separate merge/promotion gate remain required.",
-    "Repository policy can reject branch pushes or PR creation; the controller fails closed rather than bypassing policy.",
-    "The controller depends on the repository's GitHub Actions/GITHUB_TOKEN permissions and included capacity; it does not purchase additional Actions or API capacity.",
-    "Failure log excerpts are heuristic-sanitized and bounded; raw failed logs stay temporary and are not committed.",
-    "The worker-task repository_dispatch integration is a bootstrap/orchestrator recovery modification, not a free-worker-generated file; provenance records this separately."
+    "Repository policy can reject branch/ref pushes or PR creation; the controller fails closed rather than bypassing policy.",
+    "The controller and worker receipt mechanism creates small receipt refs under controller-dispatch-receipts/ and worker-execution-receipts/; lifecycle cleanup of those refs is not part of TASK-0002.",
+    "The worker job needs contents:write only to create the dispatch execution-receipt ref; checkout credentials are not persisted and GITHUB_TOKEN is passed only to the receipt-claim step, not to the Gemini worker process.",
+    "Raw failed logs are intentionally not persisted; failure evidence is limited to bounded structured job/failed-step metadata."
   ],
   "prior_candidate_ci": {
-    "tested_commit": "961ba333132a1b16abc5cbabb6500a6fcc72ad42",
-    "autonomous_controller_regression_run_id": 37186821473,
-    "autonomous_controller_regression_result": "PASS",
-    "pc_cleanup_regression_run_id": 37186821529,
+    "tested_commit": "e2ef36e3fb8a5bff41e50c4512a2696f1c315b3d",
+    "autonomous_controller_regression_run_id": 37187459109,
+    "autonomous_controller_regression_result": "PASS_BUT_PRE_ASTRA_REJECTION",
+    "pc_cleanup_regression_run_id": 37187459163,
     "pc_cleanup_regression_result": "PASS",
-    "note": "Prior candidate evidence only. Final rebased head must pass regression again before Astra review."
+    "note": "These runs predate Astra review #2 corrections and are not sufficient for resubmission."
+  },
+  "astra_review_02": {
+    "reviewer_model": "gpt-6-astra",
+    "status": "REJECTED",
+    "reviewed_head": "e2ef36e3fb8a5bff41e50c4512a2696f1c315b3d",
+    "findings": [
+      {
+        "severity": "P1",
+        "issue": "repository_dispatch retries could be attributed to a task derived from the moving default-branch workflow head instead of the immutable dispatched task",
+        "correction": "worker-context binds task_file/task_sha/task_id/retry_attempt/dispatch_key; worker and controller both verify that immutable binding"
+      },
+      {
+        "severity": "P1",
+        "issue": "credential sanitization allowed fine-grained GitHub tokens and multiline/private-key payloads to survive",
+        "correction": "controller no longer persists raw failed logs; structured job/step diagnostics only, with stronger multiline/token/private-key sanitization"
+      },
+      {
+        "severity": "P2",
+        "issue": "retry commit could be stranded when dispatch failed after push",
+        "correction": "retry commit stores PENDING_DISPATCH state; reprocessing discovers the same source-run marker and resumes the same immutable retry; controller and worker receipt refs deduplicate repeated delivery"
+      },
+      {
+        "severity": "P1",
+        "issue": "worker staging could dereference symlinks before downstream bundle validation",
+        "correction": "worker validates manifest/candidate/metadata path components and regular-file types before any bundle copy; failed evidence does not copy arbitrary candidate files; controller validates promotion destinations"
+      }
+    ],
+    "required_resubmission": "workflow-level tests for all four cases plus successful regressions tied to corrected exact head"
   }
 }
