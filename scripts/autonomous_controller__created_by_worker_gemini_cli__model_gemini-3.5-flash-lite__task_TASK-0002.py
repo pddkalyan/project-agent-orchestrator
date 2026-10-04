@@ -263,6 +263,72 @@ def context_execute_value(context_data: dict) -> str:
     return "true" if value else "false"
 
 
+
+def write_worker_failure_evidence(output_dir: str, task_id: str, task_sha: str, run_id: str) -> dict:
+    """Write safe failure metadata without reading worker-controlled artifacts."""
+    if not re.fullmatch(r"TASK-[0-9]+", task_id):
+        return {"valid": False, "error": "invalid task_id"}
+    if not SHA_RE.fullmatch(task_sha):
+        return {"valid": False, "error": "invalid task_sha"}
+    if not str(run_id).isdigit():
+        return {"valid": False, "error": "invalid run_id"}
+
+    out = Path(output_dir)
+    if out.is_symlink():
+        return {"valid": False, "error": "failure evidence output must not be a symlink"}
+    out.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "task_id": task_id,
+        "task_sha": task_sha,
+        "worker_run_id": str(run_id),
+        "note": "Worker pipeline failed; raw worker-controlled files are intentionally omitted from failure evidence.",
+    }
+    target = out / "failure-metadata.json"
+    target.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return {"valid": True, "path": str(target)}
+
+
+def promote_validated_bundle(bundle_dir: str, validation_json: str, destination_root: str) -> dict:
+    """Copy already-validated bundle files using this immutable trusted helper.
+
+    The trusted helper validates every destination before copying any file.
+    Candidate-provided helper replacements are copied only as inert bytes and
+    are never imported or executed during this operation.
+    """
+    bundle = Path(bundle_dir)
+    destination = Path(destination_root)
+    validation = _load_json(validation_json)
+
+    if validation.get("valid") is not True or not isinstance(validation.get("files"), list):
+        return {"valid": False, "error": "validation JSON is not an approved file list"}
+    if bundle.is_symlink() or not bundle.is_dir():
+        return {"valid": False, "error": "bundle directory is invalid"}
+    if destination.is_symlink() or not destination.is_dir():
+        return {"valid": False, "error": "destination root is invalid"}
+
+    files = validation["files"]
+    for rel in files:
+        normalized = normalize_repo_path(rel)
+        if normalized is None:
+            return {"valid": False, "error": f"unsafe promotion path: {rel}"}
+        source = _repo_path(bundle, normalized)
+        if _first_symlink_component(bundle, source) is not None or not source.is_file():
+            return {"valid": False, "error": f"unsafe promotion source: {normalized}"}
+        check = validate_promotion_destination(str(destination), normalized)
+        if not check.get("valid"):
+            return check
+
+    copied: list[str] = []
+    for rel in files:
+        source = _repo_path(bundle, rel)
+        target = _repo_path(destination, rel)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target, follow_symlinks=False)
+        copied.append(rel)
+    return {"valid": True, "files": copied}
+
+
+
 def validate_promotion_destination(root_dir: str, repo_path: str) -> dict:
     """Reject symlink and non-directory components before promotion copy."""
     normalized = normalize_repo_path(repo_path)
@@ -447,6 +513,14 @@ def main() -> int:
             result = validate_staging_set(sys.argv[2], sys.argv[3], sys.argv[4:])
         elif cmd == "validate-destination":
             result = validate_promotion_destination(sys.argv[2], sys.argv[3])
+        elif cmd == "promote-bundle":
+            if len(sys.argv) != 5:
+                raise ValueError("promote-bundle requires bundle_dir validation_json destination_root")
+            result = promote_validated_bundle(sys.argv[2], sys.argv[3], sys.argv[4])
+        elif cmd == "write-worker-failure-evidence":
+            if len(sys.argv) != 6:
+                raise ValueError("write-worker-failure-evidence requires output_dir task_id task_sha run_id")
+            result = write_worker_failure_evidence(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
         elif cmd == "stage-bundle":
             if len(sys.argv) != 6:
                 raise ValueError("stage-bundle requires root manifest metadata bundle_dir")
