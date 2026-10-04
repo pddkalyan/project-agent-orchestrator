@@ -7,7 +7,7 @@
   "objective": "Build the bounded autonomous orchestration controller that removes the current manual babysitting step between Cloud Worker Task runs and Astra review. The controller must automatically handle worker success/failure, validate worker artifacts against the task allowlist, promote a successful candidate to a draft pull request, and create bounded retry task revisions on worker failure using sanitized failure evidence. It must stop after a configured retry limit and surface a blocker instead of looping forever. It must never auto-merge, never call paid services, never invoke Astra through a paid API, never access or modify the user's PC, and never weaken the zero-spend/safety boundaries.",
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "astra_review_required": true,
-  "retry_attempt": 3,
+  "retry_attempt": 1,
   "max_controller_retries": 3,
   "allowed_paths": [
     ".github/workflows/autonomous_controller.yml",
@@ -72,7 +72,7 @@
     "no auto-merge",
     "truthful evidence"
   ],
-  "retry_reason": "Run 37184975037 passed its Python unit tests (8 tests) but failed the strengthened deterministic preflight. The immediate missing requirement was exact task derivation from the triggering commit (`git diff-tree` was absent). Inspection also found the candidate controller incomplete: `.github/workflows/autonomous_controller.yml` had a step-level `if` source check that merely skipped that one step rather than blocking later writes; it used invalid `merge-merges` input; both success and failure artifact downloads were unconditional; the Python controller `main()` only printed a placeholder and performed no orchestration; it did not actually derive the task, promote a validated bundle, create a draft PR, collect failed job/step metadata, update bounded retries, or enforce idempotency. This is the final bounded retry. Implement the complete controller, not just helper stubs. Deterministic preflight now requires at least 10 tests and concrete orchestration behavior.",
+  "retry_reason": "Run 37183951054: free worker generation succeeded, but TASK-0002 deterministic preflight failed before validation because the generated test file used a hyphenated model name in a Python module import, causing ModuleNotFoundError. The harness also invoked unittest using the filename as a module target. Additionally, upload-artifact excluded hidden .github files, so the generated autonomous_controller.yml was missing from the failed bundle. The harness is now corrected to execute the test file directly and to include hidden files in worker bundles. Regenerate/fix the candidate so the test imports the controller helper by file path (e.g. importlib.util.spec_from_file_location) rather than as a dotted module name, then pass the full TASK-0002 preflight.",
   "orchestrator_corrections": [
     "TASK-0002 retry #1: tests must execute successfully when invoked as `python <exact-test-file-path>` on Linux.",
     "Load the hyphenated controller module by exact filesystem path rather than `importlib.import_module` using the filename as a Python module name.",
@@ -100,6 +100,10 @@
     "When retry_attempt < max_controller_retries, update only the exact triggering queue task on main with retry_attempt+1 and sanitized retry_reason, commit with a deterministic controller-run marker, and push main to retrigger the worker.",
     "When retry_attempt >= max_controller_retries, do NOT edit/push the queue task (which would retrigger). Surface/persist BLOCKED via job summary and/or an uploaded non-triggering evidence artifact.",
     "Unit tests must cover at least: allowed path acceptance, disallowed rejection, absolute path rejection, traversal rejection, relative symlink rejection inside a bundle, missing manifest, duplicate manifest entries, extra bundle file, manifest entry missing from bundle, retry under limit, retry at limit, idempotency key/processed-run behavior, and secret-like line sanitization.",
-    "Keep worker_preflight_evidence PENDING in the review packet until CI actually passes."
+    "Keep worker_preflight_evidence PENDING in the review packet until CI actually passes.",
+    "Generated Python filenames intentionally contain the model identifier 'gemini-3.5-flash-lite', which includes hyphens. Do not import such files with importlib.import_module or normal dotted-module syntax. In the test, load the controller helper from its exact file path using importlib.util.spec_from_file_location/module_from_spec/exec_module, or another path-based loader.",
+    "The deterministic preflight now runs the test file directly with `python \"$TEST\"`; ensure the test has a working `if __name__ == '__main__': unittest.main()` entry point.",
+    "Worker artifact upload now preserves hidden files. Ensure `.github/workflows/autonomous_controller.yml` is generated and included as an allowed candidate artifact.",
+    "Preserve all previous TASK-0002 security requirements. Do not weaken tests or rename provenance-bearing files merely to avoid the hyphenated filename issue."
   ]
 }
