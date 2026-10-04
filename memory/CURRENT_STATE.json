@@ -66,6 +66,6 @@
     "user_initiated_sign_in_only": true,
     "local_inference": false,
     "conversation_access": false,
-    "deterministic_tests_expected": 49
+    "deterministic_tests_expected": 54
   }
 }
