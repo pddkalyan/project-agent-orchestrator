@@ -166,7 +166,6 @@ jobs:
           grep -q 'github.event.workflow_run.head_sha' "$WORKFLOW"
           grep -q 'github.event.workflow_run.head_repository.full_name' "$WORKFLOW"
           grep -q 'github.event.workflow_run.event' "$WORKFLOW"
-          grep -q 'git diff-tree' "$WORKFLOW"
 
           if grep -q 'pattern-match:' "$WORKFLOW"; then
             echo "actions/download-artifact does not use pattern-match; use supported pattern/run-id/github-token inputs." >&2
@@ -188,12 +187,23 @@ jobs:
             exit 33
           fi
 
+          if grep -q 'merge-merges:' "$WORKFLOW"; then
+            echo "Invalid actions/download-artifact input merge-merges detected." >&2
+            exit 34
+          fi
+
+          grep -q '^    if:' "$WORKFLOW"
+          grep -q 'actions/download-artifact@v4' "$WORKFLOW"
+
           python - <<'PY'
           import json
           from pathlib import Path
           packet = json.loads(Path("review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json").read_text())
           state = json.loads(Path("memory/CURRENT_STATE.json").read_text())
           tests = Path("tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text()
+          workflow = Path(".github/workflows/autonomous_controller.yml").read_text()
+          script = Path("scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text()
+          combined = workflow + "\n" + script
           assert packet.get("review_status") == "PENDING_ASTRA_REVIEW"
           # Worker cannot truthfully mark current CI/preflight PASS before the workflow executes it.
           worker_ev = packet.get("worker_preflight_evidence", {})
@@ -204,6 +214,11 @@ jobs:
           lower = tests.lower()
           for required in ("symlink", "manifest", "duplicate", "traversal", "absolute", "secret", "retry", "idempot"):
               assert required in lower, f"missing test coverage keyword: {required}"
+          for required in ("git diff-tree", "gh pr create", "--draft", "git push origin", "workflow_run.head_sha"):
+              assert required in combined, f"missing controller behavior: {required}"
+          assert "find tasks/queue" not in combined, "task identity must not use ambiguous find/head selection"
+          assert "controller helper script loaded successfully" not in script.lower(), "controller main must perform orchestration, not only print a placeholder"
+          assert tests.count("def test_") >= 10, "insufficient deterministic unit-test coverage"
           PY
 
           echo "TASK-0002 deterministic preflight passed."
