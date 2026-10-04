@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0002",
+  "review_status": "PENDING_ASTRA_REVIEW",
+  "worker": {
+    "agent": "worker_gemini_cli",
+    "model": "gemini-3.5-flash-lite"
+  },
+  "recovery": {
+    "performed_by": "bootstrap_chatgpt",
+    "model": "gpt-5.6-sol",
+    "reason": "The bounded worker retry ceiling was reached. The final worker candidate was hardened without another worker-model call before the Astra gate.",
+    "last_worker_run_id": 37185234730
+  },
+  "candidate_artifacts": [
+    ".github/workflows/autonomous_controller.yml",
+    ".github/workflows/worker_task.yml",
+    "scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py",
+    "tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py",
+    "docs/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.md",
+    "review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json",
+    "memory/CURRENT_STATE.json",
+    "memory/NEXT_ACTIONS.json",
+    "README.md",
+    "PROVENANCE_REGISTRY.jsonl"
+  ],
+  "worker_preflight_evidence": {
+    "status": "FAILED_AT_RETRY_CEILING",
+    "last_run_id": 37185234730,
+    "result": "13 tests executed; one symlink fixture failed before recovery hardening",
+    "note": "No worker preflight PASS is claimed. Recovery validation is separate from worker evidence."
+  },
+  "recovery_validation": {
+    "status": "LOCAL_DETERMINISTIC_PASS",
+    "tests": 18,
+    "network_used": false,
+    "note": "Helper/test files compile and 18 deterministic offline unit tests pass in the recovery workspace. GitHub candidate regression remains pending."
+  },
+  "ci_evidence": {
+    "status": "PENDING_FINAL_REBASE_RECHECK",
+    "run_id": null,
+    "tested_commit": null,
+    "runner_os": null,
+    "result": "PENDING",
+    "workflow": "Autonomous Controller Regression"
+  },
+  "review_focus": [
+    "workflow_run trust boundary and exact source commit/task derivation",
+    "cross-run artifact download and exact manifest-to-bundle validation",
+    "symlink/path traversal/allowlist defenses",
+    "bounded retry and source-run idempotency",
+    "secret-like failure-log sanitization",
+    "repository_dispatch use for controller-created retry/regression events",
+    "draft-PR-only promotion and absence of merge/auto-merge behavior",
+    "truthful evidence and USD 0 / no-local-inference boundaries"
+  ],
+  "known_limitations": [
+    "Astra review and a separate merge/promotion gate remain required.",
+    "Repository policy can reject branch pushes or PR creation; the controller fails closed rather than bypassing policy.",
+    "The controller depends on the repository's GitHub Actions/GITHUB_TOKEN permissions and included capacity; it does not purchase additional Actions or API capacity.",
+    "Failure log excerpts are heuristic-sanitized and bounded; raw failed logs stay temporary and are not committed.",
+    "The worker-task repository_dispatch integration is a bootstrap/orchestrator recovery modification, not a free-worker-generated file; provenance records this separately."
+  ],
+  "prior_candidate_ci": {
+    "tested_commit": "961ba333132a1b16abc5cbabb6500a6fcc72ad42",
+    "autonomous_controller_regression_run_id": 37186821473,
+    "autonomous_controller_regression_result": "PASS",
+    "pc_cleanup_regression_run_id": 37186821529,
+    "pc_cleanup_regression_result": "PASS",
+    "note": "Prior candidate evidence only. Final rebased head must pass regression again before Astra review."
+  }
+}

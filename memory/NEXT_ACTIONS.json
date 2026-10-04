@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "next": [
-    "Build TASK-0002: bounded autonomous controller for worker retry, candidate promotion, deterministic validation, and Astra handoff.",
-    "Keep GPT-6 Astra as review-only; do not use Astra for routine implementation.",
-    "Do not auto-merge reviewed work and do not perform destructive PC cleanup without a separate explicit approval.",
-    "After the controller baseline is approved, implement provider-neutral media contracts and cloud video provider experiments."
+    "Run the dedicated TASK-0002 autonomous-controller regression against the exact candidate head.",
+    "If deterministic regression passes, submit the exact tested head and evidence to GPT-6 Astra for final review.",
+    "Do not merge or enable auto-merge before Astra approval and the explicit promotion gate.",
+    "After TASK-0002 approval, implement provider-neutral media contracts and cloud video provider experiments while keeping spend_limit_usd=0 and local_video_inference=false."
   ]
 }

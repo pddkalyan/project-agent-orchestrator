@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "run_id": "20261003_0001",
-  "phase": "AUTONOMOUS_ORCHESTRATION_BOOTSTRAP",
-  "status": "TASK_0001_APPROVED_MERGED_LOCAL_LEGACY_PROJECT_RETIRED",
+  "run_id": "20261004_0002_RECOVERY",
+  "phase": "AUTONOMOUS_ORCHESTRATION_TASK_0002_REVIEW_GATE",
+  "status": "TASK_0002_RECOVERY_CANDIDATE_READY_AWAITING_REGRESSION_AND_ASTRA_REVIEW",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",
@@ -19,6 +19,16 @@
     "reviewed_head": "4eee0c23f1fd0ca3b1ae847e75f3deebbe148376",
     "merge_commit": "438e837a1d6d42ca8af4e6b31261e0ed34aa8f5d",
     "windows_regression_run_id": 37101797145
+  },
+  "task_0002": {
+    "review_status": "PENDING_ASTRA_REVIEW",
+    "worker_retry_ceiling": 3,
+    "worker_retry_ceiling_reached": true,
+    "last_worker_run_id": 37185234730,
+    "last_worker_result": "DETERMINISTIC_PREFLIGHT_FAILED",
+    "recovery_mode": "BOOTSTRAP_HARDENING_WITHOUT_ADDITIONAL_WORKER_CALL",
+    "unit_tests_count": 18,
+    "candidate_regression": "PENDING"
   },
   "local_cleanup": {
     "old_project_path": "D:\\Documents\\AI-Movie-Studio",

@@ -5,6 +5,10 @@ on:
     paths:
       - "tasks/queue/*.json"
 
+  repository_dispatch:
+    types:
+      - worker_task_retry
+
 permissions:
   contents: read
 
@@ -25,12 +29,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^tasks/queue/.*\.json$' || true)
-          if [[ "${#TASK_FILES[@]}" -ne 1 ]]; then
-            echo "Expected exactly one queue task in triggering commit, found ${#TASK_FILES[@]}" >&2
-            exit 13
+          if [[ "$GITHUB_EVENT_NAME" == "repository_dispatch" ]]; then
+            TASK_FILE="$(jq -r '.client_payload.task_file // empty' "$GITHUB_EVENT_PATH")"
+            if [[ ! "$TASK_FILE" =~ ^tasks/queue/[A-Za-z0-9._-]+\.json$ ]]; then
+              echo "Invalid repository_dispatch task_file: $TASK_FILE" >&2
+              exit 12
+            fi
+            test -f "$TASK_FILE"
+          else
+            mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^tasks/queue/.*\.json$' || true)
+            if [[ "${#TASK_FILES[@]}" -ne 1 ]]; then
+              echo "Expected exactly one queue task in triggering commit, found ${#TASK_FILES[@]}" >&2
+              exit 13
+            fi
+            TASK_FILE="${TASK_FILES[0]}"
           fi
-          TASK_FILE="${TASK_FILES[0]}"
           TASK_ID="$(jq -r '.task_id' "$TASK_FILE")"
           WORKER_MODEL="$(jq -r '.preferred_worker_model // "gemini-3.5-flash-lite"' "$TASK_FILE")"
           echo "task_file=$TASK_FILE" >> "$GITHUB_OUTPUT"
