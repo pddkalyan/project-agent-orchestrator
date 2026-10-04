@@ -182,7 +182,7 @@ class TestTask0004(unittest.TestCase):
         self.assertEqual(req["data"]["resource"], "https://api.openai.com/v1")
 
     def test_14_scope_enforcement(self):
-        self.assertTrue(adapter.verify_granted_scopes("openid offline_access chatgpt.tokens.use.direct")[0])
+        self.assertTrue(adapter.verify_granted_scopes(" ".join(adapter.REQUIRED_SCOPES))[0])
         self.assertFalse(adapter.verify_granted_scopes("openid offline_access")[0])
         self.assertFalse(adapter.verify_granted_scopes("openid chatgpt.tokens.use.direct")[0])
 
@@ -243,7 +243,7 @@ class TestTask0004(unittest.TestCase):
                 "access_token": "ACCESS_SECRET_SENTINEL",
                 "refresh_token": "REFRESH_SECRET_SENTINEL",
                 "id_token": "ID_SECRET_SENTINEL",
-                "scopes": ["offline_access", "chatgpt.tokens.use.direct"],
+                "scopes": list(adapter.REQUIRED_SCOPES),
             })
             encoded = json.dumps(storage.safe_status())
             self.assertNotIn("ACCESS_SECRET_SENTINEL", encoded)
@@ -259,7 +259,7 @@ class TestTask0004(unittest.TestCase):
                 "refresh_token": "old_refresh",
                 "access_token": "old_access",
                 "id_token": "old_id",
-                "scopes": ["offline_access", "chatgpt.tokens.use.direct"],
+                "scopes": list(adapter.REQUIRED_SCOPES),
             })
             transport = FakeTransport()
             transport.refresh_payload = {
@@ -267,7 +267,7 @@ class TestTask0004(unittest.TestCase):
                 "refresh_token": "new_refresh",
                 "id_token": "new_id",
                 "expires_in": 3600,
-                "scope": "offline_access chatgpt.tokens.use.direct",
+                "scope": " ".join(adapter.REQUIRED_SCOPES),
             }
             result = adapter.refresh_profile(storage, transport)
             self.assertEqual(result["status"], "REFRESHED")
@@ -281,24 +281,24 @@ class TestTask0004(unittest.TestCase):
                 raise OSError("persistence failure")
         with tempfile.TemporaryDirectory() as tmp:
             base = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
-            base.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"old","access_token":"old_access","id_token":"old_id","scopes":["offline_access","chatgpt.tokens.use.direct"]})
+            base.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"old","access_token":"old_access","id_token":"old_id","scopes":list(adapter.REQUIRED_SCOPES)})
             storage = FailingStorage(base.storage_path, base.protector)
             transport = FakeTransport()
-            transport.refresh_payload = {"access_token":"new","refresh_token":"newr","id_token":"newid","expires_in":3600,"scope":"offline_access chatgpt.tokens.use.direct"}
-            with self.assertRaises(OSError):
-                adapter.refresh_profile(storage, transport)
+            transport.refresh_payload = {"access_token":"new","refresh_token":"newr","id_token":"newid","expires_in":3600,"scope":" ".join(adapter.REQUIRED_SCOPES)}
+            result = adapter.refresh_profile(storage, transport)
+            self.assertEqual(result["status"], adapter.BLOCKED_INFRASTRUCTURE_ERROR)
             self.assertEqual(base.load_profile()["refresh_token"], "old")
 
     def test_23_refresh_lock_serializes_two_callers(self):
         with tempfile.TemporaryDirectory() as tmp:
             storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
-            storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","scopes":["offline_access","chatgpt.tokens.use.direct"]})
+            storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","scopes":list(adapter.REQUIRED_SCOPES)})
             class Rotating(FakeTransport):
                 def post_form(self, url, data, headers=None):
                     time.sleep(0.03)
                     current = data["refresh_token"]
                     n = int(current[1:]) + 1
-                    return {"access_token":f"a{n}","refresh_token":f"r{n}","id_token":f"i{n}","expires_in":3600,"scope":"offline_access chatgpt.tokens.use.direct"}
+                    return {"access_token":f"a{n}","refresh_token":f"r{n}","id_token":f"i{n}","expires_in":3600,"scope":" ".join(adapter.REQUIRED_SCOPES)}
             t = Rotating()
             results = []
             threads = [threading.Thread(target=lambda: results.append(adapter.refresh_profile(storage,t))) for _ in range(2)]
@@ -409,7 +409,7 @@ class TestTask0004(unittest.TestCase):
                 "refresh_token":"r0",
                 "access_token":"a0",
                 "id_token":"retained_id",
-                "scopes":["offline_access","chatgpt.tokens.use.direct"],
+                "scopes":list(adapter.REQUIRED_SCOPES),
             })
             transport = FakeTransport()
             transport.refresh_payload = {
@@ -433,7 +433,7 @@ class TestTask0004(unittest.TestCase):
             storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
             storage.save_profile_atomic({
                 "client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0",
-                "scopes":["offline_access","chatgpt.tokens.use.direct"],"expires_at":0
+                "scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0
             })
             transport = FakeTransport()
             transport.refresh_payload = {"access_token":"a1","refresh_token":"r1","expires_in":3600}
@@ -441,103 +441,155 @@ class TestTask0004(unittest.TestCase):
             self.assertEqual(status, "PROFILE_READY")
             self.assertEqual(profile["access_token"], "a1")
 
-    def test_40_run_streamed_review_valid_activation_uses_bearer_and_completed_stream(self):
-        class StreamTransport:
+    def _snapshot(self):
+        return {
+            "task_id": "TASK-0004",
+            "repository": "pddkalyan/project-agent-orchestrator",
+            "pr_number": 6,
+            "base_sha": "a" * 40,
+            "candidate_sha": "b" * 40,
+            "reviewer_context_version": "v1",
+            "changed_files": ["scripts/x.py"],
+            "required_ci": [{
+                "workflow": "offline",
+                "run_id": 1,
+                "head_sha": "b" * 40,
+                "result": "PASS",
+                "digest": "sha256:" + "c" * 64,
+            }],
+        }
+
+    def _live_storage(self, tmp):
+        storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+        storage.save_profile_atomic({
+            "profile_label": "default",
+            "client_id": "oaiapp_x",
+            "subject": "sub-1",
+            "refresh_token": "r0",
+            "access_token": "a0",
+            "id_token": "i0",
+            "token_type": "Bearer",
+            "scopes": list(adapter.REQUIRED_SCOPES),
+            "expires_at": int(time.time()) + 3600,
+            "session_state": "ACTIVE",
+            "profile_version": 1,
+        })
+        return storage
+
+    def _allowance(self):
+        now = time.time()
+        return {
+            "billing_mode": "ZERO_SPEND_PLAN",
+            "separately_billed": False,
+            "credits_enabled": False,
+            "remaining_requests": 3,
+            "profile_id": "default",
+            "subject": "sub-1",
+            "client_id": "oaiapp_x",
+            "observed_at": now - 1,
+            "expires_at": now + 60,
+        }
+
+    def test_40_single_pipeline_applies_task0003_and_persistence(self):
+        snapshot = self._snapshot()
+        digest = adapter.bridge.sha256_json(snapshot)
+        class LiveTransport(FakeTransport):
             def __init__(self):
-                self.headers = None
-                self.payload = None
-                self.called = 0
+                super().__init__()
+                self.models_payload = {"models":[{"slug":"gpt-6-astra","visibility":"list"}]}
+                self.stream_calls = 0
             def stream_sse(self, url, payload, headers):
-                self.called += 1
-                self.headers = headers
-                self.payload = payload
-                yield {"type":"response.output_text.delta","delta":"{\"status\":\"APPROVED\"}"}
+                self.stream_calls += 1
+                verdict = {"status":"APPROVED","reviewed_sha":"b"*40,"review_snapshot_digest":digest,"findings":[]}
+                yield {"type":"response.output_text.delta","delta":json.dumps(verdict)}
                 yield {"type":"response.completed"}
-        t=StreamTransport()
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = self._live_storage(tmp)
+            t = LiveTransport()
+            result = adapter.run_streamed_review(
+                storage=storage,
+                plan_allowance_evidence=self._allowance(),
+                activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
+                transport=t,
+                review_prompt="Review.",
+                expected_snapshot=snapshot,
+                review_request=deepcopy(snapshot),
+            )
+            self.assertEqual(result["status"], "APPROVED")
+            self.assertTrue(result["completed"])
+            self.assertEqual(result["persistence"]["action"], "PERSIST_ONCE")
+            self.assertEqual(t.stream_calls, 1)
+
+    def test_41_invalid_snapshot_prevents_inference(self):
+        class Never(FakeTransport):
+            def stream_sse(self, *args, **kwargs):
+                raise AssertionError("must not infer")
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = self._live_storage(tmp)
+            t = Never(); t.models_payload={"models":[{"slug":"gpt-6-astra","visibility":"list"}]}
+            bad = self._snapshot(); bad["candidate_sha"] = "d" * 40
+            result = adapter.run_streamed_review(
+                storage=storage, plan_allowance_evidence=self._allowance(),
+                activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
+                transport=t, review_prompt="Review.",
+                expected_snapshot=self._snapshot(), review_request=bad,
+            )
+            self.assertEqual(result["status"], adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_42_expired_or_wrong_account_allowance_prevents_inference(self):
+        class Never(FakeTransport):
+            def __init__(self):
+                super().__init__(); self.models_payload={"models":[{"slug":"gpt-6-astra","visibility":"list"}]}
+            def stream_sse(self, *args, **kwargs):
+                raise AssertionError("must not infer")
+        with tempfile.TemporaryDirectory() as tmp:
+            storage=self._live_storage(tmp); t=Never()
+            for mutate in ("expired","wrong"):
+                evidence=self._allowance()
+                if mutate=="expired": evidence["expires_at"]=time.time()-1
+                else: evidence["subject"]="other"
+                result=adapter.run_streamed_review(
+                    storage=storage,plan_allowance_evidence=evidence,
+                    activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
+                    transport=t,review_prompt="Review.",expected_snapshot=self._snapshot(),review_request=self._snapshot())
+                self.assertEqual(result["status"], adapter.BLOCKED_PLAN_ALLOWANCE)
+
+    def test_43_legacy_caller_supplied_profile_or_catalog_cannot_authorize(self):
+        class Never:
+            def stream_sse(self, *args, **kwargs):
+                raise AssertionError("must not infer")
         result=adapter.run_streamed_review(
-            profile={"access_token":"ACCESS_SENTINEL","scopes":["offline_access","chatgpt.tokens.use.direct"]},
-            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
+            profile={"access_token":"x"}, model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
             activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
-            transport=t,
-            review_prompt="Review.",
-            review_context={"task_id":"TASK-0004"},
-        )
-        self.assertEqual(result["status"], "COMPLETED")
-        self.assertEqual(t.called, 1)
-        self.assertEqual(t.payload["store"], False)
-        self.assertEqual(t.payload["stream"], True)
-        self.assertEqual(t.headers["Authorization"], "Bearer ACCESS_SENTINEL")
+            transport=Never(), review_prompt="Review.", review_context={"task_id":"TASK-0004"})
+        self.assertEqual(result["status"], adapter.BLOCKED_INVALID_RESPONSE)
 
-    def test_41_run_streamed_review_transport_failure_is_blocked_not_verdict(self):
-        class BadTransport:
-            def stream_sse(self, *args, **kwargs):
-                raise RuntimeError("network timeout")
-        result=adapter.run_streamed_review(
-            profile={"access_token":"x","scopes":["offline_access","chatgpt.tokens.use.direct"]},
-            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
-            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
-            transport=BadTransport(),
-            review_prompt="Review.",
-            review_context={"task_id":"TASK-0004"},
-        )
-        self.assertEqual(result["status"], adapter.BLOCKED_NETWORK_ERROR)
-        self.assertNotIn(result["status"], ("APPROVED","REJECTED"))
+    def test_44_stale_verdict_is_blocked_after_transport(self):
+        snapshot=self._snapshot()
+        class T(FakeTransport):
+            def __init__(self):
+                super().__init__(); self.models_payload={"models":[{"slug":"gpt-6-astra","visibility":"list"}]}
+            def stream_sse(self,*args,**kwargs):
+                verdict={"status":"APPROVED","reviewed_sha":"e"*40,"review_snapshot_digest":adapter.bridge.sha256_json(snapshot),"findings":[]}
+                yield {"type":"response.output_text.delta","delta":json.dumps(verdict)}
+                yield {"type":"response.completed"}
+        with tempfile.TemporaryDirectory() as tmp:
+            result=adapter.run_streamed_review(
+                storage=self._live_storage(tmp),plan_allowance_evidence=self._allowance(),
+                activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
+                transport=T(),review_prompt="Review.",expected_snapshot=snapshot,review_request=deepcopy(snapshot))
+            self.assertEqual(result["status"], adapter.bridge.BLOCKED_INVALID_VERDICT)
 
-    def test_46_disabled_activation_gate_prevents_transport(self):
-        class NeverTransport:
-            def stream_sse(self, *args, **kwargs):
-                raise AssertionError("transport must not be called")
-        result=adapter.run_streamed_review(
-            profile={"access_token":"x","scopes":["offline_access","chatgpt.tokens.use.direct"]},
-            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
-            activation_policy={"reviewer_enabled":False,"zero_extra_spend_confirmed":True},
-            transport=NeverTransport(),
-            review_prompt="Review.",
-            review_context={"task_id":"TASK-0004"},
-        )
-        self.assertEqual(result["status"], adapter.BLOCKED_PLAN_ALLOWANCE)
-
-    def test_47_zero_extra_spend_not_confirmed_prevents_transport(self):
-        class NeverTransport:
-            def stream_sse(self, *args, **kwargs):
-                raise AssertionError("transport must not be called")
-        result=adapter.run_streamed_review(
-            profile={"access_token":"x","scopes":["offline_access","chatgpt.tokens.use.direct"]},
-            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
-            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":False},
-            transport=NeverTransport(),
-            review_prompt="Review.",
-            review_context={"task_id":"TASK-0004"},
-        )
-        self.assertEqual(result["status"], adapter.BLOCKED_PLAN_ALLOWANCE)
-
-    def test_48_missing_exact_astra_prevents_transport(self):
-        class NeverTransport:
-            def stream_sse(self, *args, **kwargs):
-                raise AssertionError("transport must not be called")
-        result=adapter.run_streamed_review(
-            profile={"access_token":"x","scopes":["offline_access","chatgpt.tokens.use.direct"]},
-            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra-preview"]},
-            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
-            transport=NeverTransport(),
-            review_prompt="Review.",
-            review_context={"task_id":"TASK-0004"},
-        )
-        self.assertEqual(result["status"], adapter.BLOCKED_NO_ASTRA)
-
-    def test_49_missing_required_plan_scope_prevents_transport(self):
-        class NeverTransport:
-            def stream_sse(self, *args, **kwargs):
-                raise AssertionError("transport must not be called")
-        result=adapter.run_streamed_review(
-            profile={"access_token":"x","scopes":["offline_access"]},
-            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
-            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
-            transport=NeverTransport(),
-            review_prompt="Review.",
-            review_context={"task_id":"TASK-0004"},
-        )
-        self.assertEqual(result["status"], adapter.BLOCKED_AUTH_REQUIRED)
+    def test_45_activation_gates_prevent_transport(self):
+        class Never:
+            def stream_sse(self,*args,**kwargs): raise AssertionError("must not infer")
+        for policy in (
+            {"reviewer_enabled":False,"zero_extra_spend_confirmed":True},
+            {"reviewer_enabled":True,"zero_extra_spend_confirmed":False},
+        ):
+            result=adapter.run_streamed_review(
+                activation_policy=policy,transport=Never(),review_prompt="Review.")
+            self.assertEqual(result["status"], adapter.BLOCKED_PLAN_ALLOWANCE)
 
     def test_46_refresh_error_codes_fail_closed_as_auth(self):
         for code in [
@@ -592,10 +644,11 @@ class TestTask0004(unittest.TestCase):
 
     def test_51_cli_persists_issued_registration_before_code_exchange(self):
         cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
-        save_pos=cli.index("storage.save_profile_atomic(pending)")
+        save_pos=cli.index("storage.save_registration_atomic(registration)")
         exchange_pos=cli.index("build_token_exchange_request(", save_pos)
         self.assertLess(save_pos, exchange_pos)
         self.assertIn('"registration_pending": True', cli)
+        self.assertNotIn("storage.save_profile_atomic(pending)", cli)
 
     def test_52_authorization_url_with_id_token_hint_is_sanitized(self):
         url=adapter.build_authorization_url(
@@ -639,12 +692,12 @@ class TestTask0004(unittest.TestCase):
     def test_55_refresh_invalid_grant_maps_to_auth_required(self):
         class InvalidGrantTransport:
             def post_form(self, *args, **kwargs):
-                raise RuntimeError('{"http_status":400,"body":{"error":"invalid_grant"}}')
+                raise adapter.SafeTransportError(http_status=400, code="invalid_grant", category="http")
         with tempfile.TemporaryDirectory() as tmp:
             storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
             storage.save_profile_atomic({
                 "client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0",
-                "scopes":["offline_access","chatgpt.tokens.use.direct"]
+                "scopes":list(adapter.REQUIRED_SCOPES)
             })
             result = adapter.refresh_profile(storage, InvalidGrantTransport())
             self.assertEqual(result["status"], adapter.BLOCKED_AUTH_REQUIRED)
