@@ -7,7 +7,7 @@
   "objective": "Build the bounded autonomous orchestration controller that removes the current manual babysitting step between Cloud Worker Task runs and Astra review. The controller must automatically handle worker success/failure, validate worker artifacts against the task allowlist, promote a successful candidate to a draft pull request, and create bounded retry task revisions on worker failure using sanitized failure evidence. It must stop after a configured retry limit and surface a blocker instead of looping forever. It must never auto-merge, never call paid services, never invoke Astra through a paid API, never access or modify the user's PC, and never weaken the zero-spend/safety boundaries.",
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "astra_review_required": true,
-  "retry_attempt": 1,
+  "retry_attempt": 2,
   "max_controller_retries": 3,
   "allowed_paths": [
     ".github/workflows/autonomous_controller.yml",
@@ -72,12 +72,22 @@
     "no auto-merge",
     "truthful evidence"
   ],
-  "retry_reason": "Run 37183951054 failed in TASK-0002 deterministic preflight after the free Gemini worker completed successfully. The first failure was a harness bug: `python -m unittest \"$TEST\"` treated the hyphenated filename (`gemini-3.5-flash-lite`) as a module path and could not import it. The harness is now corrected to execute the test file directly with `python \"$TEST\"`. Independent replay of the candidate test file then exposed a worker defect: the test itself uses `importlib.import_module(...)` on the hyphenated controller filename and fails with ModuleNotFoundError at `gemini-3`. Correct the test to load the controller by exact file path (for example importlib.util.spec_from_file_location/module_from_spec/exec_module) or equivalent safe file-based loading. Do not rename provenance-bearing files merely to work around this. Also correct the review packet: previous run did NOT pass deterministic preflight, so no truthful evidence may claim PASS until the current run actually passes. The generic worker-bundle uploader is now configured with include-hidden-files=true so `.github/workflows/autonomous_controller.yml` can be preserved in the candidate bundle.",
+  "retry_reason": "Run 37184664799 failed TASK-0002 deterministic preflight after the worker completed. The exact failing test was `test_symlink_rejection`: it passed an absolute temporary symlink path into validate_path, so the implementation correctly rejected it first as an absolute path and the test incorrectly expected the later 'Symlink rejected' message. Correct the test to exercise symlink rejection through a relative artifact path inside a temporary bundle/root (or otherwise ensure the path reaches the symlink check without violating the absolute-path rule). During review of the failed candidate, additional blocking workflow defects were found and are now enforced by the deterministic preflight: source repository guard must not be tautological; workflow_run must be guarded as an in-repository push and identify the exact triggering head SHA; the task file must be derived unambiguously from that triggering commit (not `find ... | head -1`); actions/download-artifact must download from the triggering workflow run using supported `run-id` and `github-token` inputs (no unsupported `pattern-match`); branch push/PR creation failures must fail closed rather than `|| echo`; candidate artifact validation must cover actual manifest-to-files correspondence and symlink entries; retry handling must be idempotent and bounded; failure evidence must be sanitized and include job/step/conclusion metadata. The worker preflight packet must remain PENDING until CI actually passes.",
   "orchestrator_corrections": [
     "TASK-0002 retry #1: tests must execute successfully when invoked as `python <exact-test-file-path>` on Linux.",
     "Load the hyphenated controller module by exact filesystem path rather than `importlib.import_module` using the filename as a Python module name.",
     "Do not rename the required provenance-bearing controller/test filenames.",
     "Review packet worker_preflight_evidence must be truthful: set PASS only after the deterministic preflight and unit tests actually pass in the current run.",
-    "Keep `.github/workflows/autonomous_controller.yml` in the worker candidate; artifact upload now includes hidden files."
+    "Keep `.github/workflows/autonomous_controller.yml` in the worker candidate; artifact upload now includes hidden files.",
+    "TASK-0002 retry #2: fix symlink test semantics. Do not pass an absolute tempfile path to a function whose first rule is absolute-path rejection and then expect a symlink-specific error. Test a relative symlink inside a temporary artifact bundle/root.",
+    "Replace the tautological repository guard with real workflow_run source checks: require github.event.workflow_run.head_repository.full_name == github.repository, github.event.workflow_run.event == 'push', and the exact head_sha to be an ancestor/on the expected default branch before writes.",
+    "Derive exactly one tasks/queue/*.json file from the triggering worker commit using git diff-tree (or equivalently safe exact-commit logic). Zero or multiple matches must fail closed. Never use `find tasks/queue ... | head -1`.",
+    "Download artifacts from the triggering worker run, not the controller run. For actions/download-artifact@v4, provide run-id=${{ github.event.workflow_run.id }} and github-token=${{ secrets.GITHUB_TOKEN }}, and use supported `pattern`, not `pattern-match`.",
+    "On success require exactly one worker-bundle for the derived task id. On failure use the corresponding failed-worker-bundle when available plus GitHub Actions job/step metadata. Ambiguous/missing artifacts fail closed.",
+    "Validate actual bundle contents against changed-files.txt: reject missing manifest, duplicate manifest paths, extra candidate files not in manifest, manifest entries missing from the bundle, symlinks, absolute paths, traversal, and anything outside task.allowed_paths.",
+    "Do not swallow `git push` or `gh pr create` failures with `|| echo`; repository policy failures must stop with evidence.",
+    "Make repeated workflow_run delivery idempotent. A previously processed source run must not increment retry_attempt again or create a duplicate branch/PR.",
+    "Failure retry must modify only the exact triggering task JSON, increment only while retry_attempt < max_controller_retries, sanitize evidence, and stop BLOCKED without another worker trigger at the limit.",
+    "Review packet worker_preflight_evidence.status must remain PENDING until deterministic preflight actually succeeds; do not pre-claim PASS."
   ]
 }
