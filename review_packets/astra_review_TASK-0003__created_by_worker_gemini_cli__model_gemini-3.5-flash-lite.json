@@ -6,6 +6,15 @@
     "agent": "worker_gemini_cli",
     "model": "gemini-3.5-flash-lite"
   },
+  "recovery": {
+    "performed_by": "bootstrap_chatgpt",
+    "model": "gpt-5.6-sol",
+    "source_worker_run_id": 37201144071,
+    "source_worker_bundle_artifact_id": 11303161357,
+    "source_worker_bundle_digest": "sha256:2bc8182aa6cc25643306ee2ab62d140c8047b148fdcfd1406efdbd4c24b863bf",
+    "failed_controller_run_id": 37201480700,
+    "reason": "Worker candidate generation succeeded. Automated promotion failed only because the GitHub App token could not push commits containing .github/workflows files without workflow-file permission. The candidate was reconstructed on a review branch from the exact worker bundle, then recovery-hardened before the Astra gate."
+  },
   "candidate_artifacts": [
     ".github/workflows/chatgpt_plan_reviewer.yml",
     ".github/workflows/chatgpt_plan_reviewer_regression.yml",
@@ -24,17 +33,32 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "verification_results": {
-    "offline_tests_passed": true,
-    "unit_tests_count": 11,
-    "zero_spend_verified": true,
-    "self_hosted_workflow_verified": true,
-    "no_local_inference": true
+    "status": "PENDING_EXACT_HEAD_CI",
+    "deterministic_tests_expected": 25,
+    "live_authorization_enabled": false,
+    "live_openai_calls_performed": false,
+    "zero_extra_spend_boundary": true,
+    "self_hosted_reviewer_only": true,
+    "no_local_inference": true,
+    "no_conversation_access": true,
+    "no_merge_or_auto_merge": true,
+    "note": "Do not treat worker-local tests as final review evidence. Exact-head GitHub regression must pass after recovery hardening."
   },
   "review_focus": [
-    "zero-cost ChatGPT-plan review bridge scaffold",
-    "exact-model policy enforcement for gpt-6-astra",
-    "fail-closed behavior on missing auth or exhausted plan allowance",
-    "exact-SHA binding and deterministic correction packaging",
-    "self-hosted-only and disabled-by-default workflow isolation"
+    "offline-only scaffold versus future live activation boundary",
+    "exact gpt-6-astra model-catalog enforcement",
+    "zero-extra-spend allowance and absence of paid API fallback",
+    "host-local auth metadata boundary and no repository credential storage",
+    "exact repository/PR/base SHA/candidate SHA/CI digest binding",
+    "structured verdict validation and secret redaction before persistence",
+    "bounded rejection-to-correction package",
+    "idempotent approval/rejection persistence",
+    "self-hosted Windows reviewer workflow disabled by default",
+    "no access to existing ChatGPT conversations or memory",
+    "no local inference, cleanup mutation, merge, or auto-merge"
+  ],
+  "known_limitations": [
+    "TASK-0003 does not implement or enable live Sign in with ChatGPT authorization or live reviewer inference. That activation remains a separate post-approval task requiring one-time user interaction.",
+    "The current GitHub App used by the autonomous controller cannot push workflow-file changes, so this candidate required trusted recovery promotion through the GitHub connector. This is recorded rather than silently weakening repository permissions."
   ]
 }
