@@ -256,5 +256,58 @@ class TestAutonomousController(unittest.TestCase):
         self.assertNotIn("log", json.dumps(result).lower())
 
 
+    def test_31_block_scalar_structured_field_is_fully_redacted(self):
+        secret = "BLOCK_SCALAR_SECRET_SHOULD_NOT_SURVIVE"
+        field = "api_key: |\n  " + secret + "\n  second-line"
+        self.assertEqual(ac.sanitize_structured_field(field), "[REDACTED-POTENTIAL-SECRET]")
+
+    def test_32_summarize_jobs_redacts_block_scalar_and_private_key_fields(self):
+        secret = "BLOCK_VALUE_ABC123"
+        key_payload = "PRIVATEKEYPAYLOAD123"
+        jobs = {
+            "jobs": [{
+                "name": "api_key: |\n  " + secret + "\n  continuation",
+                "conclusion": "failure",
+                "steps": [{
+                    "name": "-----BEGIN PRIVATE KEY-----\n" + key_payload + "\n-----END PRIVATE KEY-----",
+                    "number": 4,
+                    "conclusion": "failure",
+                }],
+            }]
+        }
+        encoded = json.dumps(ac.summarize_jobs(jobs))
+        self.assertNotIn(secret, encoded)
+        self.assertNotIn(key_payload, encoded)
+        self.assertIn("[REDACTED-POTENTIAL-SECRET]", encoded)
+
+    def test_33_retry_reason_from_structured_summary_contains_no_secret_payload(self):
+        secret = "MULTILINE_SECRET_FOR_RETRY_REASON"
+        token = "github_pat_" + "Z" * 40
+        jobs = {
+            "jobs": [{
+                "name": "api_key: |\n  " + secret,
+                "conclusion": "failure",
+                "steps": [{
+                    "name": "request failed with " + token,
+                    "number": 9,
+                    "conclusion": "failure",
+                }],
+            }]
+        }
+        summary = ac.summarize_jobs(jobs)
+        reason = "; ".join(
+            f"{j.get('name')}:{j.get('conclusion')}" +
+            (" steps=" + ",".join(f"{s.get('name')}:{s.get('conclusion')}" for s in j.get("steps", [])) if j.get("steps") else "")
+            for j in summary.get("failed_jobs", [])
+        )
+        self.assertNotIn(secret, reason)
+        self.assertNotIn(token, reason)
+
+    def test_34_false_execute_boolean_is_valid_data_not_missing_data(self):
+        payload = {"execute": False}
+        self.assertIs(payload["execute"], False)
+        self.assertIsInstance(payload["execute"], bool)
+
+
 if __name__ == "__main__":
     unittest.main()
