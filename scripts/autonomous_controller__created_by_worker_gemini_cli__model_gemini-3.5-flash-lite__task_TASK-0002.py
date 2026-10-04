@@ -15,6 +15,7 @@ import json
 import re
 import shutil
 import stat
+import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Iterable
@@ -473,6 +474,73 @@ def validate_retry_record(task_data: dict, source_worker_run_id: str | int, expe
     return {"valid": True}
 
 
+
+def claim_worker_execution(repository: str, dispatch_key: str, task_sha: str, gh_bin: str = "gh") -> dict:
+    """Atomically claim one logical worker execution using a GitHub ref.
+
+    This is the exact production receipt-claim algorithm used by worker_task.yml.
+    GitHub ref creation is the atomic compare-and-create boundary: one claimant
+    creates the ref; concurrent/repeated claimants observe the same immutable
+    task SHA and return execute=false. A conflicting existing SHA fails closed.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        raise ValueError("invalid repository")
+    if not re.fullmatch(r"[0-9a-f]{32}", dispatch_key):
+        raise ValueError("invalid dispatch_key")
+    if not SHA_RE.fullmatch(task_sha):
+        raise ValueError("invalid task_sha")
+    if not gh_bin:
+        raise ValueError("invalid gh binary")
+
+    api_ref = f"heads/worker-execution-receipts/{dispatch_key}"
+    full_ref = f"refs/heads/worker-execution-receipts/{dispatch_key}"
+    endpoint = f"repos/{repository}/git/ref/{api_ref}"
+
+    def run(args: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [gh_bin, *args],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def observed_sha(proc: subprocess.CompletedProcess[str]) -> str:
+        try:
+            payload = json.loads(proc.stdout)
+            sha = payload["object"]["sha"]
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise ValueError("invalid execution receipt response") from exc
+        if not SHA_RE.fullmatch(str(sha)):
+            raise ValueError("invalid execution receipt sha")
+        return str(sha)
+
+    existing = run(["api", endpoint])
+    if existing.returncode == 0:
+        sha = observed_sha(existing)
+        if sha != task_sha:
+            raise ValueError("execution receipt points at unexpected sha")
+        return {"valid": True, "execute": False, "receipt_sha": sha}
+
+    created = run([
+        "api", "--method", "POST",
+        f"repos/{repository}/git/refs",
+        "-f", f"ref={full_ref}",
+        "-f", f"sha={task_sha}",
+    ])
+    if created.returncode == 0:
+        return {"valid": True, "execute": True, "receipt_sha": task_sha}
+
+    # A concurrent claimant may have won between our GET and POST.
+    existing = run(["api", endpoint])
+    if existing.returncode != 0:
+        raise ValueError("unable to create or observe execution receipt")
+    sha = observed_sha(existing)
+    if sha != task_sha:
+        raise ValueError("concurrent execution receipt mismatch")
+    return {"valid": True, "execute": False, "receipt_sha": sha}
+
+
+
 def summarize_jobs(jobs_payload: dict) -> dict:
     """Persist only allowlisted structured diagnostics, never raw log bodies."""
     result = []
@@ -552,6 +620,15 @@ def main() -> int:
             result = validate_retry_record(_load_json(sys.argv[2]), sys.argv[3], int(sys.argv[4]))
         elif cmd == "summarize-jobs":
             result = summarize_jobs(_load_json(sys.argv[2]))
+        elif cmd == "claim-worker-execution":
+            if len(sys.argv) not in (5, 6):
+                raise ValueError("claim-worker-execution requires repository dispatch_key task_sha [gh_bin]")
+            result = claim_worker_execution(
+                sys.argv[2],
+                sys.argv[3],
+                sys.argv[4],
+                sys.argv[5] if len(sys.argv) == 6 else "gh",
+            )
         else:
             raise ValueError(f"Unknown command: {cmd}")
 
