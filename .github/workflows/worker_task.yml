@@ -159,8 +159,7 @@ jobs:
             > "worker_result_${{ steps.task.outputs.task_id }}.json"
 
       - name: TASK-0001 deterministic preflight
-        if: steps.claim.outputs.execute == 'true'
-        if: steps.task.outputs.task_id == 'TASK-0001'
+        if: steps.claim.outputs.execute == 'true' && steps.task.outputs.task_id == 'TASK-0001'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -207,8 +206,7 @@ jobs:
           Write-Host "TASK-0001 deterministic preflight passed."
 
       - name: TASK-0002 autonomous controller deterministic preflight
-        if: steps.claim.outputs.execute == 'true'
-        if: steps.task.outputs.task_id == 'TASK-0002'
+        if: steps.claim.outputs.execute == 'true' && steps.task.outputs.task_id == 'TASK-0002'
         shell: bash
         run: |
           set -euo pipefail
