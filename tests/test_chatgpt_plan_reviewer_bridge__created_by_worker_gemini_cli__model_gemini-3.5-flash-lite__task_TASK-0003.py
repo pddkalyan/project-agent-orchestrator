@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Deterministic offline tests for TASK-0003 ChatGPT-plan reviewer bridge."""
+"""Adversarial deterministic offline tests for TASK-0003 reviewer bridge."""
 
 import importlib.util
 import json
 import unittest
+from copy import deepcopy
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py"
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = ROOT / "scripts" / "chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py"
+SCHEMA = ROOT / "reviewer" / "REVIEW_CONTRACT.schema.json"
+
 spec = importlib.util.spec_from_file_location("chatgpt_plan_reviewer_bridge", SCRIPT)
 bridge = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -17,6 +21,33 @@ class TestChatGPTPlanReviewerBridge(unittest.TestCase):
     def setUp(self):
         self.sha = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
         self.base = "b1b2c3d4e5f6b1b2c3d4e5f6b1b2c3d4e5f6b1b2"
+        self.snapshot = {
+            "task_id": "TASK-0003",
+            "repository": "pddkalyan/project-agent-orchestrator",
+            "pr_number": 4,
+            "base_sha": self.base,
+            "candidate_sha": self.sha,
+            "reviewer_context_version": "task0003-v2",
+            "changed_files": ["a.py", "reviewer/PROJECT_CONTEXT.md"],
+            "required_ci": [
+                {
+                    "workflow": "ChatGPT Plan Reviewer Regression",
+                    "run_id": 123456,
+                    "head_sha": self.sha,
+                    "result": "PASS",
+                    "digest": "sha256:" + "c" * 64,
+                },
+                {
+                    "workflow": "PC Cleanup Audit Regression",
+                    "run_id": 123457,
+                    "head_sha": self.sha,
+                    "result": "PASS",
+                    "digest": "sha256:" + "d" * 64,
+                },
+            ],
+        }
+        self.request = deepcopy(self.snapshot)
+        self.snapshot_digest = bridge.review_identity_digest(self.snapshot)
         self.catalog = {"authorized_models": ["gpt-6-astra", "other-model"], "user_authorized": True}
         self.auth = {"active": True, "expired": False, "profile_id": "local-profile-1"}
         self.allowance = {
@@ -24,22 +55,6 @@ class TestChatGPTPlanReviewerBridge(unittest.TestCase):
             "separately_billed": False,
             "credits_enabled": False,
             "remaining_requests": 5,
-        }
-        self.request = {
-            "repository": "pddkalyan/project-agent-orchestrator",
-            "pr_number": 3,
-            "base_sha": self.base,
-            "candidate_sha": self.sha,
-            "reviewer_context_version": "task0003-v1",
-            "changed_files": ["a.py", "reviewer/PROJECT_CONTEXT.md"],
-            "required_ci": [
-                {
-                    "run_id": 123456,
-                    "head_sha": self.sha,
-                    "result": "PASS",
-                    "digest": "sha256:" + "c" * 64,
-                }
-            ],
         }
         self.finding = {
             "severity": "P1",
@@ -51,168 +66,337 @@ class TestChatGPTPlanReviewerBridge(unittest.TestCase):
             "implementation_guidance": "Use a deterministic helper.",
         }
 
-    def evaluate(self, verdict, **overrides):
+    def approval(self, **changes):
+        verdict = {
+            "status": "APPROVED",
+            "reviewed_sha": self.sha,
+            "review_snapshot_digest": self.snapshot_digest,
+            "findings": [],
+        }
+        verdict.update(changes)
+        return verdict
+
+    def rejection(self, finding=None, **changes):
+        verdict = {
+            "status": "REJECTED",
+            "reviewed_sha": self.sha,
+            "review_snapshot_digest": self.snapshot_digest,
+            "findings": [deepcopy(finding or self.finding)],
+        }
+        verdict.update(changes)
+        return verdict
+
+    def evaluate(self, verdict=None, **overrides):
         args = dict(
-            task_id="TASK-0003",
-            expected_sha=self.sha,
+            expected_snapshot=self.snapshot,
             review_request=self.request,
             model_catalog=self.catalog,
             auth_profile=self.auth,
             plan_allowance=self.allowance,
-            verdict_payload=verdict,
+            verdict_payload=verdict if verdict is not None else self.approval(),
             current_attempt=0,
             max_retries=3,
         )
         args.update(overrides)
         return bridge.evaluate_review(**args)
 
-    def test_01_exact_astra_model_allowed(self):
+    def assertBlockedEvidence(self, request):
+        result = self.evaluate(review_request=request)
+        self.assertEqual(result["status"], bridge.BLOCKED_EVIDENCE_MISMATCH)
+        self.assertTrue(bridge.validate_emitted_result(result)[0])
+
+    # Model/auth/allowance boundaries.
+    def test_01_exact_astra_allowed(self):
         self.assertEqual(bridge.validate_model_catalog(self.catalog), (True, "MODEL_ALLOWED"))
 
-    def test_02_missing_astra_blocks(self):
-        ok, status = bridge.validate_model_catalog({"authorized_models": ["gpt-5"], "user_authorized": True})
-        self.assertFalse(ok)
-        self.assertEqual(status, bridge.BLOCKED_NO_ASTRA)
+    def test_02_missing_exact_astra_blocks(self):
+        result = self.evaluate(model_catalog={"authorized_models": ["gpt-6-astra-preview"], "user_authorized": True})
+        self.assertEqual(result["status"], bridge.BLOCKED_NO_ASTRA)
 
-    def test_03_similar_model_name_is_not_astra(self):
-        ok, _ = bridge.validate_model_catalog({"authorized_models": ["gpt-6-astra-preview"], "user_authorized": True})
-        self.assertFalse(ok)
+    def test_03_missing_auth_blocks(self):
+        self.assertEqual(self.evaluate(auth_profile=None)["status"], bridge.BLOCKED_AUTH_REQUIRED)
 
-    def test_04_missing_auth_blocks_before_review(self):
-        result = self.evaluate({"status": "APPROVED"}, auth_profile=None)
-        self.assertEqual(result["status"], bridge.BLOCKED_AUTH_REQUIRED)
-
-    def test_05_expired_auth_blocks(self):
+    def test_04_expired_auth_blocks(self):
         auth = {"active": True, "expired": True, "profile_id": "local"}
-        self.assertEqual(self.evaluate({"status": "APPROVED"}, auth_profile=auth)["status"], bridge.BLOCKED_AUTH_REQUIRED)
+        self.assertEqual(self.evaluate(auth_profile=auth)["status"], bridge.BLOCKED_AUTH_REQUIRED)
 
-    def test_06_auth_metadata_rejects_secret_fields(self):
-        auth = {"active": True, "expired": False, "profile_id": "local", "refresh_token": "synthetic"}
-        self.assertEqual(self.evaluate({"status": "APPROVED"}, auth_profile=auth)["status"], bridge.BLOCKED_AUTH_REQUIRED)
+    def test_05_auth_extra_top_level_secret_field_blocks(self):
+        auth = dict(self.auth, refresh_token="synthetic")
+        self.assertEqual(self.evaluate(auth_profile=auth)["status"], bridge.BLOCKED_AUTH_REQUIRED)
 
-    def test_07_paid_billing_mode_blocks(self):
+    def test_06_auth_nested_material_blocks_by_allowlist(self):
+        auth = dict(self.auth)
+        auth["metadata"] = {"refresh_token": "NESTED_SECRET_SENTINEL"}
+        self.assertEqual(self.evaluate(auth_profile=auth)["status"], bridge.BLOCKED_AUTH_REQUIRED)
+
+    def test_07_paid_billing_blocks(self):
         allowance = dict(self.allowance, billing_mode="PAID_API_KEY")
-        self.assertEqual(self.evaluate({"status": "APPROVED"}, plan_allowance=allowance)["status"], bridge.BLOCKED_PLAN_ALLOWANCE)
+        self.assertEqual(self.evaluate(plan_allowance=allowance)["status"], bridge.BLOCKED_PLAN_ALLOWANCE)
 
-    def test_08_separately_billed_or_credits_enabled_blocks(self):
-        self.assertEqual(
-            self.evaluate({"status": "APPROVED"}, plan_allowance=dict(self.allowance, separately_billed=True))["status"],
-            bridge.BLOCKED_PLAN_ALLOWANCE,
-        )
-        self.assertEqual(
-            self.evaluate({"status": "APPROVED"}, plan_allowance=dict(self.allowance, credits_enabled=True))["status"],
-            bridge.BLOCKED_PLAN_ALLOWANCE,
-        )
+    def test_08_credit_fallback_blocks(self):
+        allowance = dict(self.allowance, credits_enabled=True)
+        self.assertEqual(self.evaluate(plan_allowance=allowance)["status"], bridge.BLOCKED_PLAN_ALLOWANCE)
 
-    def test_09_exhausted_allowance_blocks(self):
-        self.assertEqual(
-            self.evaluate({"status": "APPROVED"}, plan_allowance=dict(self.allowance, remaining_requests=0))["status"],
-            bridge.BLOCKED_PLAN_ALLOWANCE,
-        )
+    def test_09_separate_billing_blocks(self):
+        allowance = dict(self.allowance, separately_billed=True)
+        self.assertEqual(self.evaluate(plan_allowance=allowance)["status"], bridge.BLOCKED_PLAN_ALLOWANCE)
 
-    def test_10_review_request_exact_sha_and_ci_pass(self):
-        self.assertEqual(bridge.validate_review_request(self.sha, self.request), (True, "CI_BOUND"))
+    def test_10_exhausted_allowance_blocks(self):
+        allowance = dict(self.allowance, remaining_requests=0)
+        self.assertEqual(self.evaluate(plan_allowance=allowance)["status"], bridge.BLOCKED_PLAN_ALLOWANCE)
 
-    def test_11_candidate_sha_drift_blocks(self):
-        request = dict(self.request, candidate_sha="0" * 40)
-        result = self.evaluate({"status": "APPROVED"}, review_request=request)
-        self.assertEqual(result["status"], bridge.BLOCKED_EVIDENCE_MISMATCH)
-        self.assertEqual(result["reason"], "SHA_MISMATCH")
+    # Immutable expected snapshot binding: every field independently.
+    def test_11_repository_substitution_blocks(self):
+        req = deepcopy(self.request); req["repository"] = "other/repo"
+        self.assertBlockedEvidence(req)
 
-    def test_12_ci_sha_drift_blocks(self):
-        request = dict(self.request)
-        request["required_ci"] = [dict(self.request["required_ci"][0], head_sha="0" * 40)]
-        result = self.evaluate({"status": "APPROVED"}, review_request=request)
-        self.assertEqual(result["status"], bridge.BLOCKED_EVIDENCE_MISMATCH)
-        self.assertEqual(result["reason"], "CI_SHA_MISMATCH")
+    def test_12_pr_substitution_blocks(self):
+        req = deepcopy(self.request); req["pr_number"] = 99
+        self.assertBlockedEvidence(req)
 
-    def test_13_ci_failure_or_bad_digest_blocks(self):
-        request = dict(self.request)
-        request["required_ci"] = [dict(self.request["required_ci"][0], result="FAIL")]
-        self.assertEqual(self.evaluate({"status": "APPROVED"}, review_request=request)["status"], bridge.BLOCKED_EVIDENCE_MISMATCH)
-        request["required_ci"] = [dict(self.request["required_ci"][0], digest="sha256:bad")]
-        self.assertEqual(self.evaluate({"status": "APPROVED"}, review_request=request)["status"], bridge.BLOCKED_EVIDENCE_MISMATCH)
+    def test_13_base_sha_substitution_blocks(self):
+        req = deepcopy(self.request); req["base_sha"] = "0" * 40
+        self.assertBlockedEvidence(req)
 
-    def test_14_context_and_changed_files_are_required(self):
-        request = dict(self.request)
-        request.pop("reviewer_context_version")
-        self.assertFalse(bridge.validate_review_request(self.sha, request)[0])
-        request = dict(self.request, changed_files=["a.py", "a.py"])
-        self.assertEqual(bridge.validate_review_request(self.sha, request)[1], "DUPLICATE_CHANGED_FILES")
+    def test_14_candidate_sha_substitution_blocks(self):
+        req = deepcopy(self.request); req["candidate_sha"] = "1" * 40
+        req["required_ci"] = [dict(x, head_sha="1" * 40) for x in req["required_ci"]]
+        self.assertBlockedEvidence(req)
 
-    def test_15_approved_verdict_is_exact_sha_and_never_mergeable(self):
-        result = self.evaluate({"status": "APPROVED"})
+    def test_15_context_version_substitution_blocks(self):
+        req = deepcopy(self.request); req["reviewer_context_version"] = "stale-v1"
+        self.assertBlockedEvidence(req)
+
+    def test_16_missing_changed_file_blocks(self):
+        req = deepcopy(self.request); req["changed_files"] = req["changed_files"][:-1]
+        self.assertBlockedEvidence(req)
+
+    def test_17_extra_changed_file_blocks(self):
+        req = deepcopy(self.request); req["changed_files"].append("extra.txt")
+        self.assertBlockedEvidence(req)
+
+    def test_18_changed_file_order_is_canonical_not_identity_drift(self):
+        req = deepcopy(self.request); req["changed_files"] = list(reversed(req["changed_files"]))
+        self.assertEqual(bridge.validate_review_request(self.snapshot, req), (True, "SNAPSHOT_BOUND"))
+
+    def test_19_missing_ci_entry_blocks(self):
+        req = deepcopy(self.request); req["required_ci"] = req["required_ci"][:-1]
+        self.assertBlockedEvidence(req)
+
+    def test_20_extra_ci_entry_blocks(self):
+        req = deepcopy(self.request)
+        req["required_ci"].append({
+            "workflow": "Extra Regression",
+            "run_id": 123458,
+            "head_sha": self.sha,
+            "result": "PASS",
+            "digest": "sha256:" + "e" * 64,
+        })
+        self.assertBlockedEvidence(req)
+
+    def test_21_substituted_ci_run_id_blocks(self):
+        req = deepcopy(self.request); req["required_ci"][0]["run_id"] = 888888
+        self.assertBlockedEvidence(req)
+
+    def test_22_substituted_ci_digest_blocks(self):
+        req = deepcopy(self.request); req["required_ci"][0]["digest"] = "sha256:" + "f" * 64
+        self.assertBlockedEvidence(req)
+
+    def test_23_substituted_ci_workflow_blocks(self):
+        req = deepcopy(self.request); req["required_ci"][0]["workflow"] = "Different Workflow"
+        self.assertBlockedEvidence(req)
+
+    def test_24_ci_order_is_canonical(self):
+        req = deepcopy(self.request); req["required_ci"] = list(reversed(req["required_ci"]))
+        self.assertEqual(bridge.validate_review_request(self.snapshot, req), (True, "SNAPSHOT_BOUND"))
+
+    def test_25_exact_snapshot_and_request_pass(self):
+        self.assertEqual(bridge.validate_review_request(self.snapshot, self.request), (True, "SNAPSHOT_BOUND"))
+
+    # Verdict identity binding.
+    def test_26_stale_verdict_sha_blocks(self):
+        result = self.evaluate(self.approval(reviewed_sha="0" * 40))
+        self.assertEqual(result["status"], bridge.BLOCKED_INVALID_VERDICT)
+
+    def test_27_stale_snapshot_digest_blocks(self):
+        result = self.evaluate(self.approval(review_snapshot_digest="f" * 64))
+        self.assertEqual(result["status"], bridge.BLOCKED_INVALID_VERDICT)
+
+    def test_28_exact_approval_passes_and_is_schema_valid(self):
+        result = self.evaluate(self.approval())
         self.assertEqual(result["status"], "APPROVED")
-        self.assertEqual(result["reviewed_sha"], self.sha)
-        self.assertTrue(result["approval_confirmation"]["exact_sha_bound"])
+        self.assertTrue(bridge.validate_emitted_result(result)[0])
+        self.assertTrue(result["approval_confirmation"]["exact_snapshot_bound"])
         self.assertFalse(result["approval_confirmation"]["merge_allowed"])
-        self.assertFalse(result["approval_confirmation"]["auto_merge_allowed"])
 
-    def test_16_rejected_verdict_builds_bounded_correction_package(self):
-        result = self.evaluate({"status": "REJECTED", "findings": [self.finding]}, current_attempt=1, max_retries=3)
-        self.assertEqual(result["status"], "REJECTED")
-        package = result["correction_package"]
-        self.assertEqual(package["action"], "QUEUE_CORRECTION")
-        self.assertEqual(package["next_attempt"], 2)
-        self.assertEqual(package["max_retries"], 3)
-        self.assertEqual(package["corrections"][0]["severity"], "P1")
+    # Sanitization.
+    def test_29_block_scalar_redacts_all_indented_secret_lines(self):
+        text = "before\napi_key: |\n  SECRET_LINE_ONE\n  SECRET_LINE_TWO\nafter"
+        clean = bridge.sanitize_text(text)
+        self.assertNotIn("SECRET_LINE_ONE", clean)
+        self.assertNotIn("SECRET_LINE_TWO", clean)
+        self.assertIn("before", clean)
+        self.assertIn("after", clean)
 
-    def test_17_retry_ceiling_blocks_correction_queue(self):
-        result = self.evaluate({"status": "REJECTED", "findings": [self.finding]}, current_attempt=3, max_retries=3)
-        self.assertEqual(result["correction_package"]["action"], bridge.BLOCKED_RETRY_LIMIT)
-        self.assertNotIn("next_attempt", result["correction_package"])
+    def test_30_label_only_redacts_unlabelled_continuations_until_blank(self):
+        text = "password:\nSECRET_ONE\nSECRET_TWO\n\nordinary diagnostic"
+        clean = bridge.sanitize_text(text)
+        self.assertNotIn("SECRET_ONE", clean)
+        self.assertNotIn("SECRET_TWO", clean)
+        self.assertIn("ordinary diagnostic", clean)
 
-    def test_18_malformed_verdict_fails_closed(self):
-        self.assertEqual(self.evaluate({"status": "MAYBE"})["status"], bridge.BLOCKED_INVALID_VERDICT)
-        self.assertEqual(self.evaluate({"status": "REJECTED", "findings": []})["status"], bridge.BLOCKED_INVALID_VERDICT)
-        self.assertEqual(self.evaluate({"status": "APPROVED", "findings": [self.finding]})["status"], bridge.BLOCKED_INVALID_VERDICT)
+    def test_31_token_bearing_dictionary_key_is_not_retained(self):
+        token_key = "github_pat_" + "Z" * 40
+        clean = bridge.sanitize_object({token_key: "value", "ordinary": "diagnostic"})
+        encoded = json.dumps(clean)
+        self.assertNotIn(token_key, encoded)
+        self.assertNotIn("value", encoded)
+        self.assertIn("ordinary", encoded)
 
-    def test_19_secret_like_finding_payload_is_redacted_before_persistence(self):
-        token = "github_pat_" + "Z" * 40
-        finding = dict(self.finding, exact_problem="failed with " + token)
-        result = self.evaluate({"status": "REJECTED", "findings": [finding]})
+    def test_32_nested_refresh_token_is_removed_by_sanitizer(self):
+        clean = bridge.sanitize_object({"nested": {"refresh_token": "NESTED_SENTINEL"}, "ordinary": "ok"})
+        encoded = json.dumps(clean)
+        self.assertNotIn("refresh_token", encoded)
+        self.assertNotIn("NESTED_SENTINEL", encoded)
+        self.assertIn("ordinary", encoded)
+
+    def test_33_private_key_and_fine_grained_pat_leave_no_payload(self):
+        pat = "github_pat_" + "P" * 40
+        text = f"diagnostic\n{pat}\n-----BEGIN PRIVATE KEY-----\nPRIVATE_SENTINEL\n-----END PRIVATE KEY-----\ndone"
+        clean = bridge.sanitize_text(text)
+        self.assertNotIn(pat, clean)
+        self.assertNotIn("PRIVATE_SENTINEL", clean)
+        self.assertIn("diagnostic", clean)
+        self.assertIn("done", clean)
+
+    def test_34_rejected_secret_finding_has_no_sentinel_in_result_or_correction(self):
+        finding = deepcopy(self.finding)
+        finding["exact_problem"] = "api_key: |\n  FIRST_SENTINEL\n  SECOND_SENTINEL\nordinary"
+        result = self.evaluate(self.rejection(finding))
         encoded = json.dumps(result)
-        self.assertNotIn(token, encoded)
-        self.assertIn("[REDACTED-POTENTIAL-SECRET]", encoded)
+        self.assertNotIn("FIRST_SENTINEL", encoded)
+        self.assertNotIn("SECOND_SENTINEL", encoded)
 
-    def test_20_recursive_secret_keys_are_redacted(self):
-        token = "synthetic-refresh-value"
-        clean = bridge.sanitize_object({"nested": {"refresh_token": token}, "normal": "diagnostic"})
-        self.assertNotIn(token, json.dumps(clean))
-        self.assertEqual(clean["normal"], "diagnostic")
+    # Strict finding validation.
+    def test_35_null_required_finding_field_blocks(self):
+        finding = deepcopy(self.finding); finding["exact_location"] = None
+        self.assertEqual(self.evaluate(self.rejection(finding))["status"], bridge.BLOCKED_INVALID_VERDICT)
 
-    def test_21_private_key_and_block_scalar_text_are_redacted(self):
-        payload = "api_key: |\nVALUE_SHOULD_NOT_SURVIVE\n-----BEGIN PRIVATE KEY-----\nPRIVATEPAYLOAD\n-----END PRIVATE KEY-----"
-        clean = bridge.sanitize_text(payload)
-        self.assertNotIn("VALUE_SHOULD_NOT_SURVIVE", clean)
-        self.assertNotIn("PRIVATEPAYLOAD", clean)
+    def test_36_object_required_finding_field_blocks(self):
+        finding = deepcopy(self.finding); finding["exact_problem"] = {}
+        self.assertEqual(self.evaluate(self.rejection(finding))["status"], bridge.BLOCKED_INVALID_VERDICT)
 
-    def test_22_idempotency_key_is_stable_and_status_sensitive(self):
-        a = bridge.compute_idempotency_key("TASK-0003", self.sha, "APPROVED", 0)
-        b = bridge.compute_idempotency_key("TASK-0003", self.sha, "APPROVED", 0)
-        c = bridge.compute_idempotency_key("TASK-0003", self.sha, "REJECTED", 0)
-        self.assertEqual(a, b)
-        self.assertNotEqual(a, c)
+    def test_37_numeric_required_finding_field_blocks(self):
+        finding = deepcopy(self.finding); finding["required_correction"] = 123
+        self.assertEqual(self.evaluate(self.rejection(finding))["status"], bridge.BLOCKED_INVALID_VERDICT)
 
-    def test_23_duplicate_delivery_is_noop(self):
-        result = self.evaluate({"status": "APPROVED"})
-        key = result["idempotency_key"]
-        duplicate = bridge.deduplicate_result(result, [key])
-        self.assertEqual(duplicate["action"], "DUPLICATE_NOOP")
-        self.assertNotIn("record", duplicate)
+    def test_38_blank_required_finding_field_blocks(self):
+        finding = deepcopy(self.finding); finding["why_it_matters"] = "   "
+        self.assertEqual(self.evaluate(self.rejection(finding))["status"], bridge.BLOCKED_INVALID_VERDICT)
 
-    def test_24_first_delivery_persists_sanitized_record_once(self):
-        result = self.evaluate({"status": "APPROVED"})
-        decision = bridge.deduplicate_result(result, [])
-        self.assertEqual(decision["action"], "PERSIST_ONCE")
-        self.assertEqual(decision["record"]["reviewed_sha"], self.sha)
+    def test_39_bad_acceptance_criteria_blocks(self):
+        finding = deepcopy(self.finding); finding["acceptance_criteria"] = ["ok", " "]
+        self.assertEqual(self.evaluate(self.rejection(finding))["status"], bridge.BLOCKED_INVALID_VERDICT)
 
-    def test_25_self_check_is_disabled_zero_spend_cloud_only(self):
+    def test_40_blank_optional_guidance_blocks_when_present(self):
+        finding = deepcopy(self.finding); finding["implementation_guidance"] = ""
+        self.assertEqual(self.evaluate(self.rejection(finding))["status"], bridge.BLOCKED_INVALID_VERDICT)
+
+    def test_41_malformed_approval_findings_blocks(self):
+        self.assertEqual(self.evaluate(self.approval(findings=[self.finding]))["status"], bridge.BLOCKED_INVALID_VERDICT)
+
+    def test_42_valid_rejection_builds_bounded_package_and_is_schema_valid(self):
+        result = self.evaluate(self.rejection(), current_attempt=1, max_retries=3)
+        self.assertEqual(result["status"], "REJECTED")
+        self.assertEqual(result["correction_package"]["action"], "QUEUE_CORRECTION")
+        self.assertEqual(result["correction_package"]["next_attempt"], 2)
+        self.assertTrue(bridge.validate_emitted_result(result)[0])
+
+    def test_43_retry_ceiling_blocks_correction_queue(self):
+        result = self.evaluate(self.rejection(), current_attempt=3, max_retries=3)
+        self.assertEqual(result["correction_package"]["action"], bridge.BLOCKED_RETRY_LIMIT)
+
+    def test_44_all_supported_blocked_outputs_are_contract_valid(self):
+        cases = [
+            self.evaluate(auth_profile=None),
+            self.evaluate(model_catalog={"authorized_models": [], "user_authorized": True}),
+            self.evaluate(plan_allowance=dict(self.allowance, remaining_requests=0)),
+            self.evaluate(review_request=dict(self.request, repository="wrong/repo")),
+            self.evaluate(self.approval(reviewed_sha="0" * 40)),
+        ]
+        for result in cases:
+            self.assertTrue(bridge.validate_emitted_result(result)[0], result)
+
+    # Idempotency and conflict policy.
+    def test_45_identical_delivery_is_duplicate_noop(self):
+        result = self.evaluate(self.approval())
+        decision = bridge.deduplicate_result(result, [result])
+        self.assertEqual(decision["action"], "DUPLICATE_NOOP")
+
+    def test_46_distinct_repository_identity_does_not_collide(self):
+        other_snapshot = deepcopy(self.snapshot)
+        other_snapshot["repository"] = "other/project-agent-orchestrator"
+        other_request = deepcopy(other_snapshot)
+        digest = bridge.review_identity_digest(other_snapshot)
+        other_verdict = {
+            "status": "APPROVED",
+            "reviewed_sha": self.sha,
+            "review_snapshot_digest": digest,
+            "findings": [],
+        }
+        first = self.evaluate(self.approval())
+        second = self.evaluate(
+            other_verdict,
+            expected_snapshot=other_snapshot,
+            review_request=other_request,
+        )
+        self.assertNotEqual(first["review_identity_digest"], second["review_identity_digest"])
+        self.assertNotEqual(first["idempotency_key"], second["idempotency_key"])
+        self.assertEqual(bridge.deduplicate_result(second, [first])["action"], "PERSIST_ONCE")
+
+    def test_47_distinct_pr_identity_does_not_collide(self):
+        other_snapshot = deepcopy(self.snapshot); other_snapshot["pr_number"] = 99
+        other_request = deepcopy(other_snapshot)
+        digest = bridge.review_identity_digest(other_snapshot)
+        second = self.evaluate(
+            {"status": "APPROVED", "reviewed_sha": self.sha, "review_snapshot_digest": digest, "findings": []},
+            expected_snapshot=other_snapshot,
+            review_request=other_request,
+        )
+        first = self.evaluate(self.approval())
+        self.assertNotEqual(first["idempotency_key"], second["idempotency_key"])
+
+    def test_48_conflicting_result_same_identity_is_explicitly_blocked(self):
+        approved = self.evaluate(self.approval())
+        rejected = self.evaluate(self.rejection())
+        decision = bridge.deduplicate_result(rejected, [approved])
+        self.assertEqual(decision["action"], "CONFLICT_BLOCKED")
+        self.assertNotEqual(decision["existing_result_digest"], decision["incoming_result_digest"])
+
+    def test_49_different_findings_same_identity_are_conflict_not_duplicate(self):
+        first = self.evaluate(self.rejection())
+        second_finding = deepcopy(self.finding); second_finding["exact_problem"] = "Different valid problem"
+        second = self.evaluate(self.rejection(second_finding))
+        self.assertNotEqual(first["result_digest"], second["result_digest"])
+        self.assertEqual(bridge.deduplicate_result(second, [first])["action"], "CONFLICT_BLOCKED")
+
+    def test_50_schema_declares_status_specific_contract(self):
+        schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
+        self.assertFalse(schema["additionalProperties"])
+        self.assertIn("reason", schema["properties"])
+        self.assertIn("review_identity_digest", schema["properties"])
+        self.assertIn("result_digest", schema["properties"])
+        self.assertIn("idempotency_key", schema["properties"])
+        self.assertGreaterEqual(len(schema["oneOf"]), 3)
+
+    def test_51_self_check_preserves_offline_zero_spend_boundaries(self):
         state = bridge.self_check()
         self.assertEqual(state["mode"], "OFFLINE_SCAFFOLD_DISABLED")
         self.assertFalse(state["live_authorization_enabled"])
         self.assertFalse(state["paid_api_allowed"])
         self.assertFalse(state["local_inference"])
+        self.assertFalse(state["conversation_access"])
+        self.assertFalse(state["merge_allowed"])
         self.assertEqual(state["required_model"], "gpt-6-astra")
 
 
