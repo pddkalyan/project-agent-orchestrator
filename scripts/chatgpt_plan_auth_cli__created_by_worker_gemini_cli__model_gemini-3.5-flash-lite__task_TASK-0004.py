@@ -170,6 +170,9 @@ def cmd_sign_in(args: argparse.Namespace) -> int:
         return 1
 
     if registration:
+        if not existing and registration.get("registration_pending") is not True:
+            _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Saved registration is not a pending retry for this profile."})
+            return 1
         if registration.get("profile_label") != args.profile or registration.get("ext_agent_host_id") != host_id:
             _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Saved registration does not match this profile or host."})
             return 1
