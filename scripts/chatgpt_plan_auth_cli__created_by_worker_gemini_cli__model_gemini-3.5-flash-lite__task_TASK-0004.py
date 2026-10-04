@@ -48,7 +48,7 @@ verify_id_token = adapter.verify_id_token
 
 
 DEFAULT_DIR = Path.home() / ".project-agent-orchestrator" / "chatgpt"
-DEFAULT_STORAGE = DEFAULT_DIR / "profile.json"
+DEFAULT_PROFILES_DIR = DEFAULT_DIR / "profiles"
 DEFAULT_HOST_FILE = DEFAULT_DIR / "host.json"
 
 
@@ -58,6 +58,18 @@ def _json(data: Any) -> None:
 
 def _require_windows_storage(path: Path) -> HostCredentialStorage:
     return HostCredentialStorage(path, WindowsDPAPIProtector())
+
+
+def _safe_profile_label(label: str) -> str:
+    if not isinstance(label, str) or not label or not all(ch.isalnum() or ch in "._-" for ch in label):
+        raise ValueError("profile label must use only letters, numbers, dot, underscore or dash")
+    return label
+
+
+def _storage_path(args: argparse.Namespace) -> Path:
+    if args.storage:
+        return Path(args.storage)
+    return DEFAULT_PROFILES_DIR / (_safe_profile_label(args.profile) + ".json")
 
 
 def _load_or_create_host_id(host_file: Path) -> str:
@@ -116,7 +128,7 @@ def cmd_init_host(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     host_id = _load_or_create_host_id(Path(args.host_file))
     try:
-        storage = _require_windows_storage(Path(args.storage))
+        storage = _require_windows_storage(_storage_path(args))
         status = storage.safe_status()
     except Exception as exc:
         _json({"status": BLOCKED_AUTH_REQUIRED, "host_id": host_id, "message": str(exc)})
@@ -127,7 +139,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_models(args: argparse.Namespace) -> int:
-    storage = _require_windows_storage(Path(args.storage))
+    storage = _require_windows_storage(_storage_path(args))
     transport = HttpTransport()
     profile, status = ensure_fresh_profile(storage, transport)
     if not profile:
@@ -147,7 +159,7 @@ def cmd_sign_in(args: argparse.Namespace) -> int:
         return 1
 
     host_id = _load_or_create_host_id(Path(args.host_file))
-    storage = _require_windows_storage(Path(args.storage))
+    storage = _require_windows_storage(_storage_path(args))
     existing = storage.load_profile()
     issued_client_id = existing.get("client_id") if existing else None
     retained_id_token = existing.get("id_token") if existing else None
@@ -186,6 +198,18 @@ def cmd_sign_in(args: argparse.Namespace) -> int:
         is_new_registration=issued_client_id is None,
     )
     client_id = callback["client_id"]
+
+    # Persist the issued registration before exchanging the short-lived code.
+    # If exchange fails, a later user-initiated retry reuses this issued
+    # client_id instead of incorrectly re-registering with dynamic_agent_client.
+    pending = dict(existing or {})
+    pending.update({
+        "profile_label": args.profile,
+        "client_id": client_id,
+        "ext_agent_host_id": host_id,
+        "registration_pending": True,
+    })
+    storage.save_profile_atomic(pending)
 
     request = build_token_exchange_request(
         client_id=client_id,
@@ -233,6 +257,8 @@ def cmd_sign_in(args: argparse.Namespace) -> int:
         ext_agent_host_id=host_id,
         claims=claims,
     )
+    profile["profile_label"] = args.profile
+    profile["registration_pending"] = False
     storage.save_profile_atomic(profile)
 
     _json({
@@ -243,6 +269,25 @@ def cmd_sign_in(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_profiles(args: argparse.Namespace) -> int:
+    DEFAULT_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+    profiles = []
+    for path in sorted(DEFAULT_PROFILES_DIR.glob("*.json")):
+        try:
+            storage = _require_windows_storage(path)
+            status = storage.safe_status()
+            profiles.append({
+                "profile": path.stem,
+                "connected": status.get("connected", False),
+                "email": status.get("email"),
+                "client_id": status.get("client_id"),
+            })
+        except Exception:
+            profiles.append({"profile": path.stem, "connected": False, "status": BLOCKED_AUTH_REQUIRED})
+    _json({"status": "PROFILES", "profiles": profiles})
+    return 0
+
+
 def cmd_self_check(args: argparse.Namespace) -> int:
     _json(self_check())
     return 0
@@ -250,7 +295,8 @@ def cmd_self_check(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Project Agent ChatGPT-plan authorization CLI")
-    parser.add_argument("--storage", default=str(DEFAULT_STORAGE))
+    parser.add_argument("--storage", default="", help="Optional explicit protected profile path")
+    parser.add_argument("--profile", default="default", help="Saved ChatGPT registration label")
     parser.add_argument("--host-file", default=str(DEFAULT_HOST_FILE))
     parser.add_argument("--ci", action="store_true")
     parser.add_argument("--timeout", type=int, default=300)
@@ -258,6 +304,7 @@ def main() -> int:
     sub.add_parser("init-host")
     sub.add_parser("status")
     sub.add_parser("models")
+    sub.add_parser("profiles")
     sub.add_parser("sign-in")
     sub.add_parser("self-check")
     args = parser.parse_args()
@@ -268,6 +315,8 @@ def main() -> int:
         return cmd_status(args)
     if args.command == "models":
         return cmd_models(args)
+    if args.command == "profiles":
+        return cmd_profiles(args)
     if args.command == "sign-in":
         return cmd_sign_in(args)
     if args.command == "self-check":
