@@ -82,11 +82,20 @@ DIRECT_SECRET_PATTERNS = (
 )
 
 
+def _leading_spaces(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
 def sanitize_text(value: Any, max_chars: int = 4000) -> str:
+    """Conservatively redact credential-bearing lines and their continuations."""
     text = str(value)
     out: list[str] = []
     in_private_key = False
+    block_indent: int | None = None
+    redact_until_blank = False
     for line in text.splitlines():
+        stripped = line.strip()
+        indent = _leading_spaces(line)
         if in_private_key:
             out.append("[REDACTED-POTENTIAL-SECRET]")
             if PRIVATE_KEY_END.search(line):
@@ -95,14 +104,36 @@ def sanitize_text(value: Any, max_chars: int = 4000) -> str:
         if PRIVATE_KEY_BEGIN.search(line):
             out.append("[REDACTED-POTENTIAL-SECRET]")
             in_private_key = not bool(PRIVATE_KEY_END.search(line))
+            block_indent = None
+            redact_until_blank = False
+            continue
+        if block_indent is not None:
+            if not stripped:
+                out.append("")
+                continue
+            if indent > block_indent:
+                out.append("[REDACTED-POTENTIAL-SECRET]")
+                continue
+            block_indent = None
+        if redact_until_blank:
+            if not stripped:
+                out.append("")
+                redact_until_blank = False
+            else:
+                out.append("[REDACTED-POTENTIAL-SECRET]")
             continue
         if SECRET_KEY_RE.search(line) or any(p.search(line) for p in DIRECT_SECRET_PATTERNS):
             out.append("[REDACTED-POTENTIAL-SECRET]")
+            if re.search(r"[:=]\s*[|>]", line):
+                block_indent = indent
+            elif re.search(r"[:=]\s*(?:#.*)?$", line):
+                redact_until_blank = True
         else:
             out.append(line)
     result = "\n".join(out)
+    marker = "\n[TRUNCATED-SANITIZED]"
     if len(result) > max_chars:
-        result = result[: max_chars - 22] + "\n[TRUNCATED-SANITIZED]"
+        result = result[: max(0, max_chars - len(marker))] + marker
     return result
 
 
