@@ -1,1 +1,3 @@
 {"schema_version":1,"event":"BRIDGE_INITIALIZED","task_id":"TASK-0003","timestamp":"2026-10-04T00:00:00Z","status":"SCAFFOLD_READY"}
+{"schema_version":1,"event":"WORKER_CANDIDATE_GENERATED","task_id":"TASK-0003","source_worker_run_id":37201144071,"artifact_id":11303161357,"status":"WORKER_SUCCESS"}
+{"schema_version":1,"event":"PROMOTION_RECOVERY","task_id":"TASK-0003","failed_controller_run_id":37201480700,"reason":"workflow-file push permission unavailable to controller GitHub App","status":"RECOVERED_TO_REVIEW_BRANCH"}
