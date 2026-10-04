@@ -289,10 +289,10 @@ def build_token_refresh_request(*, client_id: str, refresh_token: str) -> dict[s
 
 def verify_granted_scopes(scopes: str | Sequence[str]) -> tuple[bool, str]:
     granted = set(scopes.split() if isinstance(scopes, str) else scopes)
-    required = {"offline_access", "chatgpt.tokens.use.direct"}
+    required = set(REQUIRED_SCOPES)
     missing = sorted(required - granted)
     if missing:
-        return False, "missing required scopes: " + ",".join(missing)
+        return False, "missing required scopes"
     return True, "SCOPES_VALID"
 
 
@@ -426,40 +426,71 @@ class WindowsDPAPIProtector(SecretProtector):
 class FileLock:
     _process_lock = threading.Lock()
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, timeout_seconds: float = 10.0):
         self.path = path
+        self.timeout_seconds = timeout_seconds
         self.handle = None
+        self._process_acquired = False
+        self._os_acquired = False
 
     def __enter__(self):
-        self._process_lock.acquire()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.handle = open(self.path, "a+b")
-        if os.name == "nt":
-            import msvcrt
-            self.handle.seek(0)
-            if self.handle.tell() == 0:
-                self.handle.write(b"0")
-                self.handle.flush()
-            self.handle.seek(0)
-            msvcrt.locking(self.handle.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
-        return self
+        deadline = time.monotonic() + self.timeout_seconds
+        if not self._process_lock.acquire(timeout=self.timeout_seconds):
+            raise TimeoutError("credential lock unavailable")
+        self._process_acquired = True
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.handle = open(self.path, "a+b")
+            if os.name == "nt":
+                import msvcrt
+                self.handle.seek(0, os.SEEK_END)
+                if self.handle.tell() == 0:
+                    self.handle.write(b"0")
+                    self.handle.flush()
+                while True:
+                    try:
+                        self.handle.seek(0)
+                        msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        self._os_acquired = True
+                        break
+                    except OSError:
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("credential lock unavailable")
+                        time.sleep(0.05)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+                self._os_acquired = True
+            return self
+        except Exception:
+            if self.handle is not None:
+                try:
+                    self.handle.close()
+                finally:
+                    self.handle = None
+            if self._process_acquired:
+                self._process_acquired = False
+                self._process_lock.release()
+            raise
 
     def __exit__(self, exc_type, exc, tb):
         try:
             if self.handle is not None:
-                if os.name == "nt":
-                    import msvcrt
-                    self.handle.seek(0)
-                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+                if self._os_acquired:
+                    if os.name == "nt":
+                        import msvcrt
+                        self.handle.seek(0)
+                        msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
                 self.handle.close()
+                self.handle = None
         finally:
-            self._process_lock.release()
+            self._os_acquired = False
+            if self._process_acquired:
+                self._process_acquired = False
+                self._process_lock.release()
 
 
 class HostCredentialStorage:
@@ -470,6 +501,7 @@ class HostCredentialStorage:
     def __init__(self, storage_path: Path, protector: SecretProtector):
         self.storage_path = storage_path
         self.lock_path = storage_path.with_suffix(storage_path.suffix + ".lock")
+        self.registration_path = storage_path.with_suffix(storage_path.suffix + ".registration.json")
         self.protector = protector
 
     @contextmanager
@@ -521,6 +553,54 @@ class HostCredentialStorage:
             if os.path.exists(temp_name):
                 os.unlink(temp_name)
 
+    def save_registration_atomic(self, registration: Mapping[str, Any]) -> None:
+        allowed = {"profile_label", "client_id", "ext_agent_host_id", "registration_pending", "subject"}
+        public = {k: registration.get(k) for k in allowed if k in registration}
+        self.registration_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temp_name = tempfile.mkstemp(prefix=self.registration_path.name + ".", suffix=".tmp", dir=str(self.registration_path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+                json.dump(public, tmp, sort_keys=True, indent=2)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(temp_name, self.registration_path)
+        finally:
+            if os.path.exists(temp_name):
+                os.unlink(temp_name)
+
+    def load_registration(self) -> dict[str, Any] | None:
+        if not self.registration_path.exists():
+            return None
+        value = json.loads(self.registration_path.read_text(encoding="utf-8"))
+        if not isinstance(value, Mapping):
+            raise ValueError("invalid registration metadata")
+        return dict(value)
+
+    def profile_version(self, profile: Mapping[str, Any] | None) -> int:
+        value = (profile or {}).get("profile_version", 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+    def replace_profile_if_version(
+        self,
+        *,
+        expected_version: int,
+        profile: Mapping[str, Any],
+        expected_subject: str | None = None,
+        expected_client_id: str | None = None,
+    ) -> bool:
+        with self.locked():
+            current = self.load_profile()
+            if self.profile_version(current) != expected_version:
+                return False
+            if current and expected_subject and current.get("subject") not in (None, expected_subject):
+                return False
+            if current and expected_client_id and current.get("client_id") not in (None, expected_client_id):
+                return False
+            updated = dict(profile)
+            updated["profile_version"] = expected_version + 1
+            self.save_profile_atomic(updated)
+            return True
+
     def safe_status(self) -> dict[str, Any]:
         profile = self.load_profile()
         if not profile:
@@ -535,6 +615,31 @@ class HostCredentialStorage:
             "scopes": profile.get("scopes", []),
             "expires_at": profile.get("expires_at"),
         }
+
+
+class SafeTransportError(RuntimeError):
+    """Public-safe transport failure carrying only allowlisted metadata."""
+
+    def __init__(self, *, http_status: int | None = None, code: str | None = None, category: str = "transport"):
+        super().__init__(category)
+        self.http_status = http_status
+        self.code = code
+        self.category = category
+
+
+def _safe_error_code_from_body(body: str) -> str | None:
+    try:
+        parsed = json.loads(body)
+    except Exception:
+        return None
+    if not isinstance(parsed, Mapping):
+        return None
+    error = parsed.get("error")
+    if isinstance(error, Mapping) and isinstance(error.get("code"), str):
+        return error["code"][:120]
+    if isinstance(error, str):
+        return error[:120]
+    return None
 
 
 class HttpTransport:
@@ -572,7 +677,9 @@ class HttpTransport:
                     yield json.loads(data)
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", "replace")
-            raise RuntimeError(json.dumps({"http_status": exc.code, "body": sanitize_text(body)})) from None
+            raise SafeTransportError(http_status=exc.code, code=_safe_error_code_from_body(body), category="http") from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            raise SafeTransportError(category="network") from None
 
     @staticmethod
     def _json(request: urllib.request.Request) -> dict[str, Any]:
@@ -581,22 +688,43 @@ class HttpTransport:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", "replace")
-            raise RuntimeError(json.dumps({"http_status": exc.code, "body": sanitize_text(body)})) from None
+            raise SafeTransportError(http_status=exc.code, code=_safe_error_code_from_body(body), category="http") from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            raise SafeTransportError(category="network") from None
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise SafeTransportError(category="invalid_response") from None
         if not isinstance(payload, dict):
-            raise RuntimeError("OpenAI endpoint returned non-object JSON")
+            raise SafeTransportError(category="invalid_response")
         return payload
+
+
+def _positive_lifetime(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("invalid token lifetime")
+    if isinstance(value, int):
+        result = value
+    elif isinstance(value, str) and value.isdigit():
+        result = int(value)
+    else:
+        raise ValueError("invalid token lifetime")
+    if result <= 0 or result > 86400 * 30:
+        raise ValueError("invalid token lifetime")
+    return result
 
 
 def normalize_token_response(payload: Mapping[str, Any], *, client_id: str, ext_agent_host_id: str, claims: Mapping[str, Any]) -> dict[str, Any]:
     required = ("access_token", "refresh_token", "id_token", "token_type", "expires_in", "scope")
-    if any(not payload.get(k) for k in required):
+    if any(k not in payload for k in required):
         raise ValueError("token response missing required fields")
-    if str(payload["token_type"]).lower() != "bearer":
+    for key in ("access_token", "refresh_token", "id_token", "token_type", "scope"):
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            raise ValueError("token response contains invalid fields")
+    if payload["token_type"].lower() != "bearer":
         raise ValueError("token_type must be Bearer")
-    ok, reason = verify_granted_scopes(str(payload["scope"]))
+    ok, reason = verify_granted_scopes(payload["scope"])
     if not ok:
         raise ValueError(reason)
-    expires_in = int(payload["expires_in"])
+    expires_in = _positive_lifetime(payload["expires_in"])
     return {
         "profile_label": client_id,
         "email": claims.get("email"),
@@ -616,46 +744,92 @@ def normalize_token_response(payload: Mapping[str, Any], *, client_id: str, ext_
     }
 
 
-def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str, Any]:
-    """Serialize refreshes and atomically replace the complete rotating token set."""
-    with storage.locked():
-        current = storage.load_profile()
-        if not current:
-            return {"status": BLOCKED_AUTH_REQUIRED}
-        req = build_token_refresh_request(
-            client_id=str(current.get("client_id", "")),
-            refresh_token=str(current.get("refresh_token", "")),
-        )
-        try:
-            payload = transport.post_form(req["url"], req["data"])
-        except Exception as exc:
-            text = sanitize_text(exc)
-            return {"status": map_transport_error(text), "message": text}
-        for key in ("access_token", "refresh_token", "expires_in"):
-            if key not in payload:
-                return {"status": BLOCKED_AUTH_REQUIRED, "message": "refresh response incomplete"}
-        updated = dict(current)
-        refreshed_scopes = payload.get("scope")
-        updated.update(
-            {
-                "access_token": payload["access_token"],
-                "refresh_token": payload["refresh_token"],
-                # Retain the previously verified ID token as a returning-account
-                # hint. A refresh response is not used to replace verified identity.
-                "id_token": current.get("id_token"),
-                "expires_in": int(payload["expires_in"]),
-                "expires_at": int(time.time()) + int(payload["expires_in"]),
-                "earliest_refresh_at": payload.get("earliest_refresh_at"),
-                "scopes": sorted(set(str(refreshed_scopes).split())) if refreshed_scopes else list(current.get("scopes", [])),
-                "saved_at": int(time.time()),
-            }
-        )
-        ok, _ = verify_granted_scopes(updated["scopes"])
-        if not ok:
-            return {"status": BLOCKED_AUTH_REQUIRED, "message": "required plan scopes missing after refresh"}
-        storage.save_profile_atomic(updated)
-        return {"status": "REFRESHED", "profile": storage.safe_status()}
+def _public_transport_status(exc: Exception) -> str:
+    if isinstance(exc, SafeTransportError):
+        if exc.code:
+            return map_transport_error(exc.code)
+        if exc.http_status is not None:
+            return map_http_status(exc.http_status)
+        if exc.category == "network":
+            return BLOCKED_NETWORK_ERROR
+        if exc.category == "invalid_response":
+            return BLOCKED_INVALID_RESPONSE
+    return BLOCKED_INFRASTRUCTURE_ERROR
 
+
+def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str, Any]:
+    """Serialize refreshes; never reuse a consumed rotating token after a response."""
+    try:
+        with storage.locked():
+            current = storage.load_profile()
+            if not current:
+                return {"status": BLOCKED_AUTH_REQUIRED}
+            if current.get("session_state") not in (None, "ACTIVE"):
+                return {"status": BLOCKED_AUTH_REQUIRED}
+            try:
+                req = build_token_refresh_request(
+                    client_id=current.get("client_id") if isinstance(current.get("client_id"), str) else "",
+                    refresh_token=current.get("refresh_token") if isinstance(current.get("refresh_token"), str) else "",
+                )
+            except Exception:
+                return {"status": BLOCKED_AUTH_REQUIRED}
+            try:
+                payload = transport.post_form(req["url"], req["data"])
+            except Exception as exc:
+                return {"status": _public_transport_status(exc)}
+
+            replacement = dict(current)
+            replacement["profile_version"] = storage.profile_version(current) + 1
+            replacement["saved_at"] = int(time.time())
+            # A refresh response means the old rotating token may already be consumed.
+            # Default to blocked and remove old active credentials before validating.
+            replacement.pop("access_token", None)
+            replacement.pop("refresh_token", None)
+            replacement["session_state"] = "BLOCKED_REFRESH_INVALID"
+
+            new_refresh = payload.get("refresh_token")
+            if isinstance(new_refresh, str) and new_refresh:
+                replacement["refresh_token"] = new_refresh
+
+            try:
+                access = payload.get("access_token")
+                token_type = payload.get("token_type", current.get("token_type", "Bearer"))
+                if not isinstance(access, str) or not access:
+                    raise ValueError("invalid access token")
+                if not isinstance(new_refresh, str) or not new_refresh:
+                    raise ValueError("invalid refresh token")
+                if not isinstance(token_type, str) or token_type.lower() != "bearer":
+                    raise ValueError("invalid token type")
+                expires_in = _positive_lifetime(payload.get("expires_in"))
+                refreshed_scopes = payload.get("scope")
+                scopes = sorted(set(refreshed_scopes.split())) if isinstance(refreshed_scopes, str) and refreshed_scopes else list(current.get("scopes", []))
+                ok, _ = verify_granted_scopes(scopes)
+                if not ok:
+                    raise ValueError("required scopes missing")
+                replacement.update({
+                    "access_token": access,
+                    "refresh_token": new_refresh,
+                    "id_token": current.get("id_token"),
+                    "token_type": "Bearer",
+                    "expires_in": expires_in,
+                    "expires_at": int(time.time()) + expires_in,
+                    "earliest_refresh_at": payload.get("earliest_refresh_at"),
+                    "scopes": scopes,
+                    "session_state": "ACTIVE",
+                })
+                storage.save_profile_atomic(replacement)
+                return {"status": "REFRESHED", "profile": storage.safe_status()}
+            except Exception:
+                # Persist the replacement refresh token when present, but keep the
+                # session blocked so neither the old nor the new token is retried
+                # automatically without explicit reauthorization.
+                try:
+                    storage.save_profile_atomic(replacement)
+                except Exception:
+                    return {"status": BLOCKED_INFRASTRUCTURE_ERROR}
+                return {"status": BLOCKED_AUTH_REQUIRED}
+    except Exception:
+        return {"status": BLOCKED_INFRASTRUCTURE_ERROR}
 
 
 def needs_refresh(profile: Mapping[str, Any], *, now: float | None = None, skew_seconds: int = 120) -> bool:
@@ -672,14 +846,36 @@ def needs_refresh(profile: Mapping[str, Any], *, now: float | None = None, skew_
 
 
 def ensure_fresh_profile(storage: HostCredentialStorage, transport: Any) -> tuple[dict[str, Any] | None, str]:
-    profile = storage.load_profile()
-    if not profile:
+    try:
+        profile = storage.load_profile()
+    except Exception:
+        return None, BLOCKED_INFRASTRUCTURE_ERROR
+    if not profile or profile.get("session_state") not in (None, "ACTIVE"):
         return None, BLOCKED_AUTH_REQUIRED
     if needs_refresh(profile):
         refreshed = refresh_profile(storage, transport)
         if refreshed.get("status") != "REFRESHED":
             return None, str(refreshed.get("status", BLOCKED_AUTH_REQUIRED))
-        profile = storage.load_profile()
+        try:
+            profile = storage.load_profile()
+        except Exception:
+            return None, BLOCKED_INFRASTRUCTURE_ERROR
+    if not profile:
+        return None, BLOCKED_AUTH_REQUIRED
+    access = profile.get("access_token")
+    refresh = profile.get("refresh_token")
+    token_type = profile.get("token_type", "Bearer")
+    expires_at = profile.get("expires_at")
+    scopes = profile.get("scopes")
+    if not isinstance(access, str) or not access or not isinstance(refresh, str) or not refresh:
+        return None, BLOCKED_AUTH_REQUIRED
+    if not isinstance(token_type, str) or token_type.lower() != "bearer":
+        return None, BLOCKED_AUTH_REQUIRED
+    if not isinstance(expires_at, (int, float)) or time.time() >= expires_at:
+        return None, BLOCKED_AUTH_REQUIRED
+    ok, _ = verify_granted_scopes(scopes if isinstance(scopes, list) else [])
+    if not ok:
+        return None, BLOCKED_AUTH_REQUIRED
     return profile, "PROFILE_READY"
 
 
@@ -713,7 +909,7 @@ def list_models(profile: Mapping[str, Any], transport: Any) -> dict[str, Any]:
         payload = transport.get_json(MODELS_URL, {"Authorization": f"Bearer {access_token}"})
         catalog = parse_model_catalog(payload)
     except Exception as exc:
-        return {"status": map_transport_error(sanitize_text(exc))}
+        return {"status": _public_transport_status(exc)}
     ok, status = validate_model_catalog(catalog)
     return {"status": status, "catalog": catalog, "astra_available": ok}
 
@@ -778,49 +974,164 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 
+def _validate_allowance_evidence(evidence: Mapping[str, Any] | None, profile: Mapping[str, Any], *, now: float | None = None) -> tuple[bool, str, dict[str, Any] | None]:
+    if not isinstance(evidence, Mapping):
+        return False, BLOCKED_PLAN_ALLOWANCE, None
+    required = {
+        "billing_mode", "separately_billed", "credits_enabled", "remaining_requests",
+        "profile_id", "subject", "client_id", "observed_at", "expires_at",
+    }
+    if set(evidence.keys()) != required:
+        return False, BLOCKED_PLAN_ALLOWANCE, None
+    current = time.time() if now is None else now
+    if evidence.get("profile_id") != profile.get("profile_label"):
+        return False, BLOCKED_PLAN_ALLOWANCE, None
+    if evidence.get("subject") != profile.get("subject"):
+        return False, BLOCKED_PLAN_ALLOWANCE, None
+    if evidence.get("client_id") != profile.get("client_id"):
+        return False, BLOCKED_PLAN_ALLOWANCE, None
+    observed = evidence.get("observed_at")
+    expires = evidence.get("expires_at")
+    if not isinstance(observed, (int, float)) or not isinstance(expires, (int, float)) or observed > current or current >= expires:
+        return False, BLOCKED_PLAN_ALLOWANCE, None
+    plan = {
+        "billing_mode": evidence.get("billing_mode"),
+        "separately_billed": evidence.get("separately_billed"),
+        "credits_enabled": evidence.get("credits_enabled"),
+        "remaining_requests": evidence.get("remaining_requests"),
+    }
+    if bridge is None:
+        return False, BLOCKED_INFRASTRUCTURE_ERROR, None
+    ok, status = bridge.validate_plan_allowance(plan)
+    return ok, status, plan if ok else None
+
+
+def _transport_review(*, profile: Mapping[str, Any], transport: Any, review_prompt: str, review_context: Mapping[str, Any]) -> dict[str, Any]:
+    request = build_responses_plan_request(review_prompt=review_prompt, review_context=review_context)
+    try:
+        events = list(transport.stream_sse(
+            RESPONSES_URL,
+            request,
+            {"Authorization": f"Bearer {profile['access_token']}"},
+        ))
+    except Exception as exc:
+        return {"status": _public_transport_status(exc), "completed": False}
+    return assemble_stream(events)
+
+
 def run_streamed_review(
     *,
-    profile: Mapping[str, Any],
-    model_catalog: Mapping[str, Any],
+    storage: HostCredentialStorage | None = None,
+    plan_allowance_evidence: Mapping[str, Any] | None = None,
     activation_policy: Mapping[str, Any],
     transport: Any,
     review_prompt: str,
-    review_context: Mapping[str, Any],
+    expected_snapshot: Mapping[str, Any] | None = None,
+    review_request: Mapping[str, Any] | None = None,
+    existing_records: Sequence[Mapping[str, Any]] = (),
+    current_attempt: int = 0,
+    max_retries: int = 3,
+    # Legacy arguments are accepted only to fail closed; they may not authorize transport.
+    profile: Mapping[str, Any] | None = None,
+    model_catalog: Mapping[str, Any] | None = None,
+    review_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Execute only after the separate activation gate explicitly enables it."""
+    """Single production live-review path; every trust boundary is enforced here."""
     if activation_policy.get("reviewer_enabled") is not True:
-        return {"status": BLOCKED_PLAN_ALLOWANCE, "completed": False, "reason": "reviewer activation gate is disabled"}
+        return {"status": BLOCKED_PLAN_ALLOWANCE, "completed": False}
     if activation_policy.get("zero_extra_spend_confirmed") is not True:
-        return {"status": BLOCKED_PLAN_ALLOWANCE, "completed": False, "reason": "zero-extra-spend controls are not confirmed"}
+        return {"status": BLOCKED_PLAN_ALLOWANCE, "completed": False}
+    if storage is None or expected_snapshot is None or review_request is None:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+    if profile is not None or model_catalog is not None or review_context is not None:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+    if bridge is None:
+        return {"status": BLOCKED_INFRASTRUCTURE_ERROR, "completed": False}
 
-    model_ok, model_status = validate_model_catalog(model_catalog)
-    if not model_ok:
-        return {"status": model_status, "completed": False}
-
-    scopes = profile.get("scopes")
-    scopes_ok, _ = verify_granted_scopes(scopes if isinstance(scopes, list) else [])
-    if not scopes_ok:
-        return {"status": BLOCKED_AUTH_REQUIRED, "completed": False}
-
-    access_token = profile.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        return {"status": BLOCKED_AUTH_REQUIRED, "completed": False}
-
-    request = build_responses_plan_request(
-        review_prompt=review_prompt,
-        review_context=review_context,
-    )
     try:
-        events = list(
-            transport.stream_sse(
-                RESPONSES_URL,
-                request,
-                {"Authorization": f"Bearer {access_token}"},
-            )
-        )
-    except Exception as exc:
-        return {"status": map_transport_error(sanitize_text(exc)), "completed": False}
-    return assemble_stream(events)
+        expected = bridge.normalize_review_snapshot(expected_snapshot)
+        request_ok, _ = bridge.validate_review_request(expected, review_request)
+    except Exception:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+    if not request_ok:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+
+    fresh_profile, fresh_status = ensure_fresh_profile(storage, transport)
+    if fresh_profile is None:
+        return {"status": fresh_status, "completed": False}
+
+    models = list_models(fresh_profile, transport)
+    if models.get("status") != "MODEL_ALLOWED":
+        return {"status": models.get("status", BLOCKED_NO_ASTRA), "completed": False}
+    catalog = models.get("catalog")
+    if not isinstance(catalog, Mapping):
+        return {"status": BLOCKED_NO_ASTRA, "completed": False}
+
+    allowance_ok, allowance_status, plan_allowance = _validate_allowance_evidence(plan_allowance_evidence, fresh_profile)
+    if not allowance_ok or plan_allowance is None:
+        return {"status": allowance_status, "completed": False}
+
+    safe_auth = {
+        "active": True,
+        "expired": False,
+        "profile_id": fresh_profile.get("profile_label"),
+    }
+    preflight = evaluate_live_handoff(
+        expected_snapshot=expected,
+        review_request=review_request,
+        model_catalog=catalog,
+        auth_profile=safe_auth,
+        plan_allowance=plan_allowance,
+        verdict_payload=None,
+        current_attempt=current_attempt,
+        max_retries=max_retries,
+    )
+    # A missing verdict must be the only pre-transport failure now; any earlier
+    # evidence/auth/model/allowance mismatch must prevent inference.
+    if preflight.get("status") not in (bridge.BLOCKED_INVALID_VERDICT,):
+        return {"status": preflight.get("status", BLOCKED_INVALID_RESPONSE), "completed": False}
+
+    streamed = _transport_review(
+        profile=fresh_profile,
+        transport=transport,
+        review_prompt=review_prompt,
+        review_context=expected,
+    )
+    if streamed.get("status") != "COMPLETED":
+        return streamed
+
+    try:
+        verdict = json.loads(streamed.get("text", ""))
+    except Exception:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+    if not isinstance(verdict, Mapping):
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+
+    result = evaluate_live_handoff(
+        expected_snapshot=expected,
+        review_request=review_request,
+        model_catalog=catalog,
+        auth_profile=safe_auth,
+        plan_allowance=plan_allowance,
+        verdict_payload=verdict,
+        current_attempt=current_attempt,
+        max_retries=max_retries,
+    )
+    valid, _ = bridge.validate_emitted_result(result)
+    if not valid:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+    try:
+        persistence = bridge.deduplicate_result(result, existing_records)
+    except Exception:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+    if persistence.get("action") == "CONFLICT_BLOCKED":
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False, "persistence": persistence}
+    return {
+        "status": result.get("status"),
+        "completed": True,
+        "result": result,
+        "persistence": persistence,
+    }
 
 
 def map_response_error_code(code: str) -> str:
