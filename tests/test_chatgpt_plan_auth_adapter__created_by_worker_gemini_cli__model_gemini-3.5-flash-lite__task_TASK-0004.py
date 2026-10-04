@@ -823,5 +823,132 @@ class TestTask0004(unittest.TestCase):
         self.assertEqual(result["status"], adapter.BLOCKED_INVALID_RESPONSE)
 
 
+    def test_69_refresh_timeout_persists_in_progress_and_never_resubmits_old_value(self):
+        class T:
+            def __init__(self): self.calls=[]
+            def post_form(self, url, data, headers=None):
+                self.calls.append(data["refresh_token"])
+                raise adapter.SafeTransportError(category="network")
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"profile.json"
+            storage=adapter.HostCredentialStorage(path, FakeProtector())
+            storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+            t=T()
+            first=adapter.ensure_fresh_profile(storage,t)
+            self.assertEqual(first[1], adapter.BLOCKED_NETWORK_ERROR)
+            self.assertEqual(storage.load_profile()["session_state"], "REFRESH_IN_PROGRESS")
+            restarted=adapter.HostCredentialStorage(path, FakeProtector())
+            second=adapter.ensure_fresh_profile(restarted,t)
+            self.assertEqual(second[1], adapter.BLOCKED_AUTH_REQUIRED)
+            self.assertEqual(t.calls, ["r0"])
+
+    def test_70_malformed_refresh_response_stays_durably_blocked(self):
+        class T:
+            def __init__(self): self.calls=0
+            def post_form(self,*args,**kwargs):
+                self.calls+=1
+                return None
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"profile.json"
+            storage=adapter.HostCredentialStorage(path, FakeProtector())
+            storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+            t=T()
+            result=adapter.refresh_profile(storage,t)
+            self.assertEqual(result["status"], adapter.BLOCKED_INVALID_RESPONSE)
+            self.assertEqual(storage.load_profile()["session_state"], "REFRESH_IN_PROGRESS")
+            self.assertEqual(adapter.ensure_fresh_profile(storage,t)[1], adapter.BLOCKED_AUTH_REQUIRED)
+            self.assertEqual(t.calls,1)
+
+    def test_71_failed_replacement_write_leaves_pre_dispatch_block_on_disk(self):
+        class FailSecond(adapter.HostCredentialStorage):
+            def __init__(self,*args,**kwargs):
+                super().__init__(*args,**kwargs); self.writes=0
+            def save_profile_atomic(self,profile):
+                self.writes+=1
+                if self.writes==2:
+                    raise OSError("synthetic")
+                return super().save_profile_atomic(profile)
+        class T:
+            def post_form(self,*args,**kwargs):
+                return {"access_token":"a2","refresh_token":"r2","expires_in":3600,"scope":" ".join(adapter.REQUIRED_SCOPES)}
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"profile.json"
+            base=adapter.HostCredentialStorage(path,FakeProtector())
+            base.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+            storage=FailSecond(path,FakeProtector())
+            result=adapter.refresh_profile(storage,T())
+            self.assertEqual(result["status"],adapter.BLOCKED_INFRASTRUCTURE_ERROR)
+            self.assertEqual(base.load_profile()["session_state"],"REFRESH_IN_PROGRESS")
+
+    def test_72_explicit_invalid_refresh_scopes_never_inherit_old_grant(self):
+        values=["","   ",None,[],{}, "offline_access chatgpt.tokens.use.direct"]
+        class T:
+            def __init__(self,scope): self.scope=scope
+            def post_form(self,*args,**kwargs):
+                return {"access_token":"a2","refresh_token":"r2","expires_in":3600,"scope":self.scope}
+        for value in values:
+            with self.subTest(scope=value), tempfile.TemporaryDirectory() as tmp:
+                storage=adapter.HostCredentialStorage(Path(tmp)/"profile.json",FakeProtector())
+                storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+                result=adapter.refresh_profile(storage,T(value))
+                self.assertEqual(result["status"],adapter.BLOCKED_AUTH_REQUIRED)
+                self.assertNotEqual(storage.load_profile().get("session_state"),"ACTIVE")
+
+    def test_73_absent_refresh_scope_legitimately_preserves_previous_full_grant(self):
+        class T:
+            def post_form(self,*args,**kwargs):
+                return {"access_token":"a2","refresh_token":"r2","expires_in":3600}
+        with tempfile.TemporaryDirectory() as tmp:
+            storage=adapter.HostCredentialStorage(Path(tmp)/"profile.json",FakeProtector())
+            storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+            result=adapter.refresh_profile(storage,T())
+            self.assertEqual(result["status"],"REFRESHED")
+            self.assertEqual(set(storage.load_profile()["scopes"]),set(adapter.REQUIRED_SCOPES))
+
+    def test_74_nonfinite_allowance_timestamps_block(self):
+        profile={"profile_label":"default","subject":"s","client_id":"c"}
+        now=time.time()
+        base={"billing_mode":"ZERO_SPEND_PLAN","separately_billed":False,"credits_enabled":False,"remaining_requests":1,"profile_id":"default","subject":"s","client_id":"c","observed_at":now-1,"expires_at":now+30}
+        invalid=[float("nan"),float("inf"),float("-inf"),True]
+        for value in invalid:
+            for field in ("observed_at","expires_at"):
+                bad=dict(base); bad[field]=value
+                self.assertFalse(adapter._validate_allowance_evidence(bad,profile,now=now)[0])
+        reversed_order=dict(base); reversed_order["expires_at"]=reversed_order["observed_at"]
+        self.assertFalse(adapter._validate_allowance_evidence(reversed_order,profile,now=now)[0])
+
+    def test_75_nonfinite_session_expiry_blocks_without_refresh(self):
+        class Never:
+            def post_form(self,*args,**kwargs): raise AssertionError("refresh must not run")
+        for value in (float("nan"),float("inf"),float("-inf"),True):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                storage=adapter.HostCredentialStorage(Path(tmp)/"profile.json",FakeProtector())
+                storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":value,"session_state":"ACTIVE"})
+                profile,status=adapter.ensure_fresh_profile(storage,Never())
+                self.assertIsNone(profile)
+                self.assertEqual(status,adapter.BLOCKED_AUTH_REQUIRED)
+
+    def test_76_cli_loads_pending_registration_for_retry(self):
+        cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
+        self.assertIn("registration = storage.load_registration()",cli)
+        self.assertIn('registration.get("client_id") if registration else None',cli)
+        self.assertIn("Saved registration does not match this profile or host.",cli)
+
+    def test_77_malformed_stream_events_return_blocked_not_exception(self):
+        bad_events=[None,1,"x",[],{"foo":"bar"},{"type":"response.output_text.delta","delta":None}]
+        for event in bad_events:
+            with self.subTest(event=event):
+                result=adapter.assemble_stream([event])
+                self.assertEqual(result["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_78_transport_review_contains_malformed_stream_failures(self):
+        class T:
+            def stream_sse(self,*args,**kwargs):
+                yield None
+        result=adapter._transport_review(profile={"access_token":"x"},transport=T(),review_prompt="Review.",review_context={"task_id":"TASK-0004"})
+        self.assertEqual(result["status"],adapter.BLOCKED_INVALID_RESPONSE)
+        self.assertFalse(result["completed"])
+
+
 if __name__ == "__main__":
     unittest.main()
