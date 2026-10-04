@@ -130,8 +130,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     try:
         storage = _require_windows_storage(_storage_path(args))
         status = storage.safe_status()
-    except Exception as exc:
-        _json({"status": BLOCKED_AUTH_REQUIRED, "host_id": host_id, "message": str(exc)})
+    except Exception:
+        _json({"status": BLOCKED_AUTH_REQUIRED, "host_id": host_id, "message": "Protected profile is unavailable or invalid."})
         return 1
     status["ext_agent_host_id"] = host_id
     _json(status)
@@ -160,7 +160,13 @@ def cmd_sign_in(args: argparse.Namespace) -> int:
 
     host_id = _load_or_create_host_id(Path(args.host_file))
     storage = _require_windows_storage(_storage_path(args))
-    existing = storage.load_profile()
+    try:
+        with storage.locked():
+            existing = storage.load_profile()
+            existing_version = storage.profile_version(existing)
+    except Exception:
+        _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Protected profile is unavailable or locked."})
+        return 1
     issued_client_id = existing.get("client_id") if existing else None
     retained_id_token = existing.get("id_token") if existing else None
     login_hint = existing.get("email") if existing else None
@@ -199,17 +205,22 @@ def cmd_sign_in(args: argparse.Namespace) -> int:
     )
     client_id = callback["client_id"]
 
-    # Persist the issued registration before exchanging the short-lived code.
-    # If exchange fails, a later user-initiated retry reuses this issued
-    # client_id instead of incorrectly re-registering with dynamic_agent_client.
-    pending = dict(existing or {})
-    pending.update({
+    # Persist registration metadata separately from the active rotating-token
+    # session. A failed authorization must never overwrite a newer active session.
+    registration = {
         "profile_label": args.profile,
         "client_id": client_id,
         "ext_agent_host_id": host_id,
         "registration_pending": True,
-    })
-    storage.save_profile_atomic(pending)
+    }
+    if existing and isinstance(existing.get("subject"), str):
+        registration["subject"] = existing["subject"]
+    try:
+        with storage.locked():
+            storage.save_registration_atomic(registration)
+    except Exception:
+        _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Could not persist registration metadata safely."})
+        return 1
 
     request = build_token_exchange_request(
         client_id=client_id,
@@ -259,7 +270,24 @@ def cmd_sign_in(args: argparse.Namespace) -> int:
     )
     profile["profile_label"] = args.profile
     profile["registration_pending"] = False
-    storage.save_profile_atomic(profile)
+    profile["session_state"] = "ACTIVE"
+    committed = storage.replace_profile_if_version(
+        expected_version=existing_version,
+        profile=profile,
+        expected_subject=existing.get("subject") if existing else None,
+        expected_client_id=issued_client_id,
+    )
+    if not committed:
+        _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Profile changed during sign-in; the newer session was preserved. Start sign-in again."})
+        return 1
+    try:
+        with storage.locked():
+            registration["registration_pending"] = False
+            registration["subject"] = claims.get("sub")
+            storage.save_registration_atomic(registration)
+    except Exception:
+        _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Sign-in completed but registration metadata could not be finalized safely."})
+        return 1
 
     _json({
         "status": "SIGNED_IN",
@@ -324,5 +352,16 @@ def main() -> int:
     return 2
 
 
+def _safe_main() -> int:
+    try:
+        return main()
+    except KeyboardInterrupt:
+        _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Operation cancelled."})
+        return 130
+    except Exception:
+        _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Operation failed safely. No credential details were emitted."})
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_safe_main())
