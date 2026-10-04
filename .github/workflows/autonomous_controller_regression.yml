@@ -138,8 +138,8 @@ jobs:
           grep -q 'worker-context' "$WORKFLOW"
           grep -q 'task_sha' "$WORKFLOW"
           grep -q 'dispatch_key' "$WORKFLOW"
-          grep -q 'controller-dispatch-receipts/' "$WORKFLOW"
-          grep -q 'validate-retry-record' "$WORKFLOW"
+          grep -q 'controller-dispatch-receipts/' "$FAILURE_FLOW"
+          grep -q 'validate-retry-record' "$FAILURE_FLOW"
           grep -q 'concurrency:' "$WORKFLOW"
           grep -q 'worker-context' "$WORKER"
           grep -q 'worker-execution-receipts/' "$WORKER"
@@ -215,7 +215,7 @@ jobs:
 
           echo "TASK-0002 autonomous controller regression passed."
 
-      - name: Run Astra Review #3 production-path fixtures
+      - name: "Run Astra Review #3 production-path fixtures"
         shell: bash
         run: |
           set -euo pipefail
