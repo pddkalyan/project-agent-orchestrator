@@ -33,8 +33,8 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "verification_results": {
-    "status": "PENDING_EXACT_HEAD_CI_AFTER_ASTRA_R1_CORRECTIONS",
-    "deterministic_tests_expected": 51,
+    "status": "PENDING_EXACT_HEAD_CI_AFTER_ASTRA_R2_CORRECTIONS",
+    "deterministic_tests_expected": 68,
     "live_authorization_enabled": false,
     "live_openai_calls_performed": false,
     "zero_extra_spend_boundary": true,
@@ -42,18 +42,17 @@
     "no_local_inference": true,
     "no_conversation_access": true,
     "no_merge_or_auto_merge": true,
-    "note": "Astra Review #1 rejected exact head 5e8c0e62 for four adversarial gaps. All four corrections are implemented; exact-head CI must pass before re-review."
+    "note": "Astra Review #2 rejected exact head eed83559 on three remaining adversarial gaps. All three corrections are implemented; exact-head CI must pass before re-review."
   },
   "review_focus": [
-    "complete immutable expected snapshot binding for task/repository/PR/base/candidate/context/changed-files/complete CI set",
-    "verdict reviewed_sha and review_snapshot_digest binding",
-    "complete credential block/key redaction and exact auth metadata allowlist",
-    "strict nonblank finding validation before sanitization",
-    "status-specific schema/runtime alignment including BLOCKED reason",
-    "idempotency scoped to canonical review identity plus result content with explicit conflict handling",
-    "bounded rejection-to-correction package",
-    "self-hosted Windows reviewer workflow disabled by default",
-    "zero-extra-spend, no paid fallback, no live authorization, no local inference, no conversation access, no merge/auto-merge"
+    "credential block scalar variants including |2, |2-, |-2, >2, >+2 and comments leave no secret sentinel in results/corrections",
+    "explicitly supplied implementation_guidance null/number/object/blank/whitespace fails BLOCKED_INVALID_VERDICT while absence/nonblank string remains valid",
+    "persistence gate directly validates against the published REVIEW_CONTRACT schema",
+    "valid approval, rejection, retry-limit and blocked outputs pass both schema and runtime semantic validation",
+    "malformed findings, correction packages, prohibited properties, invalid types and status payloads fail and cannot reach PERSIST_ONCE",
+    "result_digest/idempotency integrity is recomputed before persistence and malformed existing records are rejected",
+    "complete immutable snapshot/verdict binding and full-identity idempotency from Review #1 remain intact",
+    "self-hosted Windows reviewer disabled by default; zero spend; no live authorization; no local inference; no conversation access; no merge/auto-merge"
   ],
   "known_limitations": [
     "TASK-0003 does not implement or enable live Sign in with ChatGPT authorization or live reviewer inference. That activation remains a separate post-approval task requiring one-time user interaction.",
@@ -87,6 +86,35 @@
         "severity": "P2",
         "issue": "Idempotency key conflated distinct review identities.",
         "correction": "Derive identity from canonical immutable snapshot and result digest; exact repeat is DUPLICATE_NOOP; conflicting result under one identity is explicit CONFLICT_BLOCKED; distinct repository/PR identities do not collide."
+      }
+    ]
+  },
+  "astra_review_02": {
+    "reviewer_model": "gpt-6-astra",
+    "status": "REJECTED",
+    "reviewed_head": "eed83559ed86390946fb8eb7dfbccaca4680a431",
+    "resolved_from_review_01": [
+      "TASK-0003-R1-01",
+      "TASK-0003-R1-04"
+    ],
+    "findings": [
+      {
+        "id": "TASK-0003-R2-01",
+        "severity": "P1",
+        "issue": "Credential block variants with explicit indentation indicators could leak into correction data.",
+        "correction": "Treat any credential-bearing YAML block scalar beginning with | or > conservatively, independent of chomping/indentation indicator ordering; add end-to-end variant/comment tests."
+      },
+      {
+        "id": "TASK-0003-R2-02",
+        "severity": "P2",
+        "issue": "Explicit null implementation_guidance was treated like an absent field.",
+        "correction": "Distinguish field absence from supplied values; any supplied guidance must be a nonblank string before sanitization."
+      },
+      {
+        "id": "TASK-0003-R2-03",
+        "severity": "P2",
+        "issue": "Persistence validator did not fully enforce the published JSON Schema.",
+        "correction": "Validate emitted/persisted results directly against REVIEW_CONTRACT.schema.json plus semantic digest/invariant checks; reject malformed incoming and existing records before persistence."
       }
     ]
   }
