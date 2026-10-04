@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "run_id": "20261004_TASK_0004_LIVE_ADAPTER",
+  "run_id": "20261004_0010_TASK_0004_PR_RECOVERY_HARDENING",
   "phase": "CHATGPT_PLAN_LIVE_ADAPTER",
-  "status": "TASK_0004_COMPLETED_PENDING_ASTRA_REVIEW",
+  "status": "TASK_0004_RECOVERED_HARDENED_PENDING_EXACT_HEAD_REVIEW",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",
@@ -17,29 +17,55 @@
   "task_0001": {
     "review_status": "APPROVED",
     "reviewed_head": "4eee0c23f1fd0ca3b1ae847e75f3deebbe148376",
-    "merge_commit": "438e837a1d6d42ca8af4e6b31261e0ed34aa8f5d"
+    "merge_commit": "438e837a1d6d42ca8af4e6b31261e0ed34aa8f5d",
+    "windows_regression_run_id": 37101797145
   },
   "task_0002": {
     "review_status": "APPROVED",
     "reviewed_head": "c36fa8f3d9c6603a895e4df9d409b498958ddc44",
     "merge_commit": "0ce06097fdc39ded8d18daa0d452c23dc0d5a208",
+    "controller_regression_run_id": 37191999338,
+    "pc_cleanup_regression_run_id": 37191999344,
     "unit_tests_count": 34,
     "workflow_level_fixtures": 5
   },
+  "local_cleanup": {
+    "old_project_path": "D:\\Documents\\AI-Movie-Studio",
+    "old_project_status": "RETIRED_AFTER_VERIFIED_BACKUP",
+    "backup_path": "D:\\Documents\\AI-Movie-Studio_BACKUP_20261003.zip",
+    "active_local_project_path": "D:\\Documents\\project-agent-orchestrator",
+    "future_cleanup_policy": "AUDIT_ONLY_UNLESS_SEPARATELY_APPROVED"
+  },
   "task_0003": {
-    "review_status": "PENDING_ASTRA_REVIEW",
-    "status": "ASTRA_R2_CORRECTED_PENDING_EXACT_HEAD_REGRESSION"
+    "objective": "zero-cost ChatGPT-plan Astra reviewer bridge scaffold",
+    "review_status": "APPROVED",
+    "reviewed_head": "550b058f9ba9da2be7abec14c7f7173ed9ded662",
+    "merge_commit": "91451128bd7e04d7bafb19735318cae59a7c3e74",
+    "reviewer_regression_run_id": 37208367726,
+    "deterministic_tests_count": 68,
+    "live_authorization_enabled": false,
+    "paid_api_allowed": false,
+    "local_inference": false,
+    "conversation_access": false
   },
   "task_0004": {
     "objective": "live Sign in with ChatGPT adapter and one-time Windows authorization CLI",
-    "status": "COMPLETED_PENDING_ASTRA_REVIEW",
+    "status": "RECOVERED_HARDENED_PENDING_EXACT_HEAD_REVIEW",
     "issue_number": 5,
-    "source_worker_model": "gemini-3.5-flash-lite",
+    "source_worker_run_id": 37209531438,
+    "source_worker_bundle_artifact_id": 11306450927,
+    "source_worker_bundle_digest": "sha256:1a3a1704f53d820c1f0493674990ab93b644560826ab32a8ec075e3627076452",
+    "failed_controller_run_id": 37210052342,
+    "controller_failure_reason": "Candidate branch push succeeded; GitHub Actions policy blocked pull-request creation. Draft PR #6 was recovered through the trusted GitHub connector.",
+    "draft_pr_number": 6,
     "paid_api_allowed": false,
+    "api_key_path": false,
     "chatgpt_plan_usage_only": true,
-    "live_authorization_enabled": false,
+    "automatic_credit_use_allowed": false,
+    "live_authorization_performed": false,
+    "user_initiated_sign_in_only": true,
     "local_inference": false,
     "conversation_access": false,
-    "deterministic_tests_count": 10
+    "deterministic_tests_expected": 36
   }
 }
