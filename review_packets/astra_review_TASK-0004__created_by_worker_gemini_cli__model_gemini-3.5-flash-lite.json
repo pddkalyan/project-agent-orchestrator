@@ -21,7 +21,7 @@
   ],
   "verification_results": {
     "status": "PENDING_ASTRA_EXACT_HEAD_LOCAL_TEST",
-    "deterministic_tests_expected": 49,
+    "deterministic_tests_expected": 54,
     "exact_head_task0004_ci_available": false,
     "reason": "TASK-0004 intentionally does not modify workflow files. Existing repository regressions run on the PR head but do not execute the new TASK-0004 test module. Astra is requested to execute the offline test module locally on the exact head.",
     "live_authorization_performed": false,
@@ -46,7 +46,8 @@
     "stateless Responses request shape store=false/stream=true and blocked unsupported stateful fields",
     "stream completion and plan/auth/infrastructure error handling before TASK-0003 handoff",
     "TASK-0003 immutable snapshot/schema/idempotency gates remain mandatory",
-    "no OPENAI_API_KEY/client-secret/paid fallback/conversation access/local inference/cleanup mutation/merge or auto-merge"
+    "no OPENAI_API_KEY/client-secret/paid fallback/conversation access/local inference/cleanup mutation/merge or auto-merge",
+    "private-key/auth-code/id_token_hint/bearer/token diagnostics are redacted; invalid refresh grants fail closed"
   ],
   "known_limitations": [
     "The user has not performed real browser authorization yet; that is intentionally post-merge.",
