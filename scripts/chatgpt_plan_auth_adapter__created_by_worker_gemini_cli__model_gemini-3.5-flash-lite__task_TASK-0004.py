@@ -67,10 +67,13 @@ BLOCKED_INFRASTRUCTURE_ERROR = "BLOCKED_INFRASTRUCTURE_ERROR"
 BLOCKED_INVALID_RESPONSE = "BLOCKED_INVALID_RESPONSE"
 
 SECRET_KEY_RE = re.compile(
-    r"(access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|cookie|"
-    r"code[_-]?verifier|pkce|client[_-]?secret|api[_-]?key|password|secret)",
+    r"(access[_-]?token|refresh[_-]?token|id[_-]?token|authorization|auth[_-]?code|cookie|"
+    r"code[_-]?verifier|pkce|client[_-]?secret|api[_-]?key|password|secret|private[_ -]?key)",
     re.I,
 )
+PRIVATE_KEY_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
+PRIVATE_KEY_END = re.compile(r"-----END [A-Z0-9 ]*PRIVATE KEY-----")
+
 DIRECT_SECRET_PATTERNS = (
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b"),
@@ -82,7 +85,17 @@ DIRECT_SECRET_PATTERNS = (
 def sanitize_text(value: Any, max_chars: int = 4000) -> str:
     text = str(value)
     out: list[str] = []
+    in_private_key = False
     for line in text.splitlines():
+        if in_private_key:
+            out.append("[REDACTED-POTENTIAL-SECRET]")
+            if PRIVATE_KEY_END.search(line):
+                in_private_key = False
+            continue
+        if PRIVATE_KEY_BEGIN.search(line):
+            out.append("[REDACTED-POTENTIAL-SECRET]")
+            in_private_key = not bool(PRIVATE_KEY_END.search(line))
+            continue
         if SECRET_KEY_RE.search(line) or any(p.search(line) for p in DIRECT_SECRET_PATTERNS):
             out.append("[REDACTED-POTENTIAL-SECRET]")
         else:
