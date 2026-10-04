@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "next": [
-    "Optionally add Kaggle credentials only when the first cloud GPU experiment is ready.",
-    "Run manual_worker_smoke workflow in read-only planning mode.",
-    "Astra review TASK-0001 PC cleanup audit package.",
-    "Implement provider-neutral media contracts after Astra review approval."
+    "Build TASK-0002: bounded autonomous controller for worker retry, candidate promotion, deterministic validation, and Astra handoff.",
+    "Keep GPT-6 Astra as review-only; do not use Astra for routine implementation.",
+    "Do not auto-merge reviewed work and do not perform destructive PC cleanup without a separate explicit approval.",
+    "After the controller baseline is approved, implement provider-neutral media contracts and cloud video provider experiments."
   ]
 }
