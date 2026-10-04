@@ -7,7 +7,7 @@
   "objective": "Build the bounded autonomous orchestration controller that removes the current manual babysitting step between Cloud Worker Task runs and Astra review. The controller must automatically handle worker success/failure, validate worker artifacts against the task allowlist, promote a successful candidate to a draft pull request, and create bounded retry task revisions on worker failure using sanitized failure evidence. It must stop after a configured retry limit and surface a blocker instead of looping forever. It must never auto-merge, never call paid services, never invoke Astra through a paid API, never access or modify the user's PC, and never weaken the zero-spend/safety boundaries.",
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "astra_review_required": true,
-  "retry_attempt": 2,
+  "retry_attempt": 3,
   "max_controller_retries": 3,
   "allowed_paths": [
     ".github/workflows/autonomous_controller.yml",
@@ -72,7 +72,7 @@
     "no auto-merge",
     "truthful evidence"
   ],
-  "retry_reason": "Run 37184664799 failed TASK-0002 deterministic preflight after the worker completed. The exact failing test was `test_symlink_rejection`: it passed an absolute temporary symlink path into validate_path, so the implementation correctly rejected it first as an absolute path and the test incorrectly expected the later 'Symlink rejected' message. Correct the test to exercise symlink rejection through a relative artifact path inside a temporary bundle/root (or otherwise ensure the path reaches the symlink check without violating the absolute-path rule). During review of the failed candidate, additional blocking workflow defects were found and are now enforced by the deterministic preflight: source repository guard must not be tautological; workflow_run must be guarded as an in-repository push and identify the exact triggering head SHA; the task file must be derived unambiguously from that triggering commit (not `find ... | head -1`); actions/download-artifact must download from the triggering workflow run using supported `run-id` and `github-token` inputs (no unsupported `pattern-match`); branch push/PR creation failures must fail closed rather than `|| echo`; candidate artifact validation must cover actual manifest-to-files correspondence and symlink entries; retry handling must be idempotent and bounded; failure evidence must be sanitized and include job/step/conclusion metadata. The worker preflight packet must remain PENDING until CI actually passes.",
+  "retry_reason": "Run 37184975037 passed its Python unit tests (8 tests) but failed the strengthened deterministic preflight. The immediate missing requirement was exact task derivation from the triggering commit (`git diff-tree` was absent). Inspection also found the candidate controller incomplete: `.github/workflows/autonomous_controller.yml` had a step-level `if` source check that merely skipped that one step rather than blocking later writes; it used invalid `merge-merges` input; both success and failure artifact downloads were unconditional; the Python controller `main()` only printed a placeholder and performed no orchestration; it did not actually derive the task, promote a validated bundle, create a draft PR, collect failed job/step metadata, update bounded retries, or enforce idempotency. This is the final bounded retry. Implement the complete controller, not just helper stubs. Deterministic preflight now requires at least 10 tests and concrete orchestration behavior.",
   "orchestrator_corrections": [
     "TASK-0002 retry #1: tests must execute successfully when invoked as `python <exact-test-file-path>` on Linux.",
     "Load the hyphenated controller module by exact filesystem path rather than `importlib.import_module` using the filename as a Python module name.",
@@ -88,6 +88,18 @@
     "Do not swallow `git push` or `gh pr create` failures with `|| echo`; repository policy failures must stop with evidence.",
     "Make repeated workflow_run delivery idempotent. A previously processed source run must not increment retry_attempt again or create a duplicate branch/PR.",
     "Failure retry must modify only the exact triggering task JSON, increment only while retry_attempt < max_controller_retries, sanitize evidence, and stop BLOCKED without another worker trigger at the limit.",
-    "Review packet worker_preflight_evidence.status must remain PENDING until deterministic preflight actually succeeds; do not pre-claim PASS."
+    "Review packet worker_preflight_evidence.status must remain PENDING until deterministic preflight actually succeeds; do not pre-claim PASS.",
+    "TASK-0002 retry #3 (final bounded retry): implement the complete autonomous controller end-to-end. Helper-only stubs or a main() that only prints are unacceptable.",
+    "Use a job-level workflow guard (not merely a skippable step) that requires workflow_run.head_repository.full_name == github.repository, workflow_run.event == 'push', and the expected default branch before any write-capable step.",
+    "Checkout with full history, set SOURCE_SHA from github.event.workflow_run.head_sha, verify it belongs to the expected default branch, and derive exactly one tasks/queue/*.json changed by SOURCE_SHA using git diff-tree. Zero or multiple task files fail closed.",
+    "Expose the exact task id/path as step outputs. Do not use `find tasks/queue | head -1`.",
+    "Download the triggering run artifact with actions/download-artifact@v4 using run-id and github-token. Use supported inputs only. `merge-merges` and `pattern-match` are invalid. Success and failure downloads must be conclusion-aware so a missing opposite artifact does not break the job.",
+    "For success: require exactly one worker-bundle for the derived task; validate changed-files.txt and actual bundle bytes via the Python helper; then create a deterministic candidate branch from the immutable SOURCE_SHA, copy only validated task.allowed_paths files, commit, push (failure is fatal), and create/update a DRAFT PR with gh pr create --draft. Never merge or enable auto-merge.",
+    "For failure: query GitHub Actions jobs/steps for the triggering run and obtain a compact failure excerpt without printing raw secrets. Sanitize before persistence. If a failed-worker-bundle exists, use it only as supplemental evidence.",
+    "Failure retry must be idempotent using a deterministic source-run marker. Re-delivery of the same workflow_run must not increment retry_attempt twice or create duplicate commits/branches/PRs.",
+    "When retry_attempt < max_controller_retries, update only the exact triggering queue task on main with retry_attempt+1 and sanitized retry_reason, commit with a deterministic controller-run marker, and push main to retrigger the worker.",
+    "When retry_attempt >= max_controller_retries, do NOT edit/push the queue task (which would retrigger). Surface/persist BLOCKED via job summary and/or an uploaded non-triggering evidence artifact.",
+    "Unit tests must cover at least: allowed path acceptance, disallowed rejection, absolute path rejection, traversal rejection, relative symlink rejection inside a bundle, missing manifest, duplicate manifest entries, extra bundle file, manifest entry missing from bundle, retry under limit, retry at limit, idempotency key/processed-run behavior, and secret-like line sanitization.",
+    "Keep worker_preflight_evidence PENDING in the review packet until CI actually passes."
   ]
 }
