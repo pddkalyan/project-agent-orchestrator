@@ -114,6 +114,13 @@ This integration does not read or expose existing ChatGPT conversations or ChatG
 
 ## Current test/review status
 
-The candidate contains 54 deterministic offline tests. TASK-0004 intentionally does not edit GitHub workflow files, so the existing repository regressions do not execute this new test module. GPT-6 Astra should run the test module locally on the exact PR head during final review.
+The candidate contains 60 deterministic offline tests. TASK-0004 intentionally does not edit GitHub workflow files, so the existing repository regressions do not execute this new test module. GPT-6 Astra should run the test module locally on the exact PR head during final review.
 
 No live browser sign-in or OpenAI inference has been performed as part of TASK-0004 development.
+
+
+## Live inference activation gate
+
+Even after a successful account sign-in, the adapter will not send a reviewer request merely because credentials exist. Live streamed review transport additionally requires a separate activation policy with both `reviewer_enabled=true` and `zero_extra_spend_confirmed=true`. Immediately before transport it also rechecks exact `gpt-6-astra` availability and the required `offline_access` / `chatgpt.tokens.use.direct` scopes.
+
+This keeps browser authorization, model discovery, and automatic reviewer activation as separate gates. TASK-0004 does not enable that activation policy.
