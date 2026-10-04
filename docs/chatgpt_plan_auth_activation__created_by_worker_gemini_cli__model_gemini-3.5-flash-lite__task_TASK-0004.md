@@ -1,36 +1,119 @@
-# Sign in with ChatGPT Live Adapter & Authorization Guide (TASK-0004)
+# TASK-0004 — Sign in with ChatGPT live adapter and Windows authorization CLI
 
-## Overview
+## Scope
 
-TASK-0004 implements the live Sign in with ChatGPT adapter and one-time Windows authorization CLI (`chatgpt_plan_auth_cli`) that will later activate the Astra reviewer bridge.
+TASK-0004 implements the live-capable adapter and one-time Windows CLI needed to connect the already-approved TASK-0003 reviewer bridge to an explicitly authorized ChatGPT account.
 
-To preserve safety and zero-spend constraints, all CI pipelines remain offline and do not perform real browser authentication or live OpenAI API requests.
+The code is safe to review and merge **without performing real authorization**. CI remains offline. The user performs browser consent only after merge.
 
-## Architecture
+## Current OpenAI OSS SIWC flow implemented here
 
-- **Host Identity (`ext_agent_host_id`)**: A stable host identifier stored in host-local protected storage (`~/.openai/chatgpt_reviewer_session.json`) and reused across sign-ins.
-- **PKCE S256 & OAuth**: Generates cryptographically secure PKCE verifiers, challenges, state, and nonces for the open-source Sign in with ChatGPT flow with loopback redirect on `127.0.0.1`.
-- **Protected Storage**: Atomic file replacement and host-local isolation keep tokens outside the public repository.
-- **Exact Model Enforcement**: Validates authorized model catalogs against exact `gpt-6-astra`.
-- **Stateless Responses API**: Enforces `store=false` and `stream=true` without leaking conversation history.
-- **TASK-0003 Integration**: Routes validated live reviewer payloads directly into the existing TASK-0003 immutable snapshot/verdict evaluation gate.
+For first-time registration:
 
-## CLI Usage (Post-Merge Windows Setup)
+- authorization endpoint: `https://auth.openai.com/api/accounts/authorize`
+- `client_id=dynamic_agent_client`
+- stable host identifier: `ext_agent_host_id=urn:uuid:...`
+- `agent_name_hint=Project Agent Orchestrator`
+- loopback redirect: `http://127.0.0.1:<port>/auth/callback`
+- fresh state, nonce, PKCE verifier and S256 challenge
+- scopes: `openid profile email offline_access resource.invoke chatgpt.tokens.use.direct`
+- resource: `https://api.openai.com/v1`
 
-After merge, a Windows self-hosted reviewer machine can initialize host state and perform one-time interactive authorization:
+The successful new-registration callback must return an issued `client_id` such as `oaiapp_...`. The adapter rejects a missing issued ID and never uses `dynamic_agent_client` for token exchange.
 
-```bash
-# Initialize stable host ID
-python scripts/chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py init-host
+Token exchange and refresh use:
 
-# Check credential-free session status
-python scripts/chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py status
+`https://auth.openai.com/api/accounts/oauth/token`
 
-# Validate model catalog
-python scripts/chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py models
+No client secret, partner API key, or `OPENAI_API_KEY` path exists.
 
-# Run component self-check
-python scripts/chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py self-check
+For returning authorization, the saved issued client ID is reused with the same host ID; retained `id_token_hint` and email `login_hint` are optional account hints.
+
+## Identity validation
+
+The adapter requires cryptographic ID-token signature verification against OpenAI JWKS:
+
+`https://auth.openai.com/.well-known/jwks.json`
+
+It then validates exact issuer, issued client ID audience, saved nonce, subject, and expiry.
+
+The Windows CLI uses a live `PyJWT[crypto]` verifier. Install that runtime dependency before the one-time sign-in:
+
+```powershell
+py -m pip install "PyJWT[crypto]"
 ```
 
-Interactive sign-in (`sign-in`) requires direct user action in a browser and is blocked automatically in non-interactive CI environments.
+Offline tests inject a fake signature verifier and make no network request.
+
+## Credential storage
+
+The Windows target uses DPAPI to protect `access_token`, `refresh_token`, and retained `id_token` before writing the profile file.
+
+Default files live outside the repository under:
+
+`%USERPROFILE%\.project-agent-orchestrator\chatgpt\`
+
+The profile is atomically replaced. Refresh operations take a process/file lock so rotating refresh tokens are not raced. Status output never prints raw credentials.
+
+## Model discovery
+
+After sign-in, the adapter calls the public account-authorized model catalog and keeps visible model `slug` values. Only exact:
+
+`gpt-6-astra`
+
+qualifies for the project reviewer. Similar names do not qualify.
+
+## Responses request boundary
+
+Future live reviewer inference uses the public Responses API only:
+
+`POST https://api.openai.com/v1/responses`
+
+The request builder requires:
+
+- `store=false`
+- `stream=true`
+- complete immutable review context carried explicitly in input
+- no `previous_response_id`
+- no Responses conversation state
+- no background mode
+- no unsupported stateful/service-tier overrides
+
+Inference is successful only after `response.completed`. Usage-limit/auth/infrastructure failures become BLOCKED states, not APPROVED/REJECTED code-review verdicts.
+
+## Windows post-merge setup
+
+After TASK-0004 receives Astra approval and is merged:
+
+```powershell
+cd D:\Documents\project-agent-orchestrator
+git pull
+
+py -m pip install "PyJWT[crypto]"
+
+py scripts\chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py init-host
+
+py scripts\chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py sign-in
+
+py scripts\chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py status
+
+py scripts\chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py models
+```
+
+The `sign-in` command opens the system browser and requires direct user consent. It is blocked in CI/non-interactive shells.
+
+## Zero-extra-spend gate
+
+TASK-0004 does not enable automatic reviewer inference. Sign-in and model discovery are separate from the later activation step.
+
+Before automated Astra requests are enabled, the separate activation task must confirm the user's ChatGPT app usage/credit controls are configured so the project does not intentionally consume separately billed credits. There is no API-key or paid fallback in this code.
+
+## Conversation boundary
+
+This integration does not read or expose existing ChatGPT conversations or ChatGPT memory. Reviewer continuity comes only from repository context and review packets.
+
+## Current test/review status
+
+The candidate contains 41 deterministic offline tests. TASK-0004 intentionally does not edit GitHub workflow files, so the existing repository regressions do not execute this new test module. GPT-6 Astra should run the test module locally on the exact PR head during final review.
+
+No live browser sign-in or OpenAI inference has been performed as part of TASK-0004 development.
