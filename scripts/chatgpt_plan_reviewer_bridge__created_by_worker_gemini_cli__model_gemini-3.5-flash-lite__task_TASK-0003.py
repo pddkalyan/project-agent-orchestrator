@@ -736,6 +736,22 @@ def validate_runtime_invariants(result: Mapping[str, Any]) -> tuple[bool, str]:
     if not isinstance(result, Mapping):
         return False, "not object"
 
+    identity_digest = result.get("review_identity_digest")
+    if not isinstance(identity_digest, str) or not HEX64_RE.fullmatch(identity_digest):
+        return False, "review identity digest"
+
+    digest_basis = dict(result)
+    supplied_result_digest = digest_basis.pop("result_digest", None)
+    supplied_idempotency_key = digest_basis.pop("idempotency_key", None)
+    expected_result_digest = sha256_json(digest_basis)
+    if supplied_result_digest != expected_result_digest:
+        return False, "result digest mismatch"
+    expected_idempotency_key = hashlib.sha256(
+        f"{identity_digest}\n{expected_result_digest}".encode("utf-8")
+    ).hexdigest()
+    if supplied_idempotency_key != expected_idempotency_key:
+        return False, "idempotency key mismatch"
+
     status = result.get("status")
     blocked = {
         BLOCKED_AUTH_REQUIRED,
