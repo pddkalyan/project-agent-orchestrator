@@ -477,5 +477,87 @@ class TestTask0004(unittest.TestCase):
         self.assertNotIn(result["status"], ("APPROVED","REJECTED"))
 
 
+    def test_42_refresh_error_codes_fail_closed_as_auth(self):
+        for code in [
+            "invalid_grant",
+            "invalid_refresh_token",
+            "refresh_token_expired",
+            "refresh_token_invalidated",
+            "refresh_token_reused",
+            "invalid_client",
+        ]:
+            with self.subTest(code=code):
+                self.assertEqual(adapter.map_transport_error(code), adapter.BLOCKED_AUTH_REQUIRED)
+
+    def test_43_subscription_route_capability_errors_are_not_auth_or_verdicts(self):
+        for code in [
+            "subscription_sharing_unsupported_capability",
+            "subscription_sharing_route_not_supported",
+        ]:
+            status = adapter.map_transport_error(code)
+            self.assertEqual(status, adapter.BLOCKED_INVALID_RESPONSE)
+            self.assertNotIn(status, ("APPROVED", "REJECTED"))
+
+    def test_44_profile_files_keep_account_registrations_separate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = adapter.HostCredentialStorage(Path(tmp) / "first.json", FakeProtector())
+            second = adapter.HostCredentialStorage(Path(tmp) / "second.json", FakeProtector())
+            first.save_profile_atomic({
+                "profile_label":"first","client_id":"oaiapp_first","subject":"sub1",
+                "access_token":"a1","refresh_token":"r1","id_token":"i1"
+            })
+            second.save_profile_atomic({
+                "profile_label":"second","client_id":"oaiapp_second","subject":"sub2",
+                "access_token":"a2","refresh_token":"r2","id_token":"i2"
+            })
+            self.assertEqual(first.load_profile()["client_id"], "oaiapp_first")
+            self.assertEqual(second.load_profile()["client_id"], "oaiapp_second")
+            self.assertNotEqual(first.load_profile()["subject"], second.load_profile()["subject"])
+
+    def test_45_normalized_token_response_requires_plan_scopes(self):
+        claims={"iss":adapter.ISSUER,"sub":"sub","email":"e@example.com"}
+        payload={
+            "access_token":"a","refresh_token":"r","id_token":"i","token_type":"Bearer",
+            "expires_in":3600,"scope":"openid offline_access"
+        }
+        with self.assertRaises(ValueError):
+            adapter.normalize_token_response(payload, client_id="oaiapp_x", ext_agent_host_id=self.host_id, claims=claims)
+
+    def test_46_cli_uses_importlib_for_hyphenated_adapter_filename(self):
+        cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
+        self.assertIn("importlib.util.spec_from_file_location", cli)
+        self.assertNotIn("from chatgpt_plan_auth_adapter__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite", cli)
+
+    def test_47_cli_persists_issued_registration_before_code_exchange(self):
+        cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
+        save_pos=cli.index("storage.save_profile_atomic(pending)")
+        exchange_pos=cli.index("build_token_exchange_request(", save_pos)
+        self.assertLess(save_pos, exchange_pos)
+        self.assertIn('"registration_pending": True', cli)
+
+    def test_48_authorization_url_with_id_token_hint_is_sanitized(self):
+        url=adapter.build_authorization_url(
+            redirect_uri=self.redirect,
+            ext_agent_host_id=self.host_id,
+            attempt=self.attempt,
+            issued_client_id="oaiapp_x",
+            retained_id_token="ID_TOKEN_HINT_SENTINEL",
+        )
+        clean=adapter.sanitize_text(url)
+        self.assertNotIn("ID_TOKEN_HINT_SENTINEL", clean)
+
+    def test_49_response_request_has_no_api_key_or_conversation_state(self):
+        req=adapter.build_responses_plan_request(
+            review_prompt="Review.",
+            review_context={"repository":"owner/repo","pr_number":6},
+        )
+        encoded=json.dumps(req)
+        self.assertNotIn("api_key", encoded)
+        self.assertNotIn("previous_response_id", encoded)
+        self.assertNotIn('"conversation"', encoded)
+        self.assertFalse(req["store"])
+        self.assertTrue(req["stream"])
+
+
 if __name__ == "__main__":
     unittest.main()
