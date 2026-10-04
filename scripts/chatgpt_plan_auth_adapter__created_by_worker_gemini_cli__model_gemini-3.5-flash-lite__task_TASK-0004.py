@@ -886,12 +886,16 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
                     return {"status": BLOCKED_INFRASTRUCTURE_ERROR}
                 return {"status": "REFRESHED", "profile": storage.safe_status()}
             except Exception:
-                # Best effort to retain a returned replacement token in a
-                # blocked state. If this write fails, the already-persisted
-                # REFRESH_IN_PROGRESS state still prevents reuse of the old token.
+                # Whether validation or the ACTIVE replacement write failed,
+                # never let a partially committed/uncertain refresh become ready.
+                # Preserve a returned replacement refresh token when possible,
+                # but remove active access and force a durable blocked state.
+                replacement.pop("access_token", None)
+                replacement["session_state"] = "BLOCKED_REFRESH_INVALID"
                 try:
                     storage.save_profile_atomic(replacement)
                 except Exception:
+                    # The pre-dispatch REFRESH_IN_PROGRESS record remains durable.
                     return {"status": BLOCKED_INFRASTRUCTURE_ERROR}
                 return {"status": BLOCKED_AUTH_REQUIRED}
     except Exception:
