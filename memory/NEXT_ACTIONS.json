@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
   "next": [
-    "Queue TASK-0003 to implement a zero-cost Sign in with ChatGPT reviewer bridge and self-hosted reviewer workflow.",
-    "Require account-authorized model discovery; use gpt-6-astra only if the signed-in account catalog exposes that exact model.",
-    "Keep paid API keys, credit fallback, automatic credit purchases, local inference, auto-merge, and conversation scraping disabled.",
-    "After deterministic TASK-0003 regression passes, review the bridge before asking for the one-time Continue with ChatGPT authorization."
+    "Run exact-head ChatGPT Plan Reviewer Regression on the recovered TASK-0003 review branch.",
+    "Require all offline reviewer-bridge tests and static zero-spend/self-hosted/no-merge checks to pass.",
+    "If exact-head regression passes, submit TASK-0003 to GPT-6 Astra for final review of the scaffold.",
+    "After Astra approval and merge, create a separate activation task for the one-time Continue with ChatGPT authorization and live model-catalog verification.",
+    "Do not enable live authorization, paid API fallback, auto-merge, local inference, or conversation access in TASK-0003."
   ]
 }
