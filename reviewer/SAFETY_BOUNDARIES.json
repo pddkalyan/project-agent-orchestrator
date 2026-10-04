@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "component": "ChatGPT Plan Reviewer Bridge",
+  "boundaries": {
+    "max_spend_usd": 0.0,
+    "paid_api_billing_allowed": false,
+    "automatic_credit_purchases": false,
+    "local_ai_inference": false,
+    "pc_cleanup_mode": "AUDIT_ONLY",
+    "reviewer_role": "REVIEW_ONLY",
+    "auto_merge_allowed": false,
+    "merge_allowed": false,
+    "conversation_scraping": false,
+    "authentication_storage": "HOST_LOCAL_ONLY_NO_REPO_SECRETS",
+    "runner_policy": "SELF_HOSTED_ONLY"
+  }
+}
