@@ -36,7 +36,15 @@ jobs:
             fi
             test -f "$TASK_FILE"
           else
-            mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^tasks/queue/.*\.json          WORKER_MODEL="$(jq -r '.preferred_worker_model // "gemini-3.5-flash-lite"' "$TASK_FILE")"
+            mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^tasks/queue/.*\.json$' || true)
+            if [[ "${#TASK_FILES[@]}" -ne 1 ]]; then
+              echo "Expected exactly one queue task in triggering commit, found ${#TASK_FILES[@]}" >&2
+              exit 13
+            fi
+            TASK_FILE="${TASK_FILES[0]}"
+          fi
+          TASK_ID="$(jq -r '.task_id' "$TASK_FILE")"
+          WORKER_MODEL="$(jq -r '.preferred_worker_model // "gemini-3.5-flash-lite"' "$TASK_FILE")"
           echo "task_file=$TASK_FILE" >> "$GITHUB_OUTPUT"
           echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
           echo "worker_model=$WORKER_MODEL" >> "$GITHUB_OUTPUT"
