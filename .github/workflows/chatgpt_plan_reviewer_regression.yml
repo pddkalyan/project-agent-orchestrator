@@ -10,6 +10,12 @@ on:
       - "scripts/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_*.py"
       - "tests/test_chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_*.py"
       - "reviewer/**"
+      - "docs/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_*.md"
+      - "review_packets/astra_review_TASK-0003__created_by_worker_gemini_cli__model_*.json"
+      - "memory/CURRENT_STATE.json"
+      - "memory/NEXT_ACTIONS.json"
+      - "README.md"
+      - "PROVENANCE_REGISTRY.jsonl"
   push:
     branches:
       - main
@@ -20,6 +26,9 @@ on:
       - "tests/test_chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_*.py"
       - "reviewer/**"
 
+permissions:
+  contents: read
+
 jobs:
   regression:
     runs-on: ubuntu-latest
@@ -27,31 +36,84 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Run TASK-0003 deterministic tests
+      - name: Run TASK-0003 deterministic regression
         shell: bash
         run: |
           set -euo pipefail
           SCRIPT="scripts/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py"
           TEST="tests/test_chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py"
           WORKFLOW=".github/workflows/chatgpt_plan_reviewer.yml"
+          PACKET="review_packets/astra_review_TASK-0003__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json"
+          SAFETY="reviewer/SAFETY_BOUNDARIES.json"
+          STATE="memory/CURRENT_STATE.json"
 
           test -f "$SCRIPT"
           test -f "$TEST"
           test -f "$WORKFLOW"
+          test -f "$PACKET"
+          test -f "$SAFETY"
+          test -f "$STATE"
 
           python -m py_compile "$SCRIPT" "$TEST"
           python "$TEST"
+          python "$SCRIPT" --self-check > /tmp/task0003-self-check.json
 
-          grep -q 'self-hosted' "$WORKFLOW"
-          grep -q 'if: false' "$WORKFLOW"
-          grep -q 'ZERO_SPEND_PLAN' "$SCRIPT"
-          grep -q 'BLOCKED_NO_ASTRA' "$SCRIPT"
-          grep -q 'BLOCKED_AUTH_REQUIRED' "$SCRIPT"
-          grep -q 'BLOCKED_PLAN_ALLOWANCE' "$SCRIPT"
-          grep -q 'merge_allowed.*False' "$SCRIPT"
+          # Reviewer workflow is self-hosted Windows only and remains disabled.
+          grep -Fq 'runs-on: [self-hosted, windows, chatgpt-reviewer]' "$WORKFLOW"
+          grep -Fq 'if: false' "$WORKFLOW"
+          ! grep -Fq 'ubuntu-latest' "$WORKFLOW"
+
+          # No paid API key/billing or live network reviewer implementation in TASK-0003.
+          if grep -Eiq 'OPENAI_API_KEY|api\.openai\.com|Authorization:[[:space:]]*Bearer|gh[[:space:]]+pr[[:space:]]+merge|auto-merge|enable_auto_merge|merge_pull_request' "$WORKFLOW" "$SCRIPT"; then
+            echo "TASK-0003 contains forbidden paid/live/merge behavior." >&2
+            exit 31
+          fi
+
+          # No attempt to read ChatGPT conversation/history APIs.
+          if grep -Eiq '/conversations|conversation[_ -]?history[_ -]?api|chatgpt[_ -]?memory[_ -]?api' "$WORKFLOW" "$SCRIPT"; then
+            echo "TASK-0003 must not access ChatGPT conversations or memory." >&2
+            exit 32
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          packet = json.loads(Path("review_packets/astra_review_TASK-0003__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json").read_text())
+          safety = json.loads(Path("reviewer/SAFETY_BOUNDARIES.json").read_text())
+          state = json.loads(Path("memory/CURRENT_STATE.json").read_text())
+          check = json.loads(Path("/tmp/task0003-self-check.json").read_text())
+          tests = Path("tests/test_chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py").read_text()
+
+          assert packet["review_status"] == "PENDING_ASTRA_REVIEW"
+          assert tests.count("def test_") >= 25
+          assert safety["live_authorization_enabled"] is False
+          b = safety["boundaries"]
+          assert b["max_extra_spend_usd"] == 0
+          assert b["paid_api_billing_allowed"] is False
+          assert b["api_key_billing_allowed"] is False
+          assert b["automatic_credit_purchases"] is False
+          assert b["local_ai_inference"] is False
+          assert b["merge_allowed"] is False
+          assert b["auto_merge_allowed"] is False
+          assert b["conversation_scraping"] is False
+          assert b["conversation_memory_access"] is False
+          assert state["spend_limit_usd"] == 0
+          assert state["local_video_inference"] is False
+          assert state["pc_cleanup_mode"] == "AUDIT_ONLY"
+          assert check["mode"] == "OFFLINE_SCAFFOLD_DISABLED"
+          assert check["live_authorization_enabled"] is False
+          assert check["paid_api_allowed"] is False
+          assert check["local_inference"] is False
+          assert check["required_model"] == "gpt-6-astra"
+          PY
+
+          echo "TASK-0003 zero-cost reviewer bridge regression passed."
