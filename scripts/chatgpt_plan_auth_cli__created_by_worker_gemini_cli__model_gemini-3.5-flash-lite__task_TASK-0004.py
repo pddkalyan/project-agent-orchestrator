@@ -163,11 +163,28 @@ def cmd_sign_in(args: argparse.Namespace) -> int:
     try:
         with storage.locked():
             existing = storage.load_profile()
+            registration = storage.load_registration()
             existing_version = storage.profile_version(existing)
     except Exception:
         _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Protected profile is unavailable or locked."})
         return 1
-    issued_client_id = existing.get("client_id") if existing else None
+
+    if registration:
+        if registration.get("profile_label") != args.profile or registration.get("ext_agent_host_id") != host_id:
+            _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Saved registration does not match this profile or host."})
+            return 1
+        reg_client = registration.get("client_id")
+        if not isinstance(reg_client, str) or not reg_client or reg_client == adapter.DYNAMIC_CLIENT_ID:
+            _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Saved registration metadata is invalid."})
+            return 1
+        if existing and existing.get("client_id") and existing.get("client_id") != reg_client:
+            _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Saved registration conflicts with the active profile."})
+            return 1
+        if existing and existing.get("subject") and registration.get("subject") not in (None, existing.get("subject")):
+            _json({"status": BLOCKED_AUTH_REQUIRED, "message": "Saved registration identity conflicts with the active profile."})
+            return 1
+
+    issued_client_id = existing.get("client_id") if existing else (registration.get("client_id") if registration else None)
     retained_id_token = existing.get("id_token") if existing else None
     login_hint = existing.get("email") if existing else None
 
