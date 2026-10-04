@@ -441,24 +441,29 @@ class TestTask0004(unittest.TestCase):
             self.assertEqual(status, "PROFILE_READY")
             self.assertEqual(profile["access_token"], "a1")
 
-    def test_40_run_streamed_review_uses_bearer_and_completed_stream(self):
+    def test_40_run_streamed_review_valid_activation_uses_bearer_and_completed_stream(self):
         class StreamTransport:
             def __init__(self):
                 self.headers = None
                 self.payload = None
+                self.called = 0
             def stream_sse(self, url, payload, headers):
+                self.called += 1
                 self.headers = headers
                 self.payload = payload
                 yield {"type":"response.output_text.delta","delta":"{\"status\":\"APPROVED\"}"}
                 yield {"type":"response.completed"}
         t=StreamTransport()
         result=adapter.run_streamed_review(
-            profile={"access_token":"ACCESS_SENTINEL"},
+            profile={"access_token":"ACCESS_SENTINEL","scopes":["offline_access","chatgpt.tokens.use.direct"]},
+            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
+            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
             transport=t,
             review_prompt="Review.",
             review_context={"task_id":"TASK-0004"},
         )
         self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(t.called, 1)
         self.assertEqual(t.payload["store"], False)
         self.assertEqual(t.payload["stream"], True)
         self.assertEqual(t.headers["Authorization"], "Bearer ACCESS_SENTINEL")
@@ -468,7 +473,9 @@ class TestTask0004(unittest.TestCase):
             def stream_sse(self, *args, **kwargs):
                 raise RuntimeError("network timeout")
         result=adapter.run_streamed_review(
-            profile={"access_token":"x"},
+            profile={"access_token":"x","scopes":["offline_access","chatgpt.tokens.use.direct"]},
+            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
+            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
             transport=BadTransport(),
             review_prompt="Review.",
             review_context={"task_id":"TASK-0004"},
@@ -476,8 +483,63 @@ class TestTask0004(unittest.TestCase):
         self.assertEqual(result["status"], adapter.BLOCKED_NETWORK_ERROR)
         self.assertNotIn(result["status"], ("APPROVED","REJECTED"))
 
+    def test_46_disabled_activation_gate_prevents_transport(self):
+        class NeverTransport:
+            def stream_sse(self, *args, **kwargs):
+                raise AssertionError("transport must not be called")
+        result=adapter.run_streamed_review(
+            profile={"access_token":"x","scopes":["offline_access","chatgpt.tokens.use.direct"]},
+            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
+            activation_policy={"reviewer_enabled":False,"zero_extra_spend_confirmed":True},
+            transport=NeverTransport(),
+            review_prompt="Review.",
+            review_context={"task_id":"TASK-0004"},
+        )
+        self.assertEqual(result["status"], adapter.BLOCKED_PLAN_ALLOWANCE)
 
-    def test_42_refresh_error_codes_fail_closed_as_auth(self):
+    def test_47_zero_extra_spend_not_confirmed_prevents_transport(self):
+        class NeverTransport:
+            def stream_sse(self, *args, **kwargs):
+                raise AssertionError("transport must not be called")
+        result=adapter.run_streamed_review(
+            profile={"access_token":"x","scopes":["offline_access","chatgpt.tokens.use.direct"]},
+            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
+            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":False},
+            transport=NeverTransport(),
+            review_prompt="Review.",
+            review_context={"task_id":"TASK-0004"},
+        )
+        self.assertEqual(result["status"], adapter.BLOCKED_PLAN_ALLOWANCE)
+
+    def test_48_missing_exact_astra_prevents_transport(self):
+        class NeverTransport:
+            def stream_sse(self, *args, **kwargs):
+                raise AssertionError("transport must not be called")
+        result=adapter.run_streamed_review(
+            profile={"access_token":"x","scopes":["offline_access","chatgpt.tokens.use.direct"]},
+            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra-preview"]},
+            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
+            transport=NeverTransport(),
+            review_prompt="Review.",
+            review_context={"task_id":"TASK-0004"},
+        )
+        self.assertEqual(result["status"], adapter.BLOCKED_NO_ASTRA)
+
+    def test_49_missing_required_plan_scope_prevents_transport(self):
+        class NeverTransport:
+            def stream_sse(self, *args, **kwargs):
+                raise AssertionError("transport must not be called")
+        result=adapter.run_streamed_review(
+            profile={"access_token":"x","scopes":["offline_access"]},
+            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
+            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
+            transport=NeverTransport(),
+            review_prompt="Review.",
+            review_context={"task_id":"TASK-0004"},
+        )
+        self.assertEqual(result["status"], adapter.BLOCKED_AUTH_REQUIRED)
+
+    def test_46_refresh_error_codes_fail_closed_as_auth(self):
         for code in [
             "invalid_grant",
             "invalid_refresh_token",
@@ -489,7 +551,7 @@ class TestTask0004(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertEqual(adapter.map_transport_error(code), adapter.BLOCKED_AUTH_REQUIRED)
 
-    def test_43_subscription_route_capability_errors_are_not_auth_or_verdicts(self):
+    def test_47_subscription_route_capability_errors_are_not_auth_or_verdicts(self):
         for code in [
             "subscription_sharing_unsupported_capability",
             "subscription_sharing_route_not_supported",
@@ -498,7 +560,7 @@ class TestTask0004(unittest.TestCase):
             self.assertEqual(status, adapter.BLOCKED_INVALID_RESPONSE)
             self.assertNotIn(status, ("APPROVED", "REJECTED"))
 
-    def test_44_profile_files_keep_account_registrations_separate(self):
+    def test_48_profile_files_keep_account_registrations_separate(self):
         with tempfile.TemporaryDirectory() as tmp:
             first = adapter.HostCredentialStorage(Path(tmp) / "first.json", FakeProtector())
             second = adapter.HostCredentialStorage(Path(tmp) / "second.json", FakeProtector())
@@ -514,7 +576,7 @@ class TestTask0004(unittest.TestCase):
             self.assertEqual(second.load_profile()["client_id"], "oaiapp_second")
             self.assertNotEqual(first.load_profile()["subject"], second.load_profile()["subject"])
 
-    def test_45_normalized_token_response_requires_plan_scopes(self):
+    def test_49_normalized_token_response_requires_plan_scopes(self):
         claims={"iss":adapter.ISSUER,"sub":"sub","email":"e@example.com"}
         payload={
             "access_token":"a","refresh_token":"r","id_token":"i","token_type":"Bearer",
@@ -523,19 +585,19 @@ class TestTask0004(unittest.TestCase):
         with self.assertRaises(ValueError):
             adapter.normalize_token_response(payload, client_id="oaiapp_x", ext_agent_host_id=self.host_id, claims=claims)
 
-    def test_46_cli_uses_importlib_for_hyphenated_adapter_filename(self):
+    def test_50_cli_uses_importlib_for_hyphenated_adapter_filename(self):
         cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
         self.assertIn("importlib.util.spec_from_file_location", cli)
         self.assertNotIn("from chatgpt_plan_auth_adapter__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite", cli)
 
-    def test_47_cli_persists_issued_registration_before_code_exchange(self):
+    def test_51_cli_persists_issued_registration_before_code_exchange(self):
         cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
         save_pos=cli.index("storage.save_profile_atomic(pending)")
         exchange_pos=cli.index("build_token_exchange_request(", save_pos)
         self.assertLess(save_pos, exchange_pos)
         self.assertIn('"registration_pending": True', cli)
 
-    def test_48_authorization_url_with_id_token_hint_is_sanitized(self):
+    def test_52_authorization_url_with_id_token_hint_is_sanitized(self):
         url=adapter.build_authorization_url(
             redirect_uri=self.redirect,
             ext_agent_host_id=self.host_id,
@@ -546,7 +608,7 @@ class TestTask0004(unittest.TestCase):
         clean=adapter.sanitize_text(url)
         self.assertNotIn("ID_TOKEN_HINT_SENTINEL", clean)
 
-    def test_49_response_request_has_no_api_key_or_conversation_state(self):
+    def test_53_response_request_has_no_api_key_or_conversation_state(self):
         req=adapter.build_responses_plan_request(
             review_prompt="Review.",
             review_context={"repository":"owner/repo","pr_number":6},
@@ -559,7 +621,7 @@ class TestTask0004(unittest.TestCase):
         self.assertTrue(req["stream"])
 
 
-    def test_50_private_key_block_and_auth_code_are_redacted(self):
+    def test_54_private_key_block_and_auth_code_are_redacted(self):
         text = (
             "ordinary before\n"
             "auth_code: AUTH_CODE_SENTINEL\n"
@@ -574,7 +636,7 @@ class TestTask0004(unittest.TestCase):
         self.assertIn("ordinary before", clean)
         self.assertIn("ordinary after", clean)
 
-    def test_51_refresh_invalid_grant_maps_to_auth_required(self):
+    def test_55_refresh_invalid_grant_maps_to_auth_required(self):
         class InvalidGrantTransport:
             def post_form(self, *args, **kwargs):
                 raise RuntimeError('{"http_status":400,"body":{"error":"invalid_grant"}}')
@@ -587,24 +649,38 @@ class TestTask0004(unittest.TestCase):
             result = adapter.refresh_profile(storage, InvalidGrantTransport())
             self.assertEqual(result["status"], adapter.BLOCKED_AUTH_REQUIRED)
 
-    def test_52_cli_supports_separate_profile_labels(self):
+    def test_56_cli_supports_separate_profile_labels(self):
         cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
         self.assertIn('--profile', cli)
         self.assertIn('DEFAULT_PROFILES_DIR', cli)
         self.assertIn('sub.add_parser("profiles")', cli)
 
-    def test_53_cli_sign_in_is_user_initiated_and_ci_blocked(self):
+    def test_57_cli_sign_in_is_user_initiated_and_ci_blocked(self):
         cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
         self.assertIn('os.environ.get("CI"', cli)
         self.assertIn('not sys.stdin.isatty()', cli)
         self.assertIn('webbrowser.open(url)', cli)
 
-    def test_54_no_secret_or_paid_api_identifiers_in_public_self_check(self):
+    def test_58_no_secret_or_paid_api_identifiers_in_public_self_check(self):
         encoded=json.dumps(adapter.self_check())
         self.assertNotIn("access_token", encoded)
         self.assertNotIn("refresh_token", encoded)
         self.assertNotIn("OPENAI_API_KEY", encoded)
         self.assertIn('"paid_fallback": false', encoded.lower())
+
+
+    def test_59_non_bearer_token_type_is_rejected(self):
+        claims={"iss":adapter.ISSUER,"sub":"sub","email":"e@example.com"}
+        payload={
+            "access_token":"a","refresh_token":"r","id_token":"i","token_type":"MAC",
+            "expires_in":3600,"scope":"openid offline_access chatgpt.tokens.use.direct"
+        }
+        with self.assertRaises(ValueError):
+            adapter.normalize_token_response(payload, client_id="oaiapp_x", ext_agent_host_id=self.host_id, claims=claims)
+
+    def test_60_expired_profile_refreshes_even_before_earliest_refresh_at(self):
+        now=1000
+        self.assertTrue(adapter.needs_refresh({"expires_at":999,"earliest_refresh_at":5000}, now=now))
 
 
 if __name__ == "__main__":
