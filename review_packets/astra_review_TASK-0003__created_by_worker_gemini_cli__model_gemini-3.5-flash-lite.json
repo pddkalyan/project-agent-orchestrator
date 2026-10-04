@@ -33,8 +33,8 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "verification_results": {
-    "status": "PENDING_EXACT_HEAD_CI",
-    "deterministic_tests_expected": 25,
+    "status": "PENDING_EXACT_HEAD_CI_AFTER_ASTRA_R1_CORRECTIONS",
+    "deterministic_tests_expected": 51,
     "live_authorization_enabled": false,
     "live_openai_calls_performed": false,
     "zero_extra_spend_boundary": true,
@@ -42,23 +42,52 @@
     "no_local_inference": true,
     "no_conversation_access": true,
     "no_merge_or_auto_merge": true,
-    "note": "Do not treat worker-local tests as final review evidence. Exact-head GitHub regression must pass after recovery hardening."
+    "note": "Astra Review #1 rejected exact head 5e8c0e62 for four adversarial gaps. All four corrections are implemented; exact-head CI must pass before re-review."
   },
   "review_focus": [
-    "offline-only scaffold versus future live activation boundary",
-    "exact gpt-6-astra model-catalog enforcement",
-    "zero-extra-spend allowance and absence of paid API fallback",
-    "host-local auth metadata boundary and no repository credential storage",
-    "exact repository/PR/base SHA/candidate SHA/CI digest binding",
-    "structured verdict validation and secret redaction before persistence",
+    "complete immutable expected snapshot binding for task/repository/PR/base/candidate/context/changed-files/complete CI set",
+    "verdict reviewed_sha and review_snapshot_digest binding",
+    "complete credential block/key redaction and exact auth metadata allowlist",
+    "strict nonblank finding validation before sanitization",
+    "status-specific schema/runtime alignment including BLOCKED reason",
+    "idempotency scoped to canonical review identity plus result content with explicit conflict handling",
     "bounded rejection-to-correction package",
-    "idempotent approval/rejection persistence",
     "self-hosted Windows reviewer workflow disabled by default",
-    "no access to existing ChatGPT conversations or memory",
-    "no local inference, cleanup mutation, merge, or auto-merge"
+    "zero-extra-spend, no paid fallback, no live authorization, no local inference, no conversation access, no merge/auto-merge"
   ],
   "known_limitations": [
     "TASK-0003 does not implement or enable live Sign in with ChatGPT authorization or live reviewer inference. That activation remains a separate post-approval task requiring one-time user interaction.",
     "The current GitHub App used by the autonomous controller cannot push workflow-file changes, so this candidate required trusted recovery promotion through the GitHub connector. This is recorded rather than silently weakening repository permissions."
-  ]
+  ],
+  "astra_review_01": {
+    "reviewer_model": "gpt-6-astra",
+    "status": "REJECTED",
+    "reviewed_head": "5e8c0e62b5427255f4c3d2ca3c665196b9e372bd",
+    "findings": [
+      {
+        "id": "TASK-0003-R1-01",
+        "severity": "P1",
+        "issue": "Evidence and verdict identity were not fully bound.",
+        "correction": "Compare the complete request to an independently supplied immutable snapshot; bind verdict to candidate SHA and canonical snapshot digest; test every identity field plus missing/extra changed files and CI evidence."
+      },
+      {
+        "id": "TASK-0003-R1-02",
+        "severity": "P1",
+        "issue": "Credential sanitization and authorization metadata separation were incomplete.",
+        "correction": "Redact complete credential blocks and secret-bearing keys; enforce strict host-local authorization metadata allowlist; adversarially test multiline blocks, token keys, nested refresh tokens, private keys and PAT-like strings."
+      },
+      {
+        "id": "TASK-0003-R1-03",
+        "severity": "P2",
+        "issue": "Malformed finding fields were accepted and BLOCKED runtime output conflicted with the published schema.",
+        "correction": "Require nonblank strings and criteria before sanitization; publish status-specific schema including blocked reason; verify all emitted result classes against runtime/schema contract."
+      },
+      {
+        "id": "TASK-0003-R1-04",
+        "severity": "P2",
+        "issue": "Idempotency key conflated distinct review identities.",
+        "correction": "Derive identity from canonical immutable snapshot and result digest; exact repeat is DUPLICATE_NOOP; conflicting result under one identity is explicit CONFLICT_BLOCKED; distinct repository/PR identities do not collide."
+      }
+    ]
+  }
 }
