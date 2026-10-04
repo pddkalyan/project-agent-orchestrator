@@ -1,0 +1,31 @@
+name: ChatGPT Plan Reviewer
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/chatgpt_plan_reviewer.yml"
+      - "scripts/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_*.py"
+      - "reviewer/**"
+
+jobs:
+  review:
+    runs-on: [self-hosted]
+    if: false  # Disabled/fails closed until host-local ChatGPT plan auth profile is configured.
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Reviewer Bridge Check
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Executing ChatGPT plan reviewer bridge (offline scaffold)"
+          python scripts/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py
