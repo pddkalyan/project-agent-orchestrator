@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "run_id": "20261004_0004_TASK_0003_BOOTSTRAP",
+  "run_id": "20261004_0006_TASK_0003_RECOVERY",
   "phase": "ZERO_COST_ASTRA_REVIEWER_BRIDGE",
-  "status": "TASK_0002_APPROVED_MERGED_TASK_0003_PREPARING",
+  "status": "TASK_0003_CANDIDATE_RECOVERED_HARDENED_PENDING_EXACT_HEAD_REGRESSION",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",
@@ -37,14 +37,21 @@
     "future_cleanup_policy": "AUDIT_ONLY_UNLESS_SEPARATELY_APPROVED"
   },
   "task_0003": {
-    "objective": "zero-cost ChatGPT-plan Astra reviewer bridge",
-    "status": "PREPARING",
+    "objective": "zero-cost ChatGPT-plan Astra reviewer bridge scaffold",
+    "status": "CANDIDATE_RECOVERED_HARDENED_PENDING_EXACT_HEAD_REGRESSION",
     "issue_number": 3,
+    "source_worker_run_id": 37201144071,
+    "failed_controller_run_id": 37201480700,
+    "promotion_recovery_reason": "GitHub App lacked workflow-file push permission; exact worker bundle was recovered to a dedicated review branch via trusted connector.",
     "paid_api_allowed": false,
     "chatgpt_plan_usage_only": true,
     "automatic_credit_use_allowed": false,
+    "live_authorization_enabled": false,
+    "live_openai_calls_performed": false,
     "local_inference": false,
+    "conversation_access": false,
     "initial_runtime": "SELF_HOSTED_WINDOWS_REVIEWER_BRIDGE",
-    "one_time_user_oauth_required": true
+    "one_time_user_oauth_required": true,
+    "deterministic_tests_expected": 25
   }
 }
