@@ -32,8 +32,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          HELPER="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          HELPER_REPO="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          TRUSTED_HELPER="$RUNNER_TEMP/task0002-trusted-validator.py"
           TASK_SHA="$(git rev-parse HEAD)"
+          git show "$TASK_SHA:$HELPER_REPO" > "$TRUSTED_HELPER"
+          python -m py_compile "$TRUSTED_HELPER"
           DISPATCH_KEY=""
           SOURCE_WORKER_RUN_ID=""
 
@@ -57,7 +60,7 @@ jobs:
             TASK_ID="$(jq -er '.task_id' "$TASK_FILE")"
             RETRY_ATTEMPT="$(jq -er '.retry_attempt // 0' "$TASK_FILE")"
             [[ "$TASK_ID" == "$EXPECTED_ID" && "$RETRY_ATTEMPT" == "$EXPECTED_ATTEMPT" ]] || { echo "Task identity/attempt binding mismatch" >&2; exit 12; }
-            python "$HELPER" verify-binding "$TASK_FILE" "$TASK_FILE" "$TASK_SHA" "$TASK_ID" "$RETRY_ATTEMPT" "$DISPATCH_KEY" "$SOURCE_WORKER_RUN_ID" >/dev/null
+            python "$TRUSTED_HELPER" verify-binding "$TASK_FILE" "$TASK_FILE" "$TASK_SHA" "$TASK_ID" "$RETRY_ATTEMPT" "$DISPATCH_KEY" "$SOURCE_WORKER_RUN_ID" >/dev/null
           else
             mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r "$TASK_SHA" | grep '^tasks/queue/.*\.json$' || true)
             if [[ "${#TASK_FILES[@]}" -ne 1 ]]; then
@@ -126,13 +129,13 @@ jobs:
             --arg source_worker_run_id "${{ steps.task.outputs.source_worker_run_id }}" \
             --argjson execute "${{ steps.claim.outputs.execute }}" \
             '{task_file:$task_file,task_id:$task_id,task_sha:$task_sha,retry_attempt:$retry_attempt,event_name:$event_name,dispatch_key:$dispatch_key,source_worker_run_id:$source_worker_run_id,execute:$execute}' \
-            > worker_context.json
+            > "$RUNNER_TEMP/worker_context.json"
 
       - name: Upload immutable worker context
         uses: actions/upload-artifact@v4
         with:
           name: worker-context
-          path: worker_context.json
+          path: ${{ runner.temp }}/worker_context.json
           retention-days: 30
 
       - name: Create isolated worker branch
@@ -245,22 +248,28 @@ jobs:
 
           echo "TASK-0002 deterministic preflight passed."
 
-      - name: Stage failed candidate evidence
+      - name: Stage safe failed candidate evidence
         if: failure() && steps.claim.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p failed_worker_bundle
-          cp "worker_result_${{ steps.task.outputs.task_id }}.json" failed_worker_bundle/ 2>/dev/null || true
-          git status --porcelain -uall > failed_worker_bundle/git-status.txt || true
-          git diff --binary > "failed_worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
+          OUT="$RUNNER_TEMP/failed-worker-bundle-$GITHUB_RUN_ID"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          jq -n \
+            --arg task_id "${{ steps.task.outputs.task_id }}" \
+            --arg task_sha "${{ steps.task.outputs.task_sha }}" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg note "Worker pipeline failed; raw worker-controlled files are intentionally omitted from failure evidence." \
+            '{task_id:$task_id,task_sha:$task_sha,worker_run_id:$run_id,note:$note}' \
+            > "$OUT/failure-metadata.json"
 
-      - name: Upload failed candidate evidence
+      - name: Upload safe failed candidate evidence
         if: failure() && steps.claim.outputs.execute == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: "failed-worker-bundle-${{ steps.task.outputs.task_id }}"
-          path: failed_worker_bundle/
+          path: ${{ runner.temp }}/failed-worker-bundle-${{ github.run_id }}/
           retention-days: 30
           include-hidden-files: true
 
@@ -291,8 +300,9 @@ jobs:
             echo "$file" >> changed-files.txt
           done
 
-          HELPER="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
-          python "$HELPER" validate-staging "$PWD" "changed-files.txt" "worker_result_${{ steps.task.outputs.task_id }}.json" >/dev/null
+          TRUSTED_HELPER="$RUNNER_TEMP/task0002-trusted-validator.py"
+          test -f "$TRUSTED_HELPER"
+          python "$TRUSTED_HELPER" validate-staging "$PWD" "changed-files.txt" "worker_result_${{ steps.task.outputs.task_id }}.json" >/dev/null
 
       - name: Ensure task produced changes
         if: steps.claim.outputs.execute == 'true'
@@ -306,21 +316,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p worker_bundle
-          cp -- "worker_result_${{ steps.task.outputs.task_id }}.json" worker_bundle/
-          cp -- changed-files.txt worker_bundle/
+          BUNDLE="$RUNNER_TEMP/worker-bundle-$GITHUB_RUN_ID"
+          rm -rf "$BUNDLE"
+          mkdir -p "$BUNDLE"
+          cp -- "worker_result_${{ steps.task.outputs.task_id }}.json" "$BUNDLE/"
+          cp -- changed-files.txt "$BUNDLE/"
           while IFS= read -r file; do
             [[ -z "$file" ]] && continue
             mkdir -p "worker_bundle/$(dirname "$file")"
             cp -- "$file" "worker_bundle/$file"
           done < changed-files.txt
-          git diff --binary > "worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
+          git diff --binary > "$BUNDLE/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
 
       - name: Upload worker bundle
         if: steps.claim.outputs.execute == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: "worker-bundle-${{ steps.task.outputs.task_id }}"
-          path: worker_bundle/
+          path: ${{ runner.temp }}/worker-bundle-${{ github.run_id }}/
           retention-days: 30
           include-hidden-files: true
