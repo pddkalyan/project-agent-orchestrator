@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0003",
+  "review_status": "PENDING_ASTRA_REVIEW",
+  "worker": {
+    "agent": "worker_gemini_cli",
+    "model": "gemini-3.5-flash-lite"
+  },
+  "candidate_artifacts": [
+    ".github/workflows/chatgpt_plan_reviewer.yml",
+    ".github/workflows/chatgpt_plan_reviewer_regression.yml",
+    "reviewer/ASTRA_REVIEWER_INSTRUCTIONS.md",
+    "reviewer/PROJECT_CONTEXT.md",
+    "reviewer/REVIEW_CONTRACT.schema.json",
+    "reviewer/SAFETY_BOUNDARIES.json",
+    "reviewer/REVIEW_HISTORY.jsonl",
+    "scripts/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py",
+    "tests/test_chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py",
+    "docs/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.md",
+    "review_packets/astra_review_TASK-0003__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json",
+    "memory/CURRENT_STATE.json",
+    "memory/NEXT_ACTIONS.json",
+    "README.md",
+    "PROVENANCE_REGISTRY.jsonl"
+  ],
+  "verification_results": {
+    "offline_tests_passed": true,
+    "unit_tests_count": 11,
+    "zero_spend_verified": true,
+    "self_hosted_workflow_verified": true,
+    "no_local_inference": true
+  },
+  "review_focus": [
+    "zero-cost ChatGPT-plan review bridge scaffold",
+    "exact-model policy enforcement for gpt-6-astra",
+    "fail-closed behavior on missing auth or exhausted plan allowance",
+    "exact-SHA binding and deterministic correction packaging",
+    "self-hosted-only and disabled-by-default workflow isolation"
+  ]
+}
