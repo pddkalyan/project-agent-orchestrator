@@ -8,7 +8,7 @@
   "source_issue": 3,
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "astra_review_required": true,
-  "retry_attempt": 1,
+  "retry_attempt": 2,
   "max_controller_retries": 3,
   "official_openai_contract_verified_2026_10_04": {
     "authorization_endpoint": "https://auth.openai.com/api/accounts/authorize",
@@ -124,7 +124,7 @@
     "no conversation scraping",
     "truthful evidence"
   ],
-  "retry_reason": "TASK-0003 worker run 37192681624 produced a candidate bundle, but independent verification found the candidate is not production-ready. The controller could not push workflow files because the GitHub Actions app token lacks workflow-update permission; this infrastructure limitation is not a worker defect and the next valid bundle will be promoted through the connected GitHub reviewer path. Worker candidate defects must be corrected before promotion.",
+  "retry_reason": "TASK-0003 retry #1 run 37193302619 generated a second bundle, but independent execution still fails immediately with SyntaxError (`from __future5__ import annotations` before the valid future import). The generated request/result workflows remain placeholder/dry-run scaffolding and do not implement the required autonomous path. This is retry #2; regenerate the bridge and workflows as real production code, not stubs.",
   "orchestrator_corrections": [
     "The prior review packet falsely claimed PASS. The actual 14-test suite fails: test_02 raises NameError because stat is not imported, and test_11 produces malformed concatenated SSE JSON. On this retry, review packet worker_preflight_evidence must remain PENDING unless the exact generated tests are demonstrably passable; never pre-claim CI PASS.",
     "Replace placeholder GitHub workflows with real, executable production logic. astra_reviewer_request.yml must not contain echo-only 'verify/fetch/execute/dispatch' placeholders. astra_review_result.yml must not contain echo-only validation/APPROVED/REJECTED steps.",
@@ -147,6 +147,23 @@
     "Add tests for exact official model-catalog shape, missing Astra, usage exhaustion/unavailable, SSE delta/completed/failed/interrupted handling, state mismatch, issued-client-id mismatch, nonce mismatch, invalid signature/issuer/audience/expiry, scope missing, rotating refresh serialization, Windows protected storage abstraction, and secret redaction.",
     "Do not claim live ChatGPT authorization, live gpt-6-astra availability, or a live Astra inference. Those remain PENDING until the user completes the one-time authorization after this implementation is reviewed.",
     "README/docs must state that SIWC does not expose existing ChatGPT conversations or memory; reviewer continuity comes from repository reviewer/context files only.",
-    "Preserve spend_limit_usd=0, no paid API key or credit fallback, no local inference, audit-only PC cleanup, reviewer-only Astra, and no auto-merge."
+    "Preserve spend_limit_usd=0, no paid API key or credit fallback, no local inference, audit-only PC cleanup, reviewer-only Astra, and no auto-merge.",
+    "Retry #2: remove the invalid `from __future5__ import annotations`; the bridge and exact test file must at minimum import/compile cleanly. Do not introduce invented Python syntax.",
+    "Do not use `dry_run=True` or BRIDGE_OFFLINE_TEST to fabricate APPROVED or pretend gpt-6-astra exists in production paths. Offline behavior belongs only in injected test doubles. Production model discovery and review must require the real authorized catalog/token.",
+    "The current SecureCredentialStore is unacceptable on Windows because it stores the Fernet decryption key beside the encrypted profile. Implement Windows DPAPI protection (for example CryptProtectData/CryptUnprotectData via ctypes) so token-bearing bytes are OS/user protected. Unix fallback may use 0600 atomic storage but must not keep a plaintext secret key beside ciphertext.",
+    "get_host_id must persist the stable host ID independently even before any profile exists. A new ChatGPT account authorization on the same host must reuse the same host ID.",
+    "Authorization must include agent_name_hint, ext_agent_host_id, resource and all required scopes. New-registration callback must return and supply the issued client_id to token exchange. Validate callback state before processing code/error. Validate nonce cryptographically through ID-token claims. Reauthorization must reuse saved issued client_id.",
+    "Use PyJWT cryptographic verification with OpenAI JWKS/issuer/audience/expiry and explicit nonce check. A kid-membership check is not signature verification.",
+    "Use the official /v1/models `models` array with model `slug` and `visibility`; do not parse a generic `data/id` API-key catalog shape.",
+    "Correctly parse Responses API SSE. Only `response.output_text.delta` contributes event.delta. `response.failed` fails/blocks as appropriate. A successful review requires an observed `response.completed`; EOF/[DONE] without it is an error. The final accumulated text must parse as exactly one review JSON object.",
+    "astra_reviewer_request.yml must be fully functional. It must automatically trigger from a successful exact-head `ChatGPT Reviewer Bridge Regression` workflow_run for same-repository PRs, have a GitHub-hosted prepare_context job that resolves exactly one PR/current head and prerequisite runs, builds a bounded inert context artifact, a credential-bearing self-hosted Windows job with read-only permissions that checks out trusted main only with persist-credentials:false and runs the real bridge (no dry-run), and a separate GitHub-hosted write-capable job that dispatches only sanitized review_result JSON.",
+    "Do not install dependencies dynamically in the credential-bearing self-hosted job. Documentation must make one-time setup install requirements. The self-hosted job should verify imports/runtime and fail closed if setup is missing.",
+    "astra_review_result.yml must download/consume the result from the exact triggering reviewer run with run-id/github-token, validate schema/model/reviewed SHA/current PR head/task identity and idempotency, then implement real APPROVED and REJECTED behavior. Echo-only placeholders are forbidden.",
+    "APPROVED: create one exact-SHA machine-readable approval PR comment/marker and stop. Never merge. Duplicate result delivery for that SHA is a no-op.",
+    "REJECTED: derive exactly one queue task for the supplied task_id, enforce bounded astra_review_cycle/max_astra_review_cycles, append only the validated structured findings as corrections, commit only that task JSON to main once, and thereby retrigger Cloud Worker Task. Duplicate delivery must not create another commit.",
+    "The GitHub-hosted prepare/result jobs may have required scoped GitHub permissions; the credential-bearing self-hosted job must not have contents:write or pull-requests:write.",
+    "Regression workflow must install test dependencies only on GitHub-hosted Ubuntu and run substantive tests for OAuth state/client/nonce/signature/scope, DPAPI abstraction, refresh rotation, catalog parsing, SSE completion, secret non-disclosure, workflow trust boundaries, exact-SHA gating, result-consumer APPROVED/REJECTED/idempotency/ceiling. Do not claim PASS in the review packet before GitHub CI actually passes.",
+    "Review packet worker_preflight_evidence must be PENDING after generation, with exact expected test count if known. It must explicitly say no live OAuth/Astra inference has occurred.",
+    "Keep the production request/result workflows disabled from paid fallback: no OPENAI_API_KEY, no credits, no alternate model pretending to be Astra."
   ]
 }
