@@ -137,6 +137,71 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $newReport)) { throw "New OutputPath failed" }
 
           Write-Host "TASK-0001 deterministic preflight passed."
+      - name: TASK-0002 autonomous controller deterministic preflight
+        if: steps.task.outputs.task_id == 'TASK-0002'
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKFLOW=".github/workflows/autonomous_controller.yml"
+          SCRIPT="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          TEST="tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          PACKET="review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json"
+
+          test -f "$WORKFLOW"
+          test -f "$SCRIPT"
+          test -f "$TEST"
+          test -f "$PACKET"
+
+          python -m unittest "$TEST"
+
+          grep -q 'workflow_run:' "$WORKFLOW"
+          grep -q 'Cloud Worker Task' "$WORKFLOW"
+          grep -q 'contents: write' "$WORKFLOW"
+          grep -q 'pull-requests: write' "$WORKFLOW"
+
+          if grep -Eiq 'gh[[:space:]]+pr[[:space:]]+merge|enable[_ -]?auto[_ -]?merge|merge[_ -]?pull[_ -]?request' "$WORKFLOW" "$SCRIPT"; then
+            echo "TASK-0002 must never auto-merge pull requests." >&2
+            exit 31
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          packet = json.loads(Path("review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json").read_text())
+          state = json.loads(Path("memory/CURRENT_STATE.json").read_text())
+          assert packet.get("review_status") == "PENDING_ASTRA_REVIEW"
+          assert state.get("spend_limit_usd") == 0
+          assert state.get("astra_role") == "reviewer"
+          assert state.get("local_video_inference") is False
+          PY
+
+          echo "TASK-0002 deterministic preflight passed."
+
+      - name: Stage failed TASK-0002 preflight evidence
+        if: failure() && steps.task.outputs.task_id == 'TASK-0002'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p failed_worker_bundle
+          cp "worker_result_${{ steps.task.outputs.task_id }}.json" failed_worker_bundle/ 2>/dev/null || true
+          git status --porcelain -uall > failed_worker_bundle/git-status.txt || true
+          git diff --binary > "failed_worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            if [[ -f "$path" ]]; then
+              mkdir -p "failed_worker_bundle/$(dirname "$path")"
+              cp "$path" "failed_worker_bundle/$path"
+            fi
+          done < <(git status --porcelain -uall | awk '{print $2}')
+
+      - name: Upload failed TASK-0002 preflight evidence
+        if: failure() && steps.task.outputs.task_id == 'TASK-0002'
+        uses: actions/upload-artifact@v4
+        with:
+          name: "failed-worker-bundle-${{ steps.task.outputs.task_id }}"
+          path: failed_worker_bundle/
+          retention-days: 30
+
       - name: Stage failed preflight evidence
         if: failure() && steps.task.outputs.task_id == 'TASK-0001'
         shell: bash
