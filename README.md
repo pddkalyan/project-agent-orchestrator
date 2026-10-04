@@ -24,7 +24,24 @@ TASK-0002 adds a bounded controller around `Cloud Worker Task`:
 
 `repository_dispatch` is used deliberately for controller-created retries/regressions so the system does not depend on a `GITHUB_TOKEN` push creating a second workflow run. Immutable `worker-context` metadata, dispatch/execution receipt refs, and pre-copy symlink checks prevent task drift, repeated logical execution, and staging-time dereference of external files.
 
+## Zero-cost Astra reviewer bridge
+TASK-0003 is building the next layer: a disabled-by-default reviewer bridge intended to remove the manual copy/paste review step without adding separately billed API usage.
+
+The TASK-0003 candidate currently provides only an **offline scaffold**:
+
+- self-hosted Windows reviewer workflow;
+- exact `gpt-6-astra` catalog policy;
+- zero-extra-spend allowance checks;
+- exact repository/PR/SHA/CI-evidence binding;
+- structured APPROVED/REJECTED contract;
+- bounded rejection-to-correction packaging;
+- idempotent result persistence decisions;
+- secret redaction before persistence;
+- explicit prohibition on ChatGPT conversation scraping, local inference, merge, and auto-merge.
+
+Live Sign in with ChatGPT authorization and live reviewer inference are **not enabled in TASK-0003**. After the scaffold passes deterministic regression and Astra review, a separate activation task will handle the one-time user authorization and real account model-catalog verification.
+
 ## Current phase
-TASK-0001 is approved and merged. TASK-0002 was rejected by Astra on four orchestration-safety findings; corrections are implemented on draft PR #2 and are awaiting exact-head regression before Astra re-review. Paid spend remains disabled.
+TASK-0001 and TASK-0002 are approved and merged. TASK-0003 worker generation succeeded, but automatic promotion was blocked by the GitHub App's workflow-file push permission. The exact worker bundle was recovered to a dedicated review branch and recovery-hardened. It is awaiting exact-head regression and Astra review. Paid spend remains disabled.
 
 See `AGENTS.md` for hard rules and `memory/` for current project state.
