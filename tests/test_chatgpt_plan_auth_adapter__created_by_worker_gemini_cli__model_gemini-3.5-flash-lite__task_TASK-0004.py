@@ -401,5 +401,81 @@ class TestTask0004(unittest.TestCase):
         self.assertNotIn('"client_secret"', text)
 
 
+    def test_37_refresh_may_retain_existing_id_token_and_scopes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+            storage.save_profile_atomic({
+                "client_id":"oaiapp_x",
+                "refresh_token":"r0",
+                "access_token":"a0",
+                "id_token":"retained_id",
+                "scopes":["offline_access","chatgpt.tokens.use.direct"],
+            })
+            transport = FakeTransport()
+            transport.refresh_payload = {
+                "access_token":"a1",
+                "refresh_token":"r1",
+                "expires_in":3600,
+            }
+            self.assertEqual(adapter.refresh_profile(storage, transport)["status"], "REFRESHED")
+            profile = storage.load_profile()
+            self.assertEqual(profile["id_token"], "retained_id")
+            self.assertIn("chatgpt.tokens.use.direct", profile["scopes"])
+
+    def test_38_needs_refresh_obeys_expiry_and_earliest_refresh(self):
+        now = 1000
+        self.assertTrue(adapter.needs_refresh({"expires_at": 1050}, now=now))
+        self.assertFalse(adapter.needs_refresh({"expires_at": 5000}, now=now))
+        self.assertFalse(adapter.needs_refresh({"expires_at": 1050, "earliest_refresh_at": 2000}, now=now))
+
+    def test_39_ensure_fresh_profile_uses_refresh_when_expired(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+            storage.save_profile_atomic({
+                "client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0",
+                "scopes":["offline_access","chatgpt.tokens.use.direct"],"expires_at":0
+            })
+            transport = FakeTransport()
+            transport.refresh_payload = {"access_token":"a1","refresh_token":"r1","expires_in":3600}
+            profile, status = adapter.ensure_fresh_profile(storage, transport)
+            self.assertEqual(status, "PROFILE_READY")
+            self.assertEqual(profile["access_token"], "a1")
+
+    def test_40_run_streamed_review_uses_bearer_and_completed_stream(self):
+        class StreamTransport:
+            def __init__(self):
+                self.headers = None
+                self.payload = None
+            def stream_sse(self, url, payload, headers):
+                self.headers = headers
+                self.payload = payload
+                yield {"type":"response.output_text.delta","delta":"{\"status\":\"APPROVED\"}"}
+                yield {"type":"response.completed"}
+        t=StreamTransport()
+        result=adapter.run_streamed_review(
+            profile={"access_token":"ACCESS_SENTINEL"},
+            transport=t,
+            review_prompt="Review.",
+            review_context={"task_id":"TASK-0004"},
+        )
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(t.payload["store"], False)
+        self.assertEqual(t.payload["stream"], True)
+        self.assertEqual(t.headers["Authorization"], "Bearer ACCESS_SENTINEL")
+
+    def test_41_run_streamed_review_transport_failure_is_blocked_not_verdict(self):
+        class BadTransport:
+            def stream_sse(self, *args, **kwargs):
+                raise RuntimeError("network timeout")
+        result=adapter.run_streamed_review(
+            profile={"access_token":"x"},
+            transport=BadTransport(),
+            review_prompt="Review.",
+            review_context={"task_id":"TASK-0004"},
+        )
+        self.assertEqual(result["status"], adapter.BLOCKED_NETWORK_ERROR)
+        self.assertNotIn(result["status"], ("APPROVED","REJECTED"))
+
+
 if __name__ == "__main__":
     unittest.main()
