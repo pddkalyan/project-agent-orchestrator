@@ -17,6 +17,6 @@ Current hard boundaries:
 
 The reviewer bridge does **not** access, scrape, export, or claim access to the user's existing ChatGPT conversations or ChatGPT memory. Continuity is supplied only by versioned repository reviewer context, safety rules, review packets, and review history.
 
-## TASK-0003 scope
+## TASK-0003 & TASK-0004 scope
 
-TASK-0003 is an offline, disabled-by-default scaffold. A future post-review setup may connect a host-local user-authorized ChatGPT-plan session, but no live authorization, token storage implementation, or live reviewer request is enabled in this candidate.
+TASK-0003 provides the reviewer bridge scaffold. TASK-0004 implements the live Sign in with ChatGPT adapter and one-time Windows authorization CLI (`chatgpt_plan_auth_cli`), keeping CI offline and adhering strictly to zero extra spend.

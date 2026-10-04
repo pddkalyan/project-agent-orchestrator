@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "component": "ChatGPT Plan Reviewer Bridge",
+  "component": "ChatGPT Plan Reviewer Bridge & Live Adapter",
   "live_authorization_enabled": false,
   "boundaries": {
     "max_extra_spend_usd": 0,

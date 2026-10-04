@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0004",
+  "review_status": "PENDING_ASTRA_REVIEW",
+  "worker": {
+    "agent": "worker_gemini_cli",
+    "model": "gemini-3.5-flash-lite"
+  },
+  "candidate_artifacts": [
+    "scripts/chatgpt_plan_auth_adapter__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py",
+    "scripts/chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py",
+    "tests/test_chatgpt_plan_auth_adapter__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py",
+    "docs/chatgpt_plan_auth_activation__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.md",
+    "review_packets/astra_review_TASK-0004__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json",
+    "reviewer/PROJECT_CONTEXT.md",
+    "reviewer/SAFETY_BOUNDARIES.json",
+    "memory/CURRENT_STATE.json",
+    "memory/NEXT_ACTIONS.json",
+    "README.md",
+    "PROVENANCE_REGISTRY.jsonl"
+  ],
+  "verification_results": {
+    "status": "PENDING_EXACT_HEAD_CI",
+    "deterministic_tests_expected": 10,
+    "live_authorization_enabled": false,
+    "live_openai_calls_performed": false,
+    "zero_extra_spend_boundary": true,
+    "self_hosted_reviewer_only": true,
+    "no_local_inference": true,
+    "no_conversation_access": true,
+    "no_merge_or_auto_merge": true
+  },
+  "review_focus": [
+    "stable host identity storage and reuse across sign-ins",
+    "PKCE S256 challenge/verifier generation and state/nonce binding",
+    "strict ID token verification (issuer, audience, nonce, expiry, signature)",
+    "scope enforcement requiring chatgpt.tokens.use.direct and offline_access",
+    "atomic refresh rotation and protected storage persistence",
+    "exact gpt-6-astra model catalog enforcement",
+    "stateless Responses API request builder enforcing store=false, stream=true",
+    "error status mapping for 401, 403, 429, 5xx and network failures",
+    "seamless integration into TASK-0003 immutable review evaluation gate",
+    "credential-free status output and aggressive secret sanitization"
+  ],
+  "known_limitations": [
+    "TASK-0004 provides the live adapter and CLI implementation; live browser authentication is performed post-merge by the user on the Windows self-hosted reviewer machine."
+  ]
+}
