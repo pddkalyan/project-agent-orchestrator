@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "component": "ChatGPT Plan Reviewer Bridge",
+  "live_authorization_enabled": false,
+  "boundaries": {
+    "max_extra_spend_usd": 0,
+    "paid_api_billing_allowed": false,
+    "api_key_billing_allowed": false,
+    "automatic_credit_purchases": false,
+    "silent_paid_fallback": false,
+    "local_ai_inference": false,
+    "pc_cleanup_mode": "AUDIT_ONLY",
+    "reviewer_role": "REVIEW_ONLY",
+    "auto_merge_allowed": false,
+    "merge_allowed": false,
+    "conversation_scraping": false,
+    "conversation_memory_access": false,
+    "authentication_storage": "HOST_LOCAL_ONLY_OUTSIDE_REPOSITORY",
+    "runner_policy": "SELF_HOSTED_WINDOWS_REVIEWER_ONLY",
+    "required_reviewer_model": "gpt-6-astra"
+  }
+}

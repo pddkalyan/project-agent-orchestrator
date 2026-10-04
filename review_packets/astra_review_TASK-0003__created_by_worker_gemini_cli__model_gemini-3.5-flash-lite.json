@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0003",
+  "review_status": "PENDING_ASTRA_REVIEW",
+  "worker": {
+    "agent": "worker_gemini_cli",
+    "model": "gemini-3.5-flash-lite"
+  },
+  "recovery": {
+    "performed_by": "bootstrap_chatgpt",
+    "model": "gpt-5.6-sol",
+    "source_worker_run_id": 37201144071,
+    "source_worker_bundle_artifact_id": 11303161357,
+    "source_worker_bundle_digest": "sha256:2bc8182aa6cc25643306ee2ab62d140c8047b148fdcfd1406efdbd4c24b863bf",
+    "failed_controller_run_id": 37201480700,
+    "reason": "Worker candidate generation succeeded. Automated promotion failed only because the GitHub App token could not push commits containing .github/workflows files without workflow-file permission. The candidate was reconstructed on a review branch from the exact worker bundle, then recovery-hardened before the Astra gate."
+  },
+  "candidate_artifacts": [
+    ".github/workflows/chatgpt_plan_reviewer.yml",
+    ".github/workflows/chatgpt_plan_reviewer_regression.yml",
+    "reviewer/ASTRA_REVIEWER_INSTRUCTIONS.md",
+    "reviewer/PROJECT_CONTEXT.md",
+    "reviewer/REVIEW_CONTRACT.schema.json",
+    "reviewer/SAFETY_BOUNDARIES.json",
+    "reviewer/REVIEW_HISTORY.jsonl",
+    "scripts/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py",
+    "tests/test_chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py",
+    "docs/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.md",
+    "review_packets/astra_review_TASK-0003__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json",
+    "memory/CURRENT_STATE.json",
+    "memory/NEXT_ACTIONS.json",
+    "README.md",
+    "PROVENANCE_REGISTRY.jsonl"
+  ],
+  "verification_results": {
+    "status": "PENDING_EXACT_HEAD_CI_AFTER_ASTRA_R2_CORRECTIONS",
+    "deterministic_tests_expected": 68,
+    "live_authorization_enabled": false,
+    "live_openai_calls_performed": false,
+    "zero_extra_spend_boundary": true,
+    "self_hosted_reviewer_only": true,
+    "no_local_inference": true,
+    "no_conversation_access": true,
+    "no_merge_or_auto_merge": true,
+    "note": "Astra Review #2 rejected exact head eed83559 on three remaining adversarial gaps. All three corrections are implemented; exact-head CI must pass before re-review."
+  },
+  "review_focus": [
+    "credential block scalar variants including |2, |2-, |-2, >2, >+2 and comments leave no secret sentinel in results/corrections",
+    "explicitly supplied implementation_guidance null/number/object/blank/whitespace fails BLOCKED_INVALID_VERDICT while absence/nonblank string remains valid",
+    "persistence gate directly validates against the published REVIEW_CONTRACT schema",
+    "valid approval, rejection, retry-limit and blocked outputs pass both schema and runtime semantic validation",
+    "malformed findings, correction packages, prohibited properties, invalid types and status payloads fail and cannot reach PERSIST_ONCE",
+    "result_digest/idempotency integrity is recomputed before persistence and malformed existing records are rejected",
+    "complete immutable snapshot/verdict binding and full-identity idempotency from Review #1 remain intact",
+    "self-hosted Windows reviewer disabled by default; zero spend; no live authorization; no local inference; no conversation access; no merge/auto-merge"
+  ],
+  "known_limitations": [
+    "TASK-0003 does not implement or enable live Sign in with ChatGPT authorization or live reviewer inference. That activation remains a separate post-approval task requiring one-time user interaction.",
+    "The current GitHub App used by the autonomous controller cannot push workflow-file changes, so this candidate required trusted recovery promotion through the GitHub connector. This is recorded rather than silently weakening repository permissions."
+  ],
+  "astra_review_01": {
+    "reviewer_model": "gpt-6-astra",
+    "status": "REJECTED",
+    "reviewed_head": "5e8c0e62b5427255f4c3d2ca3c665196b9e372bd",
+    "findings": [
+      {
+        "id": "TASK-0003-R1-01",
+        "severity": "P1",
+        "issue": "Evidence and verdict identity were not fully bound.",
+        "correction": "Compare the complete request to an independently supplied immutable snapshot; bind verdict to candidate SHA and canonical snapshot digest; test every identity field plus missing/extra changed files and CI evidence."
+      },
+      {
+        "id": "TASK-0003-R1-02",
+        "severity": "P1",
+        "issue": "Credential sanitization and authorization metadata separation were incomplete.",
+        "correction": "Redact complete credential blocks and secret-bearing keys; enforce strict host-local authorization metadata allowlist; adversarially test multiline blocks, token keys, nested refresh tokens, private keys and PAT-like strings."
+      },
+      {
+        "id": "TASK-0003-R1-03",
+        "severity": "P2",
+        "issue": "Malformed finding fields were accepted and BLOCKED runtime output conflicted with the published schema.",
+        "correction": "Require nonblank strings and criteria before sanitization; publish status-specific schema including blocked reason; verify all emitted result classes against runtime/schema contract."
+      },
+      {
+        "id": "TASK-0003-R1-04",
+        "severity": "P2",
+        "issue": "Idempotency key conflated distinct review identities.",
+        "correction": "Derive identity from canonical immutable snapshot and result digest; exact repeat is DUPLICATE_NOOP; conflicting result under one identity is explicit CONFLICT_BLOCKED; distinct repository/PR identities do not collide."
+      }
+    ]
+  },
+  "astra_review_02": {
+    "reviewer_model": "gpt-6-astra",
+    "status": "REJECTED",
+    "reviewed_head": "eed83559ed86390946fb8eb7dfbccaca4680a431",
+    "resolved_from_review_01": [
+      "TASK-0003-R1-01",
+      "TASK-0003-R1-04"
+    ],
+    "findings": [
+      {
+        "id": "TASK-0003-R2-01",
+        "severity": "P1",
+        "issue": "Credential block variants with explicit indentation indicators could leak into correction data.",
+        "correction": "Treat any credential-bearing YAML block scalar beginning with | or > conservatively, independent of chomping/indentation indicator ordering; add end-to-end variant/comment tests."
+      },
+      {
+        "id": "TASK-0003-R2-02",
+        "severity": "P2",
+        "issue": "Explicit null implementation_guidance was treated like an absent field.",
+        "correction": "Distinguish field absence from supplied values; any supplied guidance must be a nonblank string before sanitization."
+      },
+      {
+        "id": "TASK-0003-R2-03",
+        "severity": "P2",
+        "issue": "Persistence validator did not fully enforce the published JSON Schema.",
+        "correction": "Validate emitted/persisted results directly against REVIEW_CONTRACT.schema.json plus semantic digest/invariant checks; reject malformed incoming and existing records before persistence."
+      }
+    ]
+  }
+}
