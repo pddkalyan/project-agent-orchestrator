@@ -10,7 +10,8 @@ on:
       - worker_task_retry
 
 permissions:
-  contents: read
+  actions: read
+  contents: write
 
 jobs:
   worker:
@@ -19,38 +20,123 @@ jobs:
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
     steps:
-      - name: Checkout triggering commit
+      - name: Checkout bound task revision
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.task_sha || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Locate task
+      - name: Locate and verify immutable task binding
         id: task
         shell: bash
         run: |
           set -euo pipefail
+          HELPER="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          TASK_SHA="$(git rev-parse HEAD)"
+          DISPATCH_KEY=""
+          SOURCE_WORKER_RUN_ID=""
+
           if [[ "$GITHUB_EVENT_NAME" == "repository_dispatch" ]]; then
             TASK_FILE="$(jq -r '.client_payload.task_file // empty' "$GITHUB_EVENT_PATH")"
-            if [[ ! "$TASK_FILE" =~ ^tasks/queue/[A-Za-z0-9._-]+\.json$ ]]; then
-              echo "Invalid repository_dispatch task_file: $TASK_FILE" >&2
-              exit 12
-            fi
+            EXPECTED_SHA="$(jq -r '.client_payload.task_sha // empty' "$GITHUB_EVENT_PATH")"
+            EXPECTED_ID="$(jq -r '.client_payload.task_id // empty' "$GITHUB_EVENT_PATH")"
+            EXPECTED_ATTEMPT="$(jq -r '.client_payload.retry_attempt // empty' "$GITHUB_EVENT_PATH")"
+            SOURCE_WORKER_RUN_ID="$(jq -r '.client_payload.source_worker_run_id // empty' "$GITHUB_EVENT_PATH")"
+            DISPATCH_KEY="$(jq -r '.client_payload.dispatch_key // empty' "$GITHUB_EVENT_PATH")"
+
+            [[ "$TASK_FILE" =~ ^tasks/queue/[A-Za-z0-9._-]+\.json$ ]] || { echo "Invalid dispatch task_file" >&2; exit 12; }
+            [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid dispatch task_sha" >&2; exit 12; }
+            [[ "$EXPECTED_ID" =~ ^TASK-[0-9]+$ ]] || { echo "Invalid dispatch task_id" >&2; exit 12; }
+            [[ "$EXPECTED_ATTEMPT" =~ ^[0-9]+$ ]] || { echo "Invalid dispatch retry_attempt" >&2; exit 12; }
+            [[ "$SOURCE_WORKER_RUN_ID" =~ ^[0-9]+$ ]] || { echo "Invalid dispatch source_worker_run_id" >&2; exit 12; }
+            [[ "$DISPATCH_KEY" =~ ^[0-9a-f]{32}$ ]] || { echo "Invalid dispatch_key" >&2; exit 12; }
+            [[ "$TASK_SHA" == "$EXPECTED_SHA" ]] || { echo "Checked-out SHA does not match immutable dispatch binding" >&2; exit 12; }
             test -f "$TASK_FILE"
+
+            TASK_ID="$(jq -er '.task_id' "$TASK_FILE")"
+            RETRY_ATTEMPT="$(jq -er '.retry_attempt // 0' "$TASK_FILE")"
+            [[ "$TASK_ID" == "$EXPECTED_ID" && "$RETRY_ATTEMPT" == "$EXPECTED_ATTEMPT" ]] || { echo "Task identity/attempt binding mismatch" >&2; exit 12; }
+            python "$HELPER" verify-binding "$TASK_FILE" "$TASK_FILE" "$TASK_SHA" "$TASK_ID" "$RETRY_ATTEMPT" "$DISPATCH_KEY" "$SOURCE_WORKER_RUN_ID" >/dev/null
           else
-            mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^tasks/queue/.*\.json$' || true)
+            mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r "$TASK_SHA" | grep '^tasks/queue/.*\.json$' || true)
             if [[ "${#TASK_FILES[@]}" -ne 1 ]]; then
               echo "Expected exactly one queue task in triggering commit, found ${#TASK_FILES[@]}" >&2
               exit 13
             fi
             TASK_FILE="${TASK_FILES[0]}"
+            TASK_ID="$(jq -er '.task_id' "$TASK_FILE")"
+            RETRY_ATTEMPT="$(jq -er '.retry_attempt // 0' "$TASK_FILE")"
           fi
-          TASK_ID="$(jq -r '.task_id' "$TASK_FILE")"
+
           WORKER_MODEL="$(jq -r '.preferred_worker_model // "gemini-3.5-flash-lite"' "$TASK_FILE")"
           echo "task_file=$TASK_FILE" >> "$GITHUB_OUTPUT"
           echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
           echo "worker_model=$WORKER_MODEL" >> "$GITHUB_OUTPUT"
+          echo "task_sha=$TASK_SHA" >> "$GITHUB_OUTPUT"
+          echo "retry_attempt=$RETRY_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "dispatch_key=$DISPATCH_KEY" >> "$GITHUB_OUTPUT"
+          echo "source_worker_run_id=$SOURCE_WORKER_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Claim logical dispatched worker execution
+        id: claim
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != "repository_dispatch" ]]; then
+            echo "execute=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          KEY="${{ steps.task.outputs.dispatch_key }}"
+          TASK_SHA="${{ steps.task.outputs.task_sha }}"
+          REF="refs/heads/worker-execution-receipts/$KEY"
+          API_REF="heads/worker-execution-receipts/$KEY"
+
+          if EXISTING="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/$API_REF" 2>/dev/null)"; then
+            SHA="$(jq -r '.object.sha' <<<"$EXISTING")"
+            [[ "$SHA" == "$TASK_SHA" ]] || { echo "Execution receipt points at unexpected SHA" >&2; exit 14; }
+            echo "execute=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="$REF" -f sha="$TASK_SHA" >/dev/null 2>&1; then
+            echo "execute=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          EXISTING="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/$API_REF")"
+          SHA="$(jq -r '.object.sha' <<<"$EXISTING")"
+          [[ "$SHA" == "$TASK_SHA" ]] || { echo "Concurrent execution receipt mismatch" >&2; exit 14; }
+          echo "execute=false" >> "$GITHUB_OUTPUT"
+
+      - name: Record immutable worker context
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg task_file "${{ steps.task.outputs.task_file }}" \
+            --arg task_id "${{ steps.task.outputs.task_id }}" \
+            --arg task_sha "${{ steps.task.outputs.task_sha }}" \
+            --argjson retry_attempt "${{ steps.task.outputs.retry_attempt }}" \
+            --arg event_name "$GITHUB_EVENT_NAME" \
+            --arg dispatch_key "${{ steps.task.outputs.dispatch_key }}" \
+            --arg source_worker_run_id "${{ steps.task.outputs.source_worker_run_id }}" \
+            --argjson execute "${{ steps.claim.outputs.execute }}" \
+            '{task_file:$task_file,task_id:$task_id,task_sha:$task_sha,retry_attempt:$retry_attempt,event_name:$event_name,dispatch_key:$dispatch_key,source_worker_run_id:$source_worker_run_id,execute:$execute}' \
+            > worker_context.json
+
+      - name: Upload immutable worker context
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-context
+          path: worker_context.json
+          retention-days: 30
 
       - name: Create isolated worker branch
+        if: steps.claim.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -59,9 +145,11 @@ jobs:
           echo "WORKER_BRANCH=$BRANCH" >> "$GITHUB_ENV"
 
       - name: Install Gemini CLI
+        if: steps.claim.outputs.execute == 'true'
         run: npm install --global @google/gemini-cli
 
       - name: Run free cloud worker
+        if: steps.claim.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -71,6 +159,7 @@ jobs:
             > "worker_result_${{ steps.task.outputs.task_id }}.json"
 
       - name: TASK-0001 deterministic preflight
+        if: steps.claim.outputs.execute == 'true'
         if: steps.task.outputs.task_id == 'TASK-0001'
         shell: pwsh
         run: |
@@ -118,6 +207,7 @@ jobs:
           Write-Host "TASK-0001 deterministic preflight passed."
 
       - name: TASK-0002 autonomous controller deterministic preflight
+        if: steps.claim.outputs.execute == 'true'
         if: steps.task.outputs.task_id == 'TASK-0002'
         shell: bash
         run: |
@@ -158,7 +248,7 @@ jobs:
           echo "TASK-0002 deterministic preflight passed."
 
       - name: Stage failed candidate evidence
-        if: failure()
+        if: failure() && steps.claim.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -166,16 +256,9 @@ jobs:
           cp "worker_result_${{ steps.task.outputs.task_id }}.json" failed_worker_bundle/ 2>/dev/null || true
           git status --porcelain -uall > failed_worker_bundle/git-status.txt || true
           git diff --binary > "failed_worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
-          while IFS= read -r path; do
-            [[ -z "$path" ]] && continue
-            if [[ -f "$path" ]]; then
-              mkdir -p "failed_worker_bundle/$(dirname "$path")"
-              cp "$path" "failed_worker_bundle/$path"
-            fi
-          done < <(git status --porcelain -uall | awk '{print $2}')
 
       - name: Upload failed candidate evidence
-        if: failure()
+        if: failure() && steps.claim.outputs.execute == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: "failed-worker-bundle-${{ steps.task.outputs.task_id }}"
@@ -184,6 +267,7 @@ jobs:
           include-hidden-files: true
 
       - name: Validate worker file boundaries
+        if: steps.claim.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -192,7 +276,7 @@ jobs:
           mapfile -t CHANGED < <(git status --porcelain -uall | awk '{print $2}')
           : > changed-files.txt
           for file in "${CHANGED[@]}"; do
-            if [[ "$file" == "$TASK_FILE" || "$file" == worker_result_*.json || "$file" == "changed-files.txt" ]]; then
+            if [[ "$file" == "$TASK_FILE" || "$file" == worker_result_*.json || "$file" == "changed-files.txt" || "$file" == "worker_context.json" ]]; then
               continue
             fi
             ok=0
@@ -209,27 +293,33 @@ jobs:
             echo "$file" >> changed-files.txt
           done
 
+          HELPER="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          python "$HELPER" validate-staging "$PWD" "changed-files.txt" "worker_result_${{ steps.task.outputs.task_id }}.json" >/dev/null
+
       - name: Ensure task produced changes
+        if: steps.claim.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
           test -s changed-files.txt
 
       - name: Stage worker bundle
+        if: steps.claim.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p worker_bundle
-          cp "worker_result_${{ steps.task.outputs.task_id }}.json" worker_bundle/
-          cp changed-files.txt worker_bundle/
+          cp -- "worker_result_${{ steps.task.outputs.task_id }}.json" worker_bundle/
+          cp -- changed-files.txt worker_bundle/
           while IFS= read -r file; do
             [[ -z "$file" ]] && continue
             mkdir -p "worker_bundle/$(dirname "$file")"
-            cp "$file" "worker_bundle/$file"
+            cp -- "$file" "worker_bundle/$file"
           done < changed-files.txt
           git diff --binary > "worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
 
       - name: Upload worker bundle
+        if: steps.claim.outputs.execute == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: "worker-bundle-${{ steps.task.outputs.task_id }}"
