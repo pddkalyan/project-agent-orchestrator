@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "next": [
-    "Run exact-head ChatGPT Plan Reviewer Regression on the recovered TASK-0003 review branch.",
-    "Require all offline reviewer-bridge tests and static zero-spend/self-hosted/no-merge checks to pass.",
-    "If exact-head regression passes, submit TASK-0003 to GPT-6 Astra for final review of the scaffold.",
+    "Run exact-head ChatGPT Plan Reviewer Regression after Astra Review #1 corrections and require all 51 adversarial tests to pass.",
+    "Require Autonomous Controller Regression and PC Cleanup Audit Regression to remain green on the corrected PR head.",
+    "If all exact-head checks pass, submit the corrected head to GPT-6 Astra for Review #2 against findings TASK-0003-R1-01 through R1-04.",
     "After Astra approval and merge, create a separate activation task for the one-time Continue with ChatGPT authorization and live model-catalog verification.",
-    "Do not enable live authorization, paid API fallback, auto-merge, local inference, or conversation access in TASK-0003."
+    "Do not enable live authorization, paid API fallback, auto-merge, local inference, cleanup mutation, or conversation access in TASK-0003."
   ]
 }
