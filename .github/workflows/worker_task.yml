@@ -253,16 +253,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          TRUSTED_HELPER="$RUNNER_TEMP/task0002-trusted-validator.py"
           OUT="$RUNNER_TEMP/failed-worker-bundle-$GITHUB_RUN_ID"
           rm -rf "$OUT"
-          mkdir -p "$OUT"
-          jq -n \
-            --arg task_id "${{ steps.task.outputs.task_id }}" \
-            --arg task_sha "${{ steps.task.outputs.task_sha }}" \
-            --arg run_id "$GITHUB_RUN_ID" \
-            --arg note "Worker pipeline failed; raw worker-controlled files are intentionally omitted from failure evidence." \
-            '{task_id:$task_id,task_sha:$task_sha,worker_run_id:$run_id,note:$note}' \
-            > "$OUT/failure-metadata.json"
+          python "$TRUSTED_HELPER" write-worker-failure-evidence \
+            "$OUT" \
+            "${{ steps.task.outputs.task_id }}" \
+            "${{ steps.task.outputs.task_sha }}" \
+            "$GITHUB_RUN_ID" \
+            > "$RUNNER_TEMP/failed-evidence-result.json"
+          jq -e '.valid == true' "$RUNNER_TEMP/failed-evidence-result.json" >/dev/null
 
       - name: Upload safe failed candidate evidence
         if: failure() && steps.claim.outputs.execute == 'true'
