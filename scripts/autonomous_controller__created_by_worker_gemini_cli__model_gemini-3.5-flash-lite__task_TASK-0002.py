@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import stat
 import sys
 from pathlib import Path, PurePosixPath
@@ -220,6 +221,48 @@ def validate_staging_set(root_dir: str, manifest_path: str, metadata_paths: Iter
     return {"valid": True, "files": entries, "checked": checked}
 
 
+
+def stage_worker_bundle(root_dir: str, manifest_path: str, metadata_path: str, bundle_dir: str) -> dict:
+    """Validate and copy a success bundle using this immutable trusted helper.
+
+    Validation and copy happen in one process so a worker-replaced helper in the
+    mutable checkout can never take over between those operations.
+    """
+    result = validate_staging_set(root_dir, manifest_path, [metadata_path])
+    if not result.get("valid"):
+        return result
+
+    root = Path(root_dir)
+    manifest = _repo_path(root, manifest_path)
+    metadata = _repo_path(root, metadata_path)
+    bundle = Path(bundle_dir)
+
+    if bundle.is_symlink() or bundle.exists():
+        return {"valid": False, "error": "Bundle destination must not already exist"}
+    if bundle.parent.is_symlink():
+        return {"valid": False, "error": "Bundle destination parent must not be a symlink"}
+
+    bundle.mkdir(parents=True, exist_ok=False)
+    shutil.copyfile(manifest, bundle / "changed-files.txt", follow_symlinks=False)
+    shutil.copyfile(metadata, bundle / Path(metadata_path).name, follow_symlinks=False)
+
+    for rel in result["files"]:
+        source = _repo_path(root, rel)
+        dest = _repo_path(bundle, rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, dest, follow_symlinks=False)
+
+    return {"valid": True, "files": list(result["files"]), "bundle_dir": str(bundle)}
+
+
+def context_execute_value(context_data: dict) -> str:
+    """Return true/false text for a strictly boolean execute field."""
+    value = context_data.get("execute")
+    if not isinstance(value, bool):
+        raise ValueError("execute must be boolean")
+    return "true" if value else "false"
+
+
 def validate_promotion_destination(root_dir: str, repo_path: str) -> dict:
     """Reject symlink and non-directory components before promotion copy."""
     normalized = normalize_repo_path(repo_path)
@@ -404,6 +447,15 @@ def main() -> int:
             result = validate_staging_set(sys.argv[2], sys.argv[3], sys.argv[4:])
         elif cmd == "validate-destination":
             result = validate_promotion_destination(sys.argv[2], sys.argv[3])
+        elif cmd == "stage-bundle":
+            if len(sys.argv) != 6:
+                raise ValueError("stage-bundle requires root manifest metadata bundle_dir")
+            result = stage_worker_bundle(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
+        elif cmd == "context-execute":
+            if len(sys.argv) != 3:
+                raise ValueError("context-execute requires context_json")
+            print(context_execute_value(_load_json(sys.argv[2])))
+            return 0
         elif cmd == "check-retry":
             result = check_retry_decision(_load_json(sys.argv[2]))
         elif cmd == "sanitize":
