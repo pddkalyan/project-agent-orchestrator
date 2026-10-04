@@ -21,7 +21,7 @@
   ],
   "verification_results": {
     "status": "PENDING_ASTRA_EXACT_HEAD_LOCAL_TEST",
-    "deterministic_tests_expected": 41,
+    "deterministic_tests_expected": 49,
     "exact_head_task0004_ci_available": false,
     "reason": "TASK-0004 intentionally does not modify workflow files. Existing repository regressions run on the PR head but do not execute the new TASK-0004 test module. Astra is requested to execute the offline test module locally on the exact head.",
     "live_authorization_performed": false,
@@ -34,18 +34,19 @@
     "no_merge_or_auto_merge": true
   },
   "review_focus": [
-    "current OpenAI SIWC authorize/token/JWKS endpoints and dynamic_agent_client registration semantics",
-    "stable urn:uuid ext_agent_host_id reuse and exact 127.0.0.1 /auth/callback loopback handling",
-    "PKCE S256, fresh state/nonce, callback-issued client_id binding and returning-account client identity checks",
-    "mandatory cryptographic ID-token signature verification plus exact issuer/audience/nonce/expiry/subject validation",
-    "scope enforcement requiring chatgpt.tokens.use.direct and offline_access",
-    "DPAPI-protected host-local credential envelope with no plaintext tokens in repository or status output",
-    "serialized atomic rotating refresh-token replacement and refresh persistence failure behavior",
-    "account-specific model catalog parsing and exact gpt-6-astra-only enforcement",
-    "stateless Responses request builder with store=false, stream=true and rejection of unsupported/stateful fields",
-    "stream completion/error mapping without APPROVED/REJECTED on infrastructure/auth/allowance failure",
-    "credential-free live handoff into TASK-0003 exact snapshot/verdict/schema/idempotency boundary",
-    "zero-spend/no-api-key/no-paid-fallback/no-conversation/no-local-inference/no-merge boundaries"
+    "current OpenAI SIWC endpoint and dynamic_agent_client registration semantics",
+    "callback-issued client_id persistence before token exchange and reuse for returning sign-in",
+    "stable urn:uuid ext_agent_host_id and exact 127.0.0.1 /auth/callback loopback URI",
+    "PKCE S256, fresh state/nonce, strict callback state/client binding",
+    "mandatory cryptographic ID-token JWKS signature verification plus exact issuer/audience/nonce/expiry/subject checks",
+    "required chatgpt.tokens.use.direct and offline_access scope enforcement",
+    "DPAPI-protected token storage, atomic persistence, separate profile registrations and credential-free status output",
+    "serialized rotating refresh, optional retained ID token/scope on refresh, and invalid_grant/revocation error mapping",
+    "account model catalog visible-slug parsing and exact gpt-6-astra-only enforcement",
+    "stateless Responses request shape store=false/stream=true and blocked unsupported stateful fields",
+    "stream completion and plan/auth/infrastructure error handling before TASK-0003 handoff",
+    "TASK-0003 immutable snapshot/schema/idempotency gates remain mandatory",
+    "no OPENAI_API_KEY/client-secret/paid fallback/conversation access/local inference/cleanup mutation/merge or auto-merge"
   ],
   "known_limitations": [
     "The user has not performed real browser authorization yet; that is intentionally post-merge.",
