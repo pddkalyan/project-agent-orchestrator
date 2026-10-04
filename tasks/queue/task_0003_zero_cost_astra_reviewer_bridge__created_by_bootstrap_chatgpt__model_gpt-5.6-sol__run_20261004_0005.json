@@ -8,7 +8,7 @@
   "source_issue": 3,
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "astra_review_required": true,
-  "retry_attempt": 0,
+  "retry_attempt": 1,
   "max_controller_retries": 3,
   "official_openai_contract_verified_2026_10_04": {
     "authorization_endpoint": "https://auth.openai.com/api/accounts/authorize",
@@ -45,6 +45,7 @@
     ".github/workflows/chatgpt_reviewer_bridge_regression.yml",
     ".github/workflows/astra_reviewer_request.yml",
     ".github/workflows/astra_review_result.yml",
+    "requirements/chatgpt_reviewer_bridge_TASK-0003.txt",
     "scripts/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py",
     "tests/test_chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py",
     "reviewer/ASTRA_REVIEWER_INSTRUCTIONS.md",
@@ -122,5 +123,30 @@
     "no auto-merge",
     "no conversation scraping",
     "truthful evidence"
+  ],
+  "retry_reason": "TASK-0003 worker run 37192681624 produced a candidate bundle, but independent verification found the candidate is not production-ready. The controller could not push workflow files because the GitHub Actions app token lacks workflow-update permission; this infrastructure limitation is not a worker defect and the next valid bundle will be promoted through the connected GitHub reviewer path. Worker candidate defects must be corrected before promotion.",
+  "orchestrator_corrections": [
+    "The prior review packet falsely claimed PASS. The actual 14-test suite fails: test_02 raises NameError because stat is not imported, and test_11 produces malformed concatenated SSE JSON. On this retry, review packet worker_preflight_evidence must remain PENDING unless the exact generated tests are demonstrably passable; never pre-claim CI PASS.",
+    "Replace placeholder GitHub workflows with real, executable production logic. astra_reviewer_request.yml must not contain echo-only 'verify/fetch/execute/dispatch' placeholders. astra_review_result.yml must not contain echo-only validation/APPROVED/REJECTED steps.",
+    "OAuth first-registration flow must follow the verified official OpenAI SIWC contract exactly: generate/reuse stable opaque ext_agent_host_id in a supported format (prefer urn:uuid:<UUIDv4>), request client_id=dynamic_agent_client plus agent_name_hint and ext_agent_host_id, resource=https://api.openai.com/v1, exact scopes, fresh state/nonce/PKCE S256, and an HTTP 127.0.0.1 /auth/callback loopback.",
+    "The callback must validate state before using error/code, capture and require the issued client_id for new registration, reject a different client_id during reauthorization, and exchange the authorization code using the issued client_id—not dynamic_agent_client.",
+    "Implement returning reauthorization using the saved issued client_id and stable host id. Retained id_token_hint/login_hint may be used only for the same saved account. Never print authorization URLs containing id_token_hint.",
+    "ID-token validation must be cryptographic, not header/kid inspection. Use a maintained JWT/OIDC library from requirements/chatgpt_reviewer_bridge_TASK-0003.txt (for example PyJWT[crypto]) to verify signature against OpenAI JWKS, exact issuer https://auth.openai.com, audience equal to issued client_id, expiration, and the exact nonce from the pending attempt. Validate identity before replacing credentials.",
+    "Require granted scope chatgpt.tokens.use.direct before saving an inference-enabled profile or making any model request. Store scopes and verified identity/client mapping in the profile.",
+    "Protect credentials in OS-protected local storage. For Windows implement DPAPI (or an equivalently OS-protected mechanism) for token-bearing profile bytes; do not leave refresh/access/ID tokens in a plaintext JSON file. For Unix/VM fallback use atomic owner-only 0600 storage. Unit tests must use synthetic/fake storage and tokens only.",
+    "Refresh behavior: serialize per-profile refreshes, use the issued client_id/current rotating refresh token/resource, atomically replace access+refresh+ID/scopes/expiry where supplied, never reuse a rotated token, preserve credentials on temporary network/5xx failures, and return a temporary blocked/retry state rather than returning an expired access token. Only documented terminal refresh errors transition to NEEDS_REAUTH.",
+    "Fix model catalog parsing to the official SIWC response shape: use the response's models array, retain only visibility == 'list', and use each model's slug. Never assume a data/id API-key catalog shape. Select exact slug gpt-6-astra only if present; otherwise BLOCKED_NO_ASTRA.",
+    "Responses requests must use POST https://api.openai.com/v1/responses with OAuth bearer access token, model gpt-6-astra, store:false, stream:true, and input as an array containing the complete review context. Do not use unsupported SIWC fields or ChatGPT backend-api endpoints.",
+    "Parse Responses SSE correctly: append only response.output_text.delta event.delta text; treat response.failed and subscription-sharing usage errors explicitly; success requires observing response.completed. An interrupted stream or [DONE] without response.completed must fail, never parse as approval.",
+    "Validate review output against reviewer/REVIEW_CONTRACT.schema.json (or equally strict deterministic validation). Require exact reviewed_sha, model == gpt-6-astra, terminal status APPROVED|REJECTED, bounded evidence summary, and structured findings. Malformed prose/JSON must fail closed.",
+    "Do not log raw OAuth/token responses, bearer tokens, refresh tokens, ID tokens, authorization codes, PKCE verifier, or authorization URLs containing id_token_hint. Exception messages and sanitized result payloads must be demonstrably secret-free.",
+    "astra_reviewer_request.yml trust design: a GitHub-hosted prepare job validates the completed exact-head regression and current PR SHA, builds bounded candidate/review context as inert data, and uploads that context. The credential-bearing Windows self-hosted job must checkout only trusted main bridge code with persist-credentials:false, must never checkout/execute the PR candidate, must not install packages dynamically, downloads only prepared inert context, and runs the trusted bridge. A separate GitHub-hosted job with write permission dispatches only the sanitized review result. Do not give the self-hosted review job repository write permission.",
+    "The self-hosted workflow must verify prerequisite exact-SHA CI, including ChatGPT Reviewer Bridge Regression and existing safety regression(s), and fail closed on missing/stale/ambiguous evidence. It must bind repository, PR number, base SHA, candidate SHA, changed-file manifest/patch, task/review packet, prior review history and CI evidence into the review context.",
+    "astra_review_result.yml must actually validate the sanitized result payload, current PR head SHA, model, status, findings schema and idempotency. APPROVED must persist an exact-SHA approval marker/comment and must never merge. REJECTED must find exactly one queue task matching task_id, enforce a bounded astra_review_cycle/max_astra_review_cycles, append structured correction instructions/evidence, change only that task JSON on main, and commit/push it once so the existing free worker loop retriggers. Duplicate delivery for the same reviewed SHA must be a no-op.",
+    "Add deterministic tests for result-consumer approval/rejection/idempotency/retry ceiling and workflow trust boundaries. Test that the self-hosted credential-bearing job has no write permission and never checks out a candidate ref.",
+    "Add tests for exact official model-catalog shape, missing Astra, usage exhaustion/unavailable, SSE delta/completed/failed/interrupted handling, state mismatch, issued-client-id mismatch, nonce mismatch, invalid signature/issuer/audience/expiry, scope missing, rotating refresh serialization, Windows protected storage abstraction, and secret redaction.",
+    "Do not claim live ChatGPT authorization, live gpt-6-astra availability, or a live Astra inference. Those remain PENDING until the user completes the one-time authorization after this implementation is reviewed.",
+    "README/docs must state that SIWC does not expose existing ChatGPT conversations or memory; reviewer continuity comes from repository reviewer/context files only.",
+    "Preserve spend_limit_usd=0, no paid API key or credit fallback, no local inference, audit-only PC cleanup, reviewer-only Astra, and no auto-merge."
   ]
 }
