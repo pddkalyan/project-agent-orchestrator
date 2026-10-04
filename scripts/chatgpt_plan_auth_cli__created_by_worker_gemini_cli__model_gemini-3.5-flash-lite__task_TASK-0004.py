@@ -19,26 +19,32 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
-from chatgpt_plan_auth_adapter__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004 import (
-    AGENT_NAME,
-    BLOCKED_AUTH_REQUIRED,
-    DYNAMIC_CLIENT_ID,
-    HttpTransport,
-    HostCredentialStorage,
-    PyJWTSignatureVerifier,
-    WindowsDPAPIProtector,
-    build_authorization_url,
-    build_token_exchange_request,
-    generate_host_id,
-    list_models,
-    new_authorization_attempt,
-    normalize_token_response,
-    parse_loopback_callback,
-    self_check,
-    validate_host_id,
-    verify_granted_scopes,
-    verify_id_token,
-)
+import importlib.util
+
+_ADAPTER_PATH = Path(__file__).resolve().parent / "chatgpt_plan_auth_adapter__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py"
+_spec = importlib.util.spec_from_file_location("task0004_auth_adapter", _ADAPTER_PATH)
+adapter = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+_spec.loader.exec_module(adapter)
+
+AGENT_NAME = adapter.AGENT_NAME
+BLOCKED_AUTH_REQUIRED = adapter.BLOCKED_AUTH_REQUIRED
+HttpTransport = adapter.HttpTransport
+HostCredentialStorage = adapter.HostCredentialStorage
+PyJWTSignatureVerifier = adapter.PyJWTSignatureVerifier
+WindowsDPAPIProtector = adapter.WindowsDPAPIProtector
+build_authorization_url = adapter.build_authorization_url
+build_token_exchange_request = adapter.build_token_exchange_request
+generate_host_id = adapter.generate_host_id
+list_models = adapter.list_models
+new_authorization_attempt = adapter.new_authorization_attempt
+normalize_token_response = adapter.normalize_token_response
+parse_loopback_callback = adapter.parse_loopback_callback
+self_check = adapter.self_check
+validate_host_id = adapter.validate_host_id
+verify_granted_scopes = adapter.verify_granted_scopes
+verify_id_token = adapter.verify_id_token
+
 
 DEFAULT_DIR = Path.home() / ".project-agent-orchestrator" / "chatgpt"
 DEFAULT_STORAGE = DEFAULT_DIR / "profile.json"
