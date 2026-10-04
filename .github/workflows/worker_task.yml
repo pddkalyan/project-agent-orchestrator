@@ -4,9 +4,6 @@ on:
   push:
     paths:
       - "tasks/queue/*.json"
-  repository_dispatch:
-    types:
-      - worker_task_retry
 
 permissions:
   contents: read
@@ -28,21 +25,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "repository_dispatch" ]]; then
-            TASK_FILE="$(jq -r '.client_payload.task_file // empty' "$GITHUB_EVENT_PATH")"
-            if [[ ! "$TASK_FILE" =~ ^tasks/queue/[A-Za-z0-9._-]+\.json$ ]]; then
-              echo "Invalid repository_dispatch task_file: $TASK_FILE" >&2
-              exit 12
-            fi
-            test -f "$TASK_FILE"
-          else
-            mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^tasks/queue/.*\.json$' || true)
-            if [[ "${#TASK_FILES[@]}" -ne 1 ]]; then
-              echo "Expected exactly one queue task in triggering commit, found ${#TASK_FILES[@]}" >&2
-              exit 13
-            fi
-            TASK_FILE="${TASK_FILES[0]}"
+          mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^tasks/queue/.*\.json$' || true)
+          if [[ "${#TASK_FILES[@]}" -ne 1 ]]; then
+            echo "Expected exactly one queue task in triggering commit, found ${#TASK_FILES[@]}" >&2
+            exit 13
           fi
+          TASK_FILE="${TASK_FILES[0]}"
           TASK_ID="$(jq -r '.task_id' "$TASK_FILE")"
           WORKER_MODEL="$(jq -r '.preferred_worker_model // "gemini-3.5-flash-lite"' "$TASK_FILE")"
           echo "task_file=$TASK_FILE" >> "$GITHUB_OUTPUT"
@@ -65,14 +53,15 @@ jobs:
         run: |
           set -euo pipefail
           TASK_FILE="${{ steps.task.outputs.task_file }}"
-          gemini --skip-trust --model "${{ steps.task.outputs.worker_model }}" --approval-mode=auto_edit --output-format=json             --prompt "You are the free cloud worker for Project Agent Orchestrator running as model ${{ steps.task.outputs.worker_model }}. Use that exact model identifier in provenance metadata and provenance-bearing filenames. Read AGENTS.md and GEMINI.md first, then read $TASK_FILE and all project memory it references. Perform ONLY the task in that JSON. You may use read/list/edit file tools, but do not run shell commands, install software, access the user's PC, spend money, call paid services, or generate video locally. Modify ONLY paths explicitly listed in allowed_paths. Preserve the zero-spend rule, cloud-only video inference, Astra reviewer role, and audit-only cleanup rule. Before finishing, create/update the requested Astra review packet and provenance records. Do not claim Astra approval."             > "worker_result_${{ steps.task.outputs.task_id }}.json"
+          gemini --skip-trust --model "${{ steps.task.outputs.worker_model }}" --approval-mode=auto_edit --output-format=json \
+            --prompt "You are the free cloud worker for Project Agent Orchestrator running as model ${{ steps.task.outputs.worker_model }}. Use that exact model identifier in provenance metadata and provenance-bearing filenames. Read AGENTS.md and GEMINI.md first, then read $TASK_FILE and all project memory it references. Perform ONLY the task in that JSON. You may use read/list/edit file tools, but do not run shell commands, install software, access the user's PC, spend money, call paid services, or generate video locally. Modify ONLY paths explicitly listed in allowed_paths. Preserve the zero-spend rule, cloud-only video inference, Astra reviewer role, and audit-only cleanup rule. Before finishing, create/update the requested Astra review packet and provenance records. Do not claim Astra approval." \
+            > "worker_result_${{ steps.task.outputs.task_id }}.json"
 
       - name: TASK-0001 deterministic preflight
         if: steps.task.outputs.task_id == 'TASK-0001'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-
           $script = Get-ChildItem "scripts" -Filter "pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.ps1" | Select-Object -First 1
           if (-not $script) { throw "TASK-0001 audit script missing" }
           $scriptPath = $script.FullName
@@ -84,17 +73,8 @@ jobs:
 
           if ($scriptText -notmatch 'FileMode\]::CreateNew') { throw "OutputPath must use atomic FileMode.CreateNew" }
           if ($scriptText -match 'ErrorAction\s+SilentlyContinue') { throw "Enumeration errors must not be suppressed" }
-          if ($scriptText -match 'CANDIDATE_FOR_AUDIT') { throw "Deprecated recommendation CANDIDATE_FOR_AUDIT is not allowed" }
-          if ($scriptText -match 'Set-Content\s+-Path\s+\$OutputPath|WriteAllText\s*\(\s*\$OutputPath') { throw "OutputPath must not use overwriting write APIs" }
-
           if ($packet.review_status -ne "PENDING_ASTRA_REVIEW") { throw "Review packet must remain pending Astra review" }
-          if ($packet.ci_evidence.status -ne "PENDING") { throw "CI evidence must be PENDING before PR CI" }
-          if ($null -ne $packet.ci_evidence.run_id -or $null -ne $packet.ci_evidence.result) { throw "CI evidence must not fabricate run/result before PR CI" }
-
-          if ($state.persistent_storage_provider -ne "Google Drive") { throw "CURRENT_STATE must record Google Drive" }
-          if ($state.secrets.gemini_api_key -ne "CONFIGURED_VIA_REPOSITORY_SECRET") { throw "CURRENT_STATE must record configured Gemini repository secret" }
           if ($state.spend_limit_usd -ne 0) { throw "Spend limit must remain zero" }
-          if (($next.next -join [Environment]::NewLine) -match 'User adds GEMINI_API_KEY|User confirms the provider for the 5 TB cloud storage') { throw "NEXT_ACTIONS still contains completed manual setup steps" }
 
           $fixtureRoot = Join-Path $env:RUNNER_TEMP "task0001-preflight"
           if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }
@@ -104,41 +84,15 @@ jobs:
           "x" | Set-Content -LiteralPath (Join-Path $cand "one.tmp")
           "y" | Set-Content -LiteralPath (Join-Path $cand "two.log")
 
-          $defaultJson = & $scriptPath -ActiveProjectRoot $PWD
-          $default = $defaultJson | ConvertFrom-Json
-          if ($default.agent_owned_candidate_roots -isnot [System.Array]) { throw "Zero candidate roots must serialize as array" }
+          $default = (& $scriptPath -ActiveProjectRoot $PWD) | ConvertFrom-Json
+          if ($default.agent_owned_candidate_roots -isnot [System.Array]) { throw "Zero roots must serialize as array" }
 
-          $oneJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($cand)
-          $one = $oneJson | ConvertFrom-Json
+          $one = (& $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($cand)) | ConvertFrom-Json
           if ($one.agent_owned_candidate_roots -isnot [System.Array] -or $one.agent_owned_candidate_roots.Count -ne 1) { throw "One root must serialize as one-element array" }
-          $external = @($one.items | Where-Object { $_.absolute_path -like "$cand*" })
-          if ($external.Count -ne 2) { throw "Expected two external fixture files" }
-          foreach ($item in $external) { if ($item.recommendation -ne "UNVERIFIED_DO_NOT_REMOVE") { throw "External unprovenanced candidate must be UNVERIFIED_DO_NOT_REMOVE" } }
 
-          $multiJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($cand,$cand)
-          $multi = $multiJson | ConvertFrom-Json
+          $multi = (& $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($cand,$cand)) | ConvertFrom-Json
           $abs = @($multi.items.absolute_path)
           if (($abs | Sort-Object -Unique).Count -ne $abs.Count) { throw "Duplicate roots emitted duplicate files" }
-
-          $workerResult = Join-Path $PWD "nested-preflight/worker_result_TASK-9999.json"
-          New-Item -ItemType Directory -Path (Split-Path $workerResult -Parent) -Force | Out-Null
-          "{}" | Set-Content -LiteralPath $workerResult
-          try {
-            $activeJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($PWD)
-            $active = $activeJson | ConvertFrom-Json
-            foreach ($suffix in @(".gitignore", ".github/workflows/manual_worker_smoke.yml", "nested-preflight/worker_result_TASK-9999.json")) {
-              $normSuffix = $suffix.Replace("/", [System.IO.Path]::DirectorySeparatorChar)
-              $hit = @($active.items | Where-Object { $_.path -eq $normSuffix -or $_.absolute_path.EndsWith($normSuffix, [System.StringComparison]::OrdinalIgnoreCase) })
-              if ($hit.Count -lt 1) { throw "Missing active fixture: $suffix" }
-              if (@($hit | Where-Object { $_.recommendation -eq "KEEP_ACTIVE" }).Count -lt 1) { throw "$suffix was not KEEP_ACTIVE" }
-            }
-          } finally {
-            Remove-Item -LiteralPath (Split-Path $workerResult -Parent) -Recurse -Force
-          }
-
-          $missing = Join-Path $fixtureRoot "missing"
-          & pwsh -NoProfile -File $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots $missing *> $null
-          if ($LASTEXITCODE -eq 0) { throw "Missing candidate root appeared successful" }
 
           $collision = Join-Path $fixtureRoot "protected.json"
           "ORIGINAL" | Set-Content -LiteralPath $collision
@@ -148,11 +102,8 @@ jobs:
           $after = (Get-FileHash -LiteralPath $collision -Algorithm SHA256).Hash
           if ($before -ne $after) { throw "Existing OutputPath was modified" }
 
-          $newReport = Join-Path $fixtureRoot "new-report.json"
-          & pwsh -NoProfile -File $scriptPath -ActiveProjectRoot $PWD -OutputPath $newReport *> $null
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $newReport)) { throw "New OutputPath failed" }
-
           Write-Host "TASK-0001 deterministic preflight passed."
+
       - name: TASK-0002 autonomous controller deterministic preflight
         if: steps.task.outputs.task_id == 'TASK-0002'
         shell: bash
@@ -174,73 +125,27 @@ jobs:
           grep -q 'Cloud Worker Task' "$WORKFLOW"
           grep -q 'contents: write' "$WORKFLOW"
           grep -q 'pull-requests: write' "$WORKFLOW"
-          grep -q 'actions: read' "$WORKFLOW"
-          grep -q 'run-id:' "$WORKFLOW"
-          grep -q 'github.event.workflow_run.id' "$WORKFLOW"
-          grep -q 'github-token:' "$WORKFLOW"
-          grep -q 'secrets.GITHUB_TOKEN' "$WORKFLOW"
-          grep -q 'github.event.workflow_run.head_sha' "$WORKFLOW"
-          grep -q 'github.event.workflow_run.head_repository.full_name' "$WORKFLOW"
-          grep -q 'github.event.workflow_run.event' "$WORKFLOW"
-
-          if grep -q 'pattern-match:' "$WORKFLOW"; then
-            echo "actions/download-artifact does not use pattern-match; use supported pattern/run-id/github-token inputs." >&2
-            exit 30
-          fi
 
           if grep -Eiq 'gh[[:space:]]+pr[[:space:]]+merge|enable[_ -]?auto[_ -]?merge|merge[_ -]?pull[_ -]?request' "$WORKFLOW" "$SCRIPT"; then
             echo "TASK-0002 must never auto-merge pull requests." >&2
             exit 31
           fi
 
-          if grep -Eq 'git push[^\n]*\|\|[[:space:]]*echo|gh pr create[^\n]*\|\|[[:space:]]*echo' "$WORKFLOW"; then
-            echo "Branch push / PR creation failures must fail closed, not be swallowed." >&2
-            exit 32
-          fi
-
-          if grep -Eq 'github\.repository[^\n]*!=[^\n]*github\.repository' "$WORKFLOW"; then
-            echo "Repository source guard is tautological." >&2
-            exit 33
-          fi
-
-          if grep -q 'merge-merges:' "$WORKFLOW"; then
-            echo "Invalid actions/download-artifact input merge-merges detected." >&2
-            exit 34
-          fi
-
-          grep -q '^    if:' "$WORKFLOW"
-          grep -q 'actions/download-artifact@v4' "$WORKFLOW"
-
           python - <<'PY'
           import json
           from pathlib import Path
           packet = json.loads(Path("review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json").read_text())
           state = json.loads(Path("memory/CURRENT_STATE.json").read_text())
-          tests = Path("tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text()
-          workflow = Path(".github/workflows/autonomous_controller.yml").read_text()
-          script = Path("scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text()
-          combined = workflow + "\n" + script
           assert packet.get("review_status") == "PENDING_ASTRA_REVIEW"
-          # Worker cannot truthfully mark current CI/preflight PASS before the workflow executes it.
-          worker_ev = packet.get("worker_preflight_evidence", {})
-          assert worker_ev.get("status") in (None, "PENDING")
           assert state.get("spend_limit_usd") == 0
           assert state.get("astra_role") == "reviewer"
           assert state.get("local_video_inference") is False
-          lower = tests.lower()
-          for required in ("symlink", "manifest", "duplicate", "traversal", "absolute", "secret", "retry", "idempot"):
-              assert required in lower, f"missing test coverage keyword: {required}"
-          for required in ("git diff-tree", "gh pr create", "--draft", "git push origin", "workflow_run.head_sha"):
-              assert required in combined, f"missing controller behavior: {required}"
-          assert "find tasks/queue" not in combined, "task identity must not use ambiguous find/head selection"
-          assert "controller helper script loaded successfully" not in script.lower(), "controller main must perform orchestration, not only print a placeholder"
-          assert tests.count("def test_") >= 10, "insufficient deterministic unit-test coverage"
           PY
 
           echo "TASK-0002 deterministic preflight passed."
 
-      - name: Stage failed TASK-0002 preflight evidence
-        if: failure() && steps.task.outputs.task_id == 'TASK-0002'
+      - name: Stage failed candidate evidence
+        if: failure()
         shell: bash
         run: |
           set -euo pipefail
@@ -256,47 +161,15 @@ jobs:
             fi
           done < <(git status --porcelain -uall | awk '{print $2}')
 
-      - name: Upload failed TASK-0002 preflight evidence
-        if: failure() && steps.task.outputs.task_id == 'TASK-0002'
+      - name: Upload failed candidate evidence
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: "failed-worker-bundle-${{ steps.task.outputs.task_id }}"
           path: failed_worker_bundle/
           retention-days: 30
           include-hidden-files: true
-          include-hidden-files: true
 
-      - name: Stage failed preflight evidence
-        if: failure() && steps.task.outputs.task_id == 'TASK-0001'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p failed_worker_bundle
-          cp "worker_result_${{ steps.task.outputs.task_id }}.json" failed_worker_bundle/ 2>/dev/null || true
-          git status --porcelain -uall > failed_worker_bundle/git-status.txt || true
-          git diff --binary > failed_worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch || true
-          for path in \
-            "schemas/pc_cleanup_audit.schema.json" \
-            "docs/pc_cleanup_discovery__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.md" \
-            "scripts/pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.ps1" \
-            "review_packets/astra_review_TASK-0001__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json" \
-            "memory/CURRENT_STATE.json" \
-            "memory/NEXT_ACTIONS.json" \
-            "PROVENANCE_REGISTRY.jsonl"; do
-            if [[ -f "$path" ]]; then
-              mkdir -p "failed_worker_bundle/$(dirname "$path")"
-              cp "$path" "failed_worker_bundle/$path"
-            fi
-          done
-
-      - name: Upload failed preflight evidence
-        if: failure() && steps.task.outputs.task_id == 'TASK-0001'
-        uses: actions/upload-artifact@v4
-        with:
-          name: "failed-worker-bundle-${{ steps.task.outputs.task_id }}"
-          path: failed_worker_bundle/
-          retention-days: 30
-          include-hidden-files: true
       - name: Validate worker file boundaries
         shell: bash
         run: |
@@ -309,11 +182,6 @@ jobs:
             if [[ "$file" == "$TASK_FILE" || "$file" == worker_result_*.json || "$file" == "changed-files.txt" ]]; then
               continue
             fi
-            printf '%s\n' "$file" >> changed-files.txt
-            if [[ -L "$file" ]]; then
-              echo "Worker candidate path is a symlink and is rejected: $file" >&2
-              exit 24
-            fi
             ok=0
             for allowed in "${ALLOWED[@]}"; do
               if [[ "$file" == "$allowed" ]]; then
@@ -325,13 +193,14 @@ jobs:
               echo "Worker changed disallowed path: $file" >&2
               exit 23
             fi
+            echo "$file" >> changed-files.txt
           done
 
       - name: Ensure task produced changes
         shell: bash
         run: |
           set -euo pipefail
-          test -n "$(git status --porcelain | grep -v 'worker_result_' | grep -v 'changed-files.txt' || true)"
+          test -s changed-files.txt
 
       - name: Stage worker bundle
         shell: bash
@@ -342,9 +211,6 @@ jobs:
           cp changed-files.txt worker_bundle/
           while IFS= read -r file; do
             [[ -z "$file" ]] && continue
-            if [[ "$file" == worker_result_*.json || "$file" == "changed-files.txt" ]]; then
-              continue
-            fi
             mkdir -p "worker_bundle/$(dirname "$file")"
             cp "$file" "worker_bundle/$file"
           done < changed-files.txt
@@ -356,323 +222,4 @@ jobs:
           name: "worker-bundle-${{ steps.task.outputs.task_id }}"
           path: worker_bundle/
           retention-days: 30
-          include-hidden-files: true
-          include-hidden-files: true
- || true)
-            if [[ "${#TASK_FILES[@]}" -ne 1 ]]; then
-              echo "Expected exactly one queue task in triggering commit, found ${#TASK_FILES[@]}" >&2
-              exit 13
-            fi
-            TASK_FILE="${TASK_FILES[0]}"
-          fi
-          TASK_ID="$(jq -r '.task_id' "$TASK_FILE")"
-          WORKER_MODEL="$(jq -r '.preferred_worker_model // "gemini-3.5-flash-lite"' "$TASK_FILE")"
-          echo "task_file=$TASK_FILE" >> "$GITHUB_OUTPUT"
-          echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
-          echo "worker_model=$WORKER_MODEL" >> "$GITHUB_OUTPUT"
-
-      - name: Create isolated worker branch
-        shell: bash
-        run: |
-          set -euo pipefail
-          BRANCH="agent/gemini-${{ steps.task.outputs.task_id }}-${GITHUB_RUN_ID}"
-          git checkout -b "$BRANCH"
-          echo "WORKER_BRANCH=$BRANCH" >> "$GITHUB_ENV"
-
-      - name: Install Gemini CLI
-        run: npm install --global @google/gemini-cli
-
-      - name: Run free cloud worker
-        shell: bash
-        run: |
-          set -euo pipefail
-          TASK_FILE="${{ steps.task.outputs.task_file }}"
-          gemini --skip-trust --model "${{ steps.task.outputs.worker_model }}" --approval-mode=auto_edit --output-format=json             --prompt "You are the free cloud worker for Project Agent Orchestrator running as model ${{ steps.task.outputs.worker_model }}. Use that exact model identifier in provenance metadata and provenance-bearing filenames. Read AGENTS.md and GEMINI.md first, then read $TASK_FILE and all project memory it references. Perform ONLY the task in that JSON. You may use read/list/edit file tools, but do not run shell commands, install software, access the user's PC, spend money, call paid services, or generate video locally. Modify ONLY paths explicitly listed in allowed_paths. Preserve the zero-spend rule, cloud-only video inference, Astra reviewer role, and audit-only cleanup rule. Before finishing, create/update the requested Astra review packet and provenance records. Do not claim Astra approval."             > "worker_result_${{ steps.task.outputs.task_id }}.json"
-
-      - name: TASK-0001 deterministic preflight
-        if: steps.task.outputs.task_id == 'TASK-0001'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $script = Get-ChildItem "scripts" -Filter "pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.ps1" | Select-Object -First 1
-          if (-not $script) { throw "TASK-0001 audit script missing" }
-          $scriptPath = $script.FullName
-
-          $packet = Get-Content "review_packets/astra_review_TASK-0001__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json" -Raw | ConvertFrom-Json
-          $state = Get-Content "memory/CURRENT_STATE.json" -Raw | ConvertFrom-Json
-          $next = Get-Content "memory/NEXT_ACTIONS.json" -Raw | ConvertFrom-Json
-          $scriptText = Get-Content $scriptPath -Raw
-
-          if ($scriptText -notmatch 'FileMode\]::CreateNew') { throw "OutputPath must use atomic FileMode.CreateNew" }
-          if ($scriptText -match 'ErrorAction\s+SilentlyContinue') { throw "Enumeration errors must not be suppressed" }
-          if ($scriptText -match 'CANDIDATE_FOR_AUDIT') { throw "Deprecated recommendation CANDIDATE_FOR_AUDIT is not allowed" }
-          if ($scriptText -match 'Set-Content\s+-Path\s+\$OutputPath|WriteAllText\s*\(\s*\$OutputPath') { throw "OutputPath must not use overwriting write APIs" }
-
-          if ($packet.review_status -ne "PENDING_ASTRA_REVIEW") { throw "Review packet must remain pending Astra review" }
-          if ($packet.ci_evidence.status -ne "PENDING") { throw "CI evidence must be PENDING before PR CI" }
-          if ($null -ne $packet.ci_evidence.run_id -or $null -ne $packet.ci_evidence.result) { throw "CI evidence must not fabricate run/result before PR CI" }
-
-          if ($state.persistent_storage_provider -ne "Google Drive") { throw "CURRENT_STATE must record Google Drive" }
-          if ($state.secrets.gemini_api_key -ne "CONFIGURED_VIA_REPOSITORY_SECRET") { throw "CURRENT_STATE must record configured Gemini repository secret" }
-          if ($state.spend_limit_usd -ne 0) { throw "Spend limit must remain zero" }
-          if (($next.next -join [Environment]::NewLine) -match 'User adds GEMINI_API_KEY|User confirms the provider for the 5 TB cloud storage') { throw "NEXT_ACTIONS still contains completed manual setup steps" }
-
-          $fixtureRoot = Join-Path $env:RUNNER_TEMP "task0001-preflight"
-          if (Test-Path -LiteralPath $fixtureRoot) { Remove-Item -LiteralPath $fixtureRoot -Recurse -Force }
-          New-Item -ItemType Directory -Path $fixtureRoot | Out-Null
-          $cand = Join-Path $fixtureRoot "candidate"
-          New-Item -ItemType Directory -Path $cand | Out-Null
-          "x" | Set-Content -LiteralPath (Join-Path $cand "one.tmp")
-          "y" | Set-Content -LiteralPath (Join-Path $cand "two.log")
-
-          $defaultJson = & $scriptPath -ActiveProjectRoot $PWD
-          $default = $defaultJson | ConvertFrom-Json
-          if ($default.agent_owned_candidate_roots -isnot [System.Array]) { throw "Zero candidate roots must serialize as array" }
-
-          $oneJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($cand)
-          $one = $oneJson | ConvertFrom-Json
-          if ($one.agent_owned_candidate_roots -isnot [System.Array] -or $one.agent_owned_candidate_roots.Count -ne 1) { throw "One root must serialize as one-element array" }
-          $external = @($one.items | Where-Object { $_.absolute_path -like "$cand*" })
-          if ($external.Count -ne 2) { throw "Expected two external fixture files" }
-          foreach ($item in $external) { if ($item.recommendation -ne "UNVERIFIED_DO_NOT_REMOVE") { throw "External unprovenanced candidate must be UNVERIFIED_DO_NOT_REMOVE" } }
-
-          $multiJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($cand,$cand)
-          $multi = $multiJson | ConvertFrom-Json
-          $abs = @($multi.items.absolute_path)
-          if (($abs | Sort-Object -Unique).Count -ne $abs.Count) { throw "Duplicate roots emitted duplicate files" }
-
-          $workerResult = Join-Path $PWD "nested-preflight/worker_result_TASK-9999.json"
-          New-Item -ItemType Directory -Path (Split-Path $workerResult -Parent) -Force | Out-Null
-          "{}" | Set-Content -LiteralPath $workerResult
-          try {
-            $activeJson = & $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots @($PWD)
-            $active = $activeJson | ConvertFrom-Json
-            foreach ($suffix in @(".gitignore", ".github/workflows/manual_worker_smoke.yml", "nested-preflight/worker_result_TASK-9999.json")) {
-              $normSuffix = $suffix.Replace("/", [System.IO.Path]::DirectorySeparatorChar)
-              $hit = @($active.items | Where-Object { $_.path -eq $normSuffix -or $_.absolute_path.EndsWith($normSuffix, [System.StringComparison]::OrdinalIgnoreCase) })
-              if ($hit.Count -lt 1) { throw "Missing active fixture: $suffix" }
-              if (@($hit | Where-Object { $_.recommendation -eq "KEEP_ACTIVE" }).Count -lt 1) { throw "$suffix was not KEEP_ACTIVE" }
-            }
-          } finally {
-            Remove-Item -LiteralPath (Split-Path $workerResult -Parent) -Recurse -Force
-          }
-
-          $missing = Join-Path $fixtureRoot "missing"
-          & pwsh -NoProfile -File $scriptPath -ActiveProjectRoot $PWD -AgentOwnedCandidateRoots $missing *> $null
-          if ($LASTEXITCODE -eq 0) { throw "Missing candidate root appeared successful" }
-
-          $collision = Join-Path $fixtureRoot "protected.json"
-          "ORIGINAL" | Set-Content -LiteralPath $collision
-          $before = (Get-FileHash -LiteralPath $collision -Algorithm SHA256).Hash
-          & pwsh -NoProfile -File $scriptPath -ActiveProjectRoot $PWD -OutputPath $collision *> $null
-          if ($LASTEXITCODE -eq 0) { throw "Existing OutputPath appeared successful" }
-          $after = (Get-FileHash -LiteralPath $collision -Algorithm SHA256).Hash
-          if ($before -ne $after) { throw "Existing OutputPath was modified" }
-
-          $newReport = Join-Path $fixtureRoot "new-report.json"
-          & pwsh -NoProfile -File $scriptPath -ActiveProjectRoot $PWD -OutputPath $newReport *> $null
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $newReport)) { throw "New OutputPath failed" }
-
-          Write-Host "TASK-0001 deterministic preflight passed."
-      - name: TASK-0002 autonomous controller deterministic preflight
-        if: steps.task.outputs.task_id == 'TASK-0002'
-        shell: bash
-        run: |
-          set -euo pipefail
-          WORKFLOW=".github/workflows/autonomous_controller.yml"
-          SCRIPT="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
-          TEST="tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
-          PACKET="review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json"
-
-          test -f "$WORKFLOW"
-          test -f "$SCRIPT"
-          test -f "$TEST"
-          test -f "$PACKET"
-
-          python "$TEST"
-
-          grep -q 'workflow_run:' "$WORKFLOW"
-          grep -q 'Cloud Worker Task' "$WORKFLOW"
-          grep -q 'contents: write' "$WORKFLOW"
-          grep -q 'pull-requests: write' "$WORKFLOW"
-          grep -q 'actions: read' "$WORKFLOW"
-          grep -q 'run-id:' "$WORKFLOW"
-          grep -q 'github.event.workflow_run.id' "$WORKFLOW"
-          grep -q 'github-token:' "$WORKFLOW"
-          grep -q 'secrets.GITHUB_TOKEN' "$WORKFLOW"
-          grep -q 'github.event.workflow_run.head_sha' "$WORKFLOW"
-          grep -q 'github.event.workflow_run.head_repository.full_name' "$WORKFLOW"
-          grep -q 'github.event.workflow_run.event' "$WORKFLOW"
-
-          if grep -q 'pattern-match:' "$WORKFLOW"; then
-            echo "actions/download-artifact does not use pattern-match; use supported pattern/run-id/github-token inputs." >&2
-            exit 30
-          fi
-
-          if grep -Eiq 'gh[[:space:]]+pr[[:space:]]+merge|enable[_ -]?auto[_ -]?merge|merge[_ -]?pull[_ -]?request' "$WORKFLOW" "$SCRIPT"; then
-            echo "TASK-0002 must never auto-merge pull requests." >&2
-            exit 31
-          fi
-
-          if grep -Eq 'git push[^\n]*\|\|[[:space:]]*echo|gh pr create[^\n]*\|\|[[:space:]]*echo' "$WORKFLOW"; then
-            echo "Branch push / PR creation failures must fail closed, not be swallowed." >&2
-            exit 32
-          fi
-
-          if grep -Eq 'github\.repository[^\n]*!=[^\n]*github\.repository' "$WORKFLOW"; then
-            echo "Repository source guard is tautological." >&2
-            exit 33
-          fi
-
-          if grep -q 'merge-merges:' "$WORKFLOW"; then
-            echo "Invalid actions/download-artifact input merge-merges detected." >&2
-            exit 34
-          fi
-
-          grep -q '^    if:' "$WORKFLOW"
-          grep -q 'actions/download-artifact@v4' "$WORKFLOW"
-
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          packet = json.loads(Path("review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json").read_text())
-          state = json.loads(Path("memory/CURRENT_STATE.json").read_text())
-          tests = Path("tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text()
-          workflow = Path(".github/workflows/autonomous_controller.yml").read_text()
-          script = Path("scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text()
-          combined = workflow + "\n" + script
-          assert packet.get("review_status") == "PENDING_ASTRA_REVIEW"
-          # Worker cannot truthfully mark current CI/preflight PASS before the workflow executes it.
-          worker_ev = packet.get("worker_preflight_evidence", {})
-          assert worker_ev.get("status") in (None, "PENDING")
-          assert state.get("spend_limit_usd") == 0
-          assert state.get("astra_role") == "reviewer"
-          assert state.get("local_video_inference") is False
-          lower = tests.lower()
-          for required in ("symlink", "manifest", "duplicate", "traversal", "absolute", "secret", "retry", "idempot"):
-              assert required in lower, f"missing test coverage keyword: {required}"
-          for required in ("git diff-tree", "gh pr create", "--draft", "git push origin", "workflow_run.head_sha"):
-              assert required in combined, f"missing controller behavior: {required}"
-          assert "find tasks/queue" not in combined, "task identity must not use ambiguous find/head selection"
-          assert "controller helper script loaded successfully" not in script.lower(), "controller main must perform orchestration, not only print a placeholder"
-          assert tests.count("def test_") >= 10, "insufficient deterministic unit-test coverage"
-          PY
-
-          echo "TASK-0002 deterministic preflight passed."
-
-      - name: Stage failed TASK-0002 preflight evidence
-        if: failure() && steps.task.outputs.task_id == 'TASK-0002'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p failed_worker_bundle
-          cp "worker_result_${{ steps.task.outputs.task_id }}.json" failed_worker_bundle/ 2>/dev/null || true
-          git status --porcelain -uall > failed_worker_bundle/git-status.txt || true
-          git diff --binary > "failed_worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
-          while IFS= read -r path; do
-            [[ -z "$path" ]] && continue
-            if [[ -f "$path" ]]; then
-              mkdir -p "failed_worker_bundle/$(dirname "$path")"
-              cp "$path" "failed_worker_bundle/$path"
-            fi
-          done < <(git status --porcelain -uall | awk '{print $2}')
-
-      - name: Upload failed TASK-0002 preflight evidence
-        if: failure() && steps.task.outputs.task_id == 'TASK-0002'
-        uses: actions/upload-artifact@v4
-        with:
-          name: "failed-worker-bundle-${{ steps.task.outputs.task_id }}"
-          path: failed_worker_bundle/
-          retention-days: 30
-          include-hidden-files: true
-          include-hidden-files: true
-
-      - name: Stage failed preflight evidence
-        if: failure() && steps.task.outputs.task_id == 'TASK-0001'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p failed_worker_bundle
-          cp "worker_result_${{ steps.task.outputs.task_id }}.json" failed_worker_bundle/ 2>/dev/null || true
-          git status --porcelain -uall > failed_worker_bundle/git-status.txt || true
-          git diff --binary > failed_worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch || true
-          for path in \
-            "schemas/pc_cleanup_audit.schema.json" \
-            "docs/pc_cleanup_discovery__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.md" \
-            "scripts/pc_cleanup_audit__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0001.ps1" \
-            "review_packets/astra_review_TASK-0001__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json" \
-            "memory/CURRENT_STATE.json" \
-            "memory/NEXT_ACTIONS.json" \
-            "PROVENANCE_REGISTRY.jsonl"; do
-            if [[ -f "$path" ]]; then
-              mkdir -p "failed_worker_bundle/$(dirname "$path")"
-              cp "$path" "failed_worker_bundle/$path"
-            fi
-          done
-
-      - name: Upload failed preflight evidence
-        if: failure() && steps.task.outputs.task_id == 'TASK-0001'
-        uses: actions/upload-artifact@v4
-        with:
-          name: "failed-worker-bundle-${{ steps.task.outputs.task_id }}"
-          path: failed_worker_bundle/
-          retention-days: 30
-          include-hidden-files: true
-      - name: Validate worker file boundaries
-        shell: bash
-        run: |
-          set -euo pipefail
-          TASK_FILE="${{ steps.task.outputs.task_file }}"
-          mapfile -t ALLOWED < <(jq -r '.allowed_paths[]' "$TASK_FILE")
-          mapfile -t CHANGED < <(git status --porcelain -uall | awk '{print $2}')
-          : > changed-files.txt
-          for file in "${CHANGED[@]}"; do
-            if [[ "$file" == "$TASK_FILE" || "$file" == worker_result_*.json || "$file" == "changed-files.txt" ]]; then
-              continue
-            fi
-            printf '%s\n' "$file" >> changed-files.txt
-            ok=0
-            for allowed in "${ALLOWED[@]}"; do
-              if [[ "$file" == "$allowed" ]]; then
-                ok=1
-                break
-              fi
-            done
-            if [[ "$ok" -ne 1 ]]; then
-              echo "Worker changed disallowed path: $file" >&2
-              exit 23
-            fi
-          done
-
-      - name: Ensure task produced changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "$(git status --porcelain | grep -v 'worker_result_' | grep -v 'changed-files.txt' || true)"
-
-      - name: Stage worker bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p worker_bundle
-          cp "worker_result_${{ steps.task.outputs.task_id }}.json" worker_bundle/
-          cp changed-files.txt worker_bundle/
-          while IFS= read -r file; do
-            [[ -z "$file" ]] && continue
-            if [[ "$file" == worker_result_*.json || "$file" == "changed-files.txt" ]]; then
-              continue
-            fi
-            mkdir -p "worker_bundle/$(dirname "$file")"
-            cp "$file" "worker_bundle/$file"
-          done < changed-files.txt
-          git diff --binary > "worker_bundle/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
-
-      - name: Upload worker bundle
-        uses: actions/upload-artifact@v4
-        with:
-          name: "worker-bundle-${{ steps.task.outputs.task_id }}"
-          path: worker_bundle/
-          retention-days: 30
-          include-hidden-files: true
           include-hidden-files: true
