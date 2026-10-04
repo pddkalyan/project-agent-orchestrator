@@ -16,6 +16,7 @@ import ctypes
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import secrets
@@ -327,6 +328,10 @@ def verify_granted_scopes(scopes: str | Sequence[str]) -> tuple[bool, str]:
     return True, "SCOPES_VALID"
 
 
+def _finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+
 def validate_verified_id_claims(
     claims: Mapping[str, Any],
     *,
@@ -348,7 +353,7 @@ def validate_verified_id_claims(
     if not isinstance(claims.get("sub"), str) or not claims["sub"]:
         return False, "subject missing"
     exp = claims.get("exp")
-    if not isinstance(exp, (int, float)) or current >= exp:
+    if not _finite_number(exp) or current >= float(exp):
         return False, "id token expired"
     return True, "ID_TOKEN_VALID"
 
@@ -789,7 +794,12 @@ def _public_transport_status(exc: Exception) -> str:
 
 
 def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str, Any]:
-    """Serialize refreshes; never reuse a consumed rotating token after a response."""
+    """Serialize refreshes with a durable pre-dispatch state.
+
+    Once REFRESH_IN_PROGRESS is persisted, the old rotating refresh credential
+    is never submitted automatically again, even after timeout, crash, malformed
+    response, or replacement-write failure.
+    """
     try:
         with storage.locked():
             current = storage.load_profile()
@@ -804,19 +814,32 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
                 )
             except Exception:
                 return {"status": BLOCKED_AUTH_REQUIRED}
+
+            # Persist the uncertainty boundary BEFORE dispatch. If this write
+            # fails, no request is sent. If anything after dispatch fails, this
+            # durable blocked state survives process restart.
+            in_progress = dict(current)
+            in_progress["profile_version"] = storage.profile_version(current) + 1
+            in_progress["session_state"] = "REFRESH_IN_PROGRESS"
+            in_progress["refresh_started_at"] = int(time.time())
+            in_progress.pop("access_token", None)
+            try:
+                storage.save_profile_atomic(in_progress)
+            except Exception:
+                return {"status": BLOCKED_INFRASTRUCTURE_ERROR}
+
             try:
                 payload = transport.post_form(req["url"], req["data"])
             except Exception as exc:
                 return {"status": _public_transport_status(exc)}
 
-            replacement = dict(current)
-            replacement["profile_version"] = storage.profile_version(current) + 1
+            if not isinstance(payload, Mapping):
+                return {"status": BLOCKED_INVALID_RESPONSE}
+
+            replacement = dict(in_progress)
             replacement["saved_at"] = int(time.time())
-            # A refresh response means the old rotating token may already be consumed.
-            # Default to blocked and remove old active credentials before validating.
-            replacement.pop("access_token", None)
-            replacement.pop("refresh_token", None)
             replacement["session_state"] = "BLOCKED_REFRESH_INVALID"
+            replacement.pop("access_token", None)
 
             new_refresh = payload.get("refresh_token")
             if isinstance(new_refresh, str) and new_refresh:
@@ -832,11 +855,18 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
                 if not isinstance(token_type, str) or token_type.lower() != "bearer":
                     raise ValueError("invalid token type")
                 expires_in = _positive_lifetime(payload.get("expires_in"))
-                refreshed_scopes = payload.get("scope")
-                scopes = sorted(set(refreshed_scopes.split())) if isinstance(refreshed_scopes, str) and refreshed_scopes else list(current.get("scopes", []))
+
+                if "scope" not in payload:
+                    scopes = list(current.get("scopes", []))
+                else:
+                    supplied_scope = payload.get("scope")
+                    if not isinstance(supplied_scope, str) or not supplied_scope.strip():
+                        raise ValueError("invalid refresh scopes")
+                    scopes = sorted(set(supplied_scope.split()))
                 ok, _ = verify_granted_scopes(scopes)
                 if not ok:
                     raise ValueError("required scopes missing")
+
                 replacement.update({
                     "access_token": access,
                     "refresh_token": new_refresh,
@@ -848,12 +878,17 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
                     "scopes": scopes,
                     "session_state": "ACTIVE",
                 })
-                storage.save_profile_atomic(replacement)
+                replacement.pop("refresh_started_at", None)
+                try:
+                    storage.save_profile_atomic(replacement)
+                except Exception:
+                    # The durable REFRESH_IN_PROGRESS record remains on disk.
+                    return {"status": BLOCKED_INFRASTRUCTURE_ERROR}
                 return {"status": "REFRESHED", "profile": storage.safe_status()}
             except Exception:
-                # Persist the replacement refresh token when present, but keep the
-                # session blocked so neither the old nor the new token is retried
-                # automatically without explicit reauthorization.
+                # Best effort to retain a returned replacement token in a
+                # blocked state. If this write fails, the already-persisted
+                # REFRESH_IN_PROGRESS state still prevents reuse of the old token.
                 try:
                     storage.save_profile_atomic(replacement)
                 except Exception:
@@ -866,14 +901,18 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
 def needs_refresh(profile: Mapping[str, Any], *, now: float | None = None, skew_seconds: int = 120) -> bool:
     current = time.time() if now is None else now
     expires_at = profile.get("expires_at")
-    if not isinstance(expires_at, (int, float)):
+    if not _finite_number(expires_at):
         return True
-    if current >= expires_at:
+    expires = float(expires_at)
+    if current >= expires:
         return True
     earliest = profile.get("earliest_refresh_at")
-    if isinstance(earliest, (int, float)) and current < earliest:
-        return False
-    return current + skew_seconds >= expires_at
+    if earliest is not None:
+        if not _finite_number(earliest):
+            return True
+        if current < float(earliest):
+            return False
+    return current + skew_seconds >= expires
 
 
 def ensure_fresh_profile(storage: HostCredentialStorage, transport: Any) -> tuple[dict[str, Any] | None, str]:
@@ -902,7 +941,7 @@ def ensure_fresh_profile(storage: HostCredentialStorage, transport: Any) -> tupl
         return None, BLOCKED_AUTH_REQUIRED
     if not isinstance(token_type, str) or token_type.lower() != "bearer":
         return None, BLOCKED_AUTH_REQUIRED
-    if not isinstance(expires_at, (int, float)) or time.time() >= expires_at:
+    if not _finite_number(expires_at) or time.time() >= float(expires_at):
         return None, BLOCKED_AUTH_REQUIRED
     ok, _ = verify_granted_scopes(scopes if isinstance(scopes, list) else [])
     if not ok:
@@ -986,19 +1025,29 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     text_parts: list[str] = []
     completed = False
     for event in events:
+        if not isinstance(event, Mapping):
+            return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
         event_type = event.get("type")
+        if not isinstance(event_type, str):
+            return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
         if event_type == "response.output_text.delta":
             delta = event.get("delta")
-            if isinstance(delta, str):
-                text_parts.append(delta)
+            if not isinstance(delta, str):
+                return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+            text_parts.append(delta)
         elif event_type == "response.completed":
             completed = True
         elif event_type == "response.failed":
-            error = event.get("response", {}).get("error") if isinstance(event.get("response"), Mapping) else None
+            response = event.get("response")
+            error = response.get("error") if isinstance(response, Mapping) else None
             code = error.get("code") if isinstance(error, Mapping) else "unknown_error"
-            return {"status": map_response_error_code(str(code)), "completed": False}
+            if not isinstance(code, str):
+                return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+            return {"status": map_response_error_code(code), "completed": False}
         elif event_type == "response.incomplete":
             return {"status": BLOCKED_INFRASTRUCTURE_ERROR, "completed": False}
+        else:
+            return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
     if not completed:
         return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
     return {"status": "COMPLETED", "completed": True, "text": "".join(text_parts)}
@@ -1023,7 +1072,11 @@ def _validate_allowance_evidence(evidence: Mapping[str, Any] | None, profile: Ma
         return False, BLOCKED_PLAN_ALLOWANCE, None
     observed = evidence.get("observed_at")
     expires = evidence.get("expires_at")
-    if not isinstance(observed, (int, float)) or not isinstance(expires, (int, float)) or observed > current or current >= expires:
+    if not _finite_number(observed) or not _finite_number(expires):
+        return False, BLOCKED_PLAN_ALLOWANCE, None
+    observed_value = float(observed)
+    expires_value = float(expires)
+    if observed_value > current or expires_value <= observed_value or current >= expires_value:
         return False, BLOCKED_PLAN_ALLOWANCE, None
     plan = {
         "billing_mode": evidence.get("billing_mode"),
@@ -1038,16 +1091,18 @@ def _validate_allowance_evidence(evidence: Mapping[str, Any] | None, profile: Ma
 
 
 def _transport_review(*, profile: Mapping[str, Any], transport: Any, review_prompt: str, review_context: Mapping[str, Any]) -> dict[str, Any]:
-    request = build_responses_plan_request(review_prompt=review_prompt, review_context=review_context)
     try:
+        request = build_responses_plan_request(review_prompt=review_prompt, review_context=review_context)
         events = list(transport.stream_sse(
             RESPONSES_URL,
             request,
             {"Authorization": f"Bearer {profile['access_token']}"},
         ))
-    except Exception as exc:
+        return assemble_stream(events)
+    except SafeTransportError as exc:
         return {"status": _public_transport_status(exc), "completed": False}
-    return assemble_stream(events)
+    except Exception:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
 
 
 def run_streamed_review(
