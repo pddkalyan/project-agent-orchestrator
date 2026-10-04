@@ -1,9 +1,11 @@
 {
   "schema_version": 1,
   "next": [
-    "Run offline unit tests for TASK-0004 live adapter and CLI.",
-    "Submit TASK-0004 review packet to GPT-6 Astra for review.",
-    "After Astra approval and merge of TASK-0003 and TASK-0004, perform one-time Windows reviewer authorization using chatgpt_plan_auth_cli.",
-    "Preserve zero-spend, cloud-only inference, audit-only cleanup, and immutable review gates."
+    "Keep PR #6 draft and unmerged until GPT-6 Astra approves TASK-0004.",
+    "Have Astra run the 41-test TASK-0004 offline suite locally on the exact PR head because TASK-0004 intentionally does not modify GitHub workflow files.",
+    "Re-verify current OpenAI SIWC registration, token, model-catalog, refresh, and Responses request semantics against official docs during Astra review.",
+    "After approval and merge, perform the one-time Windows Continue with ChatGPT sign-in manually; do not run it in CI.",
+    "Before enabling automated reviewer inference, complete a separate activation gate that confirms zero-extra-spend usage controls and keeps paid credits/fallback disabled.",
+    "Preserve no-conversation-access, no-local-inference, audit-only cleanup, reviewer-only Astra and no-auto-merge boundaries."
   ]
 }
