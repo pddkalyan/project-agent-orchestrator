@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "next": [
-    "Keep PR #6 draft and unmerged until GPT-6 Astra approves TASK-0004.",
-    "Have Astra run the 41-test TASK-0004 offline suite locally on the exact PR head because TASK-0004 intentionally does not modify GitHub workflow files.",
-    "Re-verify current OpenAI SIWC registration, token, model-catalog, refresh, and Responses request semantics against official docs during Astra review.",
-    "After approval and merge, perform the one-time Windows Continue with ChatGPT sign-in manually; do not run it in CI.",
-    "Before enabling automated reviewer inference, complete a separate activation gate that confirms zero-extra-spend usage controls and keeps paid credits/fallback disabled.",
+    "Keep PR #6 draft and unmerged until GPT-6 Astra performs R2 and approves the new exact correction head.",
+    "Have Astra run all 68 TASK-0004 deterministic offline tests locally on the exact correction head.",
+    "Adversarially re-test each R1 finding: fresh session/account-bound catalog/allowance, mandatory TASK-0003 handoff and dedup, diagnostic secrecy, sign-in/refresh write races, strict refresh validation, and Windows lock cleanup.",
+    "If Astra R2 rejects, apply its concrete correction package and require another exact-SHA review; do not merge a stale SHA.",
+    "After exact-SHA approval and merge, perform the one-time Windows Continue with ChatGPT sign-in manually; never run browser authorization in CI.",
+    "Before automated reviewer inference, keep the separate zero-extra-spend activation gate and exact gpt-6-astra-only requirement.",
     "Preserve no-conversation-access, no-local-inference, audit-only cleanup, reviewer-only Astra and no-auto-merge boundaries."
   ]
 }
