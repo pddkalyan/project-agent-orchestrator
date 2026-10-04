@@ -56,3 +56,15 @@ The first TASK-0003 Astra review rejected four gaps. The corrected scaffold now:
 - redacts complete credential blocks and secret-bearing mapping keys, while authorization metadata uses an exact three-field allowlist;
 - rejects non-string/blank finding fields before sanitization and aligns all emitted BLOCKED/APPROVED/REJECTED shapes with the published schema;
 - scopes idempotency to full immutable review identity plus result content and exposes `CONFLICT_BLOCKED` for contradictory results.
+
+## Astra Review #2 corrections
+
+The second TASK-0003 Astra review confirmed full immutable identity binding and full-identity idempotency, then found three remaining gaps. The corrected scaffold now:
+
+- treats any credential-bearing YAML block scalar introduced by `|` or `>` conservatively, covering explicit indentation and chomping indicator combinations such as `|2`, `|2-`, `|-2`, `>2`, and `>+2`, including comments;
+- distinguishes absent `implementation_guidance` from an explicitly supplied value, rejecting null, numeric, object, empty, or whitespace-only guidance before sanitization;
+- validates every emitted/persisted review result directly against the published `reviewer/REVIEW_CONTRACT.schema.json`, then applies semantic digest/idempotency and correction-package invariants;
+- rejects malformed incoming review records and malformed existing records before deduplication/persistence;
+- recomputes `result_digest` and `idempotency_key` integrity before any persistence decision.
+
+The offline bridge remains disabled and performs no live authorization or reviewer inference.
