@@ -155,13 +155,12 @@ jobs:
             fi
           else
             git checkout -B "$BRANCH" "${{ steps.task.outputs.task_sha }}"
+            python "$HELPER" promote-bundle "$BUNDLE_DIR" /tmp/validation.json "$PWD" > /tmp/promotion.json
+            jq -e '.valid == true' /tmp/promotion.json >/dev/null
             while IFS= read -r file; do
               [[ -n "$file" ]] || continue
-              python "$HELPER" validate-destination "$PWD" "$file" >/dev/null
-              mkdir -p "$(dirname "$file")"
-              cp -- "$BUNDLE_DIR/$file" "$file"
               git add -- "$file"
-            done < <(jq -r '.files[]' /tmp/validation.json)
+            done < <(jq -r '.files[]' /tmp/promotion.json)
 
             if git diff --cached --quiet; then
               echo "Validated worker bundle produced no candidate changes." >&2
