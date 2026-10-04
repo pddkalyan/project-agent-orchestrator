@@ -2,7 +2,7 @@
   "schema_version": 1,
   "run_id": "20261004_0010_TASK_0004_PR_RECOVERY_HARDENING",
   "phase": "CHATGPT_PLAN_LIVE_ADAPTER",
-  "status": "TASK_0004_RECOVERED_HARDENED_PENDING_EXACT_HEAD_REVIEW",
+  "status": "TASK_0004_RECOVERED_HARDENED_PENDING_ASTRA_EXACT_HEAD_LOCAL_TEST",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",
@@ -50,7 +50,7 @@
   },
   "task_0004": {
     "objective": "live Sign in with ChatGPT adapter and one-time Windows authorization CLI",
-    "status": "RECOVERED_HARDENED_PENDING_EXACT_HEAD_REVIEW",
+    "status": "RECOVERED_HARDENED_PENDING_ASTRA_EXACT_HEAD_LOCAL_TEST",
     "issue_number": 5,
     "source_worker_run_id": 37209531438,
     "source_worker_bundle_artifact_id": 11306450927,
@@ -66,6 +66,6 @@
     "user_initiated_sign_in_only": true,
     "local_inference": false,
     "conversation_access": false,
-    "deterministic_tests_expected": 36
+    "deterministic_tests_expected": 49
   }
 }
