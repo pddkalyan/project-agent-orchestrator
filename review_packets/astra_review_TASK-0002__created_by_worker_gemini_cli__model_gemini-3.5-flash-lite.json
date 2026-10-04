@@ -17,6 +17,7 @@
     ".github/workflows/worker_task.yml",
     ".github/workflows/autonomous_controller_regression.yml",
     "scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py",
+    "scripts/autonomous_controller_failure_flow__created_by_bootstrap_chatgpt__model_gpt-5.6-sol__task_TASK-0002.sh",
     "tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py",
     "docs/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.md",
     "review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json",
@@ -32,13 +33,13 @@
     "note": "No worker preflight PASS is claimed. Recovery validation is separate from worker evidence."
   },
   "recovery_validation": {
-    "status": "PENDING_CORRECTED_CI",
-    "tests_expected": 30,
-    "workflow_level_fixtures_expected": 4,
-    "note": "Astra rejection corrections are implemented on the draft PR. No PASS is claimed until exact-head GitHub regression completes."
+    "status": "PENDING_REVIEW_04_CORRECTED_CI",
+    "tests_expected": 34,
+    "workflow_level_fixtures_expected": 5,
+    "note": "Review #4 evidence gaps are corrected. Final PASS is not claimed until exact-head GitHub regression completes."
   },
   "ci_evidence": {
-    "status": "PENDING_CORRECTED_HEAD_RECHECK",
+    "status": "PENDING_REVIEW_04_CORRECTED_HEAD_RECHECK",
     "run_id": null,
     "tested_commit": null,
     "runner_os": null,
@@ -46,14 +47,13 @@
     "workflow": "Autonomous Controller Regression"
   },
   "review_focus": [
-    "immutable task binding across repository_dispatch and intervening default-branch commits",
-    "structured diagnostics and credential redaction including github_pat, multiline credentials and private-key blocks",
-    "retry commit versus dispatch receipt recovery and repeated/concurrent delivery deduplication",
-    "pre-copy worker symlink/file-type checks and promotion destination checks",
-    "exact manifest allowlist validation",
-    "retry ceiling and fail-closed source guards",
-    "draft-PR-only promotion and absence of merge/auto-merge behavior",
-    "truthful evidence and USD 0 / no-local-inference boundaries"
+    "concurrent/repeated worker execution claim using the exact production claim helper",
+    "exactly one logical model invocation for a shared dispatch binding",
+    "replay after dispatch success/controller receipt-write failure without another logical worker execution",
+    "conflicting receipt SHA and malformed claim binding fail closed before model/side effects",
+    "execute=false duplicate path performs no promotion, retry mutation, dispatch, or evidence upload",
+    "complete candidate artifact inventory and provenance including the production retry-flow script",
+    "existing immutable task binding, structured credential redaction, trusted-validator, retry recovery, staging safety, zero-spend/no-local-inference and no-auto-merge boundaries"
   ],
   "known_limitations": [
     "Astra review and a separate merge/promotion gate remain required.",
@@ -63,12 +63,12 @@
     "Raw failed logs are intentionally not persisted; failure evidence is limited to bounded structured job/failed-step metadata."
   ],
   "prior_candidate_ci": {
-    "tested_commit": "e2ef36e3fb8a5bff41e50c4512a2696f1c315b3d",
-    "autonomous_controller_regression_run_id": 37187459109,
-    "autonomous_controller_regression_result": "PASS_BUT_PRE_ASTRA_REJECTION",
-    "pc_cleanup_regression_run_id": 37187459163,
+    "tested_commit": "625ba22caa1499771628a746682e8e4bd0d703c6",
+    "autonomous_controller_regression_run_id": 37190552177,
+    "autonomous_controller_regression_result": "PASS_BUT_ASTRA_REVIEW_04_REJECTED_FOR_EVIDENCE_GAPS",
+    "pc_cleanup_regression_run_id": 37190552106,
     "pc_cleanup_regression_result": "PASS",
-    "note": "These runs predate Astra review #2 corrections and are not sufficient for resubmission."
+    "note": "These runs were valid for head 625ba22 but Astra Review #4 required concurrent/repeated execution-claim coverage and corrected artifact inventory/provenance."
   },
   "astra_review_02": {
     "reviewer_model": "gpt-6-astra",
@@ -97,5 +97,36 @@
       }
     ],
     "required_resubmission": "workflow-level tests for all four cases plus successful regressions tied to corrected exact head"
+  },
+  "astra_review_03": {
+    "reviewer_model": "gpt-6-astra",
+    "status": "REJECTED",
+    "reviewed_head": "166bcb7d78da5745a138d59a60a388cfc17f30d1",
+    "findings": [
+      "controller context downloaded inside checkout polluted strict retry mutation guard",
+      "candidate could replace helper before later promotion validation executed it",
+      "structured metadata sanitization missed block-scalar multiline credential payloads",
+      "failed-worker evidence copied unchecked worker_result metadata",
+      "valid execute=false context was treated as jq extraction failure"
+    ],
+    "correction_summary": "Moved transient artifacts outside checkout; materialized immutable validators; redacted credential-bearing structured fields; removed raw failed-worker metadata; fixed boolean false handling; added production-path fixtures."
+  },
+  "astra_review_04": {
+    "reviewer_model": "gpt-6-astra",
+    "status": "REJECTED",
+    "reviewed_head": "625ba22caa1499771628a746682e8e4bd0d703c6",
+    "findings": [
+      {
+        "severity": "P2",
+        "issue": "concurrent/repeated worker execution claim was not exercised through the production receipt-claim path",
+        "correction": "worker receipt claim moved into the immutable production helper and the production-path fixture now races two claimants, checks exactly one model marker, replays delivery, checks conflicting SHA, malformed binding, and execute=false side-effect gates"
+      },
+      {
+        "severity": "P2",
+        "issue": "review packet/provenance omitted the production retry-flow script and stale validation counts",
+        "correction": "candidate artifact inventory now includes the retry-flow script; provenance records its creation; validation counts are 34 deterministic tests and 5 production-path fixtures"
+      }
+    ],
+    "required_resubmission": "exact-head CI for the corrected branch plus truthful readiness evidence"
   }
 }
