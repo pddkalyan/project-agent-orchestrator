@@ -386,6 +386,8 @@ class WindowsDPAPIProtector(SecretProtector):
         out_blob = self.DATA_BLOB()
         crypt32 = ctypes.windll.crypt32
         kernel32 = ctypes.windll.kernel32
+        kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+        kernel32.LocalFree.restype = ctypes.c_void_p
         if decrypt:
             ok = crypt32.CryptUnprotectData(
                 ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob)
@@ -399,7 +401,7 @@ class WindowsDPAPIProtector(SecretProtector):
         try:
             return ctypes.string_at(out_blob.pbData, out_blob.cbData)
         finally:
-            kernel32.LocalFree(out_blob.pbData)
+            kernel32.LocalFree(ctypes.cast(out_blob.pbData, ctypes.c_void_p))
 
     def protect(self, plaintext: bytes) -> bytes:
         return self._crypt(plaintext, False)
@@ -818,13 +820,43 @@ def map_http_status(status: int) -> str:
 
 def map_transport_error(message: str) -> str:
     lower = message.lower()
+
+    if any(code in lower for code in (
+        "subscription_sharing_usage_limit_exceeded",
+        "subscription_sharing_usage_unavailable",
+    )):
+        return BLOCKED_PLAN_ALLOWANCE
+
+    if any(code in lower for code in (
+        "invalid_grant",
+        "invalid_refresh_token",
+        "token_expired",
+        "refresh_token_expired",
+        "refresh_token_invalidated",
+        "refresh_token_reused",
+        "invalid_client",
+        "subscription_sharing_invalid_user",
+        "chatpass_v2_scope_not_authorized",
+        "chatpass_v2_invalid_authorization_context",
+    )):
+        return BLOCKED_AUTH_REQUIRED
+
+    if any(code in lower for code in (
+        "subscription_sharing_unsupported_capability",
+        "subscription_sharing_route_not_supported",
+    )):
+        return BLOCKED_INVALID_RESPONSE
+
+    if "subscription_sharing_user_unavailable" in lower:
+        return BLOCKED_INFRASTRUCTURE_ERROR
+
     if '"http_status": 401' in lower or '"http_status": 403' in lower:
         return BLOCKED_AUTH_REQUIRED
     if '"http_status": 429' in lower:
         return BLOCKED_PLAN_ALLOWANCE
     if "timeout" in lower or "network" in lower or "connection" in lower:
         return BLOCKED_NETWORK_ERROR
-    if '"http_status": 5' in lower:
+    if re.search(r'"http_status"\s*:\s*5\d\d', lower):
         return BLOCKED_INFRASTRUCTURE_ERROR
     return BLOCKED_INFRASTRUCTURE_ERROR
 
