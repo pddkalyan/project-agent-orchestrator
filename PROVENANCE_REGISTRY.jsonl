@@ -44,3 +44,7 @@
 {"file":"memory/NEXT_ACTIONS.json","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0002","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
 {"file":"README.md","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0002","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
 {"file":"PROVENANCE_REGISTRY.jsonl","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0002","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
+{"file":".github/workflows/worker_task.yml","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0002","run":"20261004_ASTRA_R2_CORRECTION_FINALIZE","kind":"modified","reason":"combine execution/task preflight conditions so workflow YAML is valid"}
+{"file":".github/workflows/autonomous_controller.yml","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0002","run":"20261004_ASTRA_R2_CORRECTION_FINALIZE","kind":"modified","reason":"fix PR-body YAML scalar and gate success/failure side effects on execute=true"}
+{"file":".github/workflows/autonomous_controller_regression.yml","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0002","run":"20261004_ASTRA_R2_CORRECTION_FINALIZE","kind":"modified","reason":"scope destructive-operation static check to controller implementation while retaining worker staging safety checks"}
+{"file":"PROVENANCE_REGISTRY.jsonl","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0002","run":"20261004_ASTRA_R2_CORRECTION_FINALIZE","kind":"modified"}
