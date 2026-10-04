@@ -1,217 +1,405 @@
 #!/usr/bin/env python3
-"""
-Adversarial offline unit tests for TASK-0004 Sign in with ChatGPT live adapter & CLI.
-
-Worker: worker_gemini_cli / model: gemini-3.5-flash-lite
-"""
+"""Offline deterministic tests for TASK-0004 Sign in with ChatGPT adapter."""
 
 from __future__ import annotations
 
-import base64
+import importlib.util
 import json
 import tempfile
+import threading
+import time
 import unittest
+import urllib.parse
+from copy import deepcopy
 from pathlib import Path
 
-from chatgpt_plan_auth_adapter__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004 import (
-    HostCredentialStorage,
-    build_authorization_url,
-    build_responses_plan_request,
-    build_token_exchange_request,
-    build_token_refresh_request,
-    evaluate_live_handoff,
-    generate_host_id,
-    generate_pkce,
-    map_network_or_http_error,
-    parse_loopback_callback,
-    sanitize_object,
-    validate_model_catalog,
-    verify_granted_scopes,
-    verify_id_token,
-)
+ROOT = Path(__file__).resolve().parent.parent
+ADAPTER_PATH = ROOT / "scripts" / "chatgpt_plan_auth_adapter__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py"
+spec = importlib.util.spec_from_file_location("task0004_adapter", ADAPTER_PATH)
+adapter = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(adapter)
 
 
-class TestChatGPTPlanAuthAdapter(unittest.TestCase):
+class FakeProtector(adapter.SecretProtector):
+    def protect(self, plaintext: bytes) -> bytes:
+        return b"ENC:" + plaintext[::-1]
+
+    def unprotect(self, ciphertext: bytes) -> bytes:
+        if not ciphertext.startswith(b"ENC:"):
+            raise ValueError("bad ciphertext")
+        return ciphertext[4:][::-1]
+
+
+class FakeTransport:
+    def __init__(self):
+        self.post_calls = []
+        self.get_calls = []
+        self.refresh_payload = None
+        self.models_payload = None
+
+    def post_form(self, url, data, headers=None):
+        self.post_calls.append((url, deepcopy(data), deepcopy(headers)))
+        if self.refresh_payload is None:
+            raise RuntimeError("no fake response")
+        return deepcopy(self.refresh_payload)
+
+    def get_json(self, url, headers=None):
+        self.get_calls.append((url, deepcopy(headers)))
+        if self.models_payload is None:
+            raise RuntimeError("no fake response")
+        return deepcopy(self.models_payload)
+
+
+class TestTask0004(unittest.TestCase):
     def setUp(self):
-        self.client_id = "test_client_id_123"
-        self.redirect_uri = "http://127.0.0.1:8080/callback"
+        self.host_id = "urn:uuid:12345678-1234-4abc-8def-1234567890ab"
+        self.redirect = "http://127.0.0.1:1455/auth/callback"
+        self.attempt = {
+            "state": "state123",
+            "nonce": "nonce123",
+            "code_verifier": "verifier123",
+            "code_challenge": "challenge123",
+        }
 
-    def test_01_host_id_generation_and_reuse(self):
+    def test_01_host_id_format(self):
+        host = adapter.generate_host_id()
+        self.assertTrue(adapter.validate_host_id(host))
+        self.assertTrue(host.startswith("urn:uuid:"))
+
+    def test_02_invalid_host_id_rejected(self):
+        for value in ["host_win_abc", "urn:uuid:not-a-uuid", "", None]:
+            self.assertFalse(adapter.validate_host_id(value))
+
+    def test_03_pkce_s256(self):
+        verifier, challenge = adapter.generate_pkce()
+        import base64, hashlib
+        expected = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+        self.assertEqual(challenge, expected)
+
+    def test_04_new_attempt_has_fresh_fields(self):
+        a = adapter.new_authorization_attempt()
+        b = adapter.new_authorization_attempt()
+        for key in ("state", "nonce", "code_verifier", "code_challenge"):
+            self.assertTrue(a[key])
+            self.assertNotEqual(a[key], b[key])
+
+    def test_05_loopback_requires_127(self):
+        self.assertTrue(adapter.validate_loopback_redirect_uri(self.redirect))
+        self.assertFalse(adapter.validate_loopback_redirect_uri("http://localhost:1455/auth/callback"))
+        self.assertFalse(adapter.validate_loopback_redirect_uri("http://127.0.0.1:1455/callback"))
+        self.assertFalse(adapter.validate_loopback_redirect_uri("https://127.0.0.1:1455/auth/callback"))
+
+    def test_06_first_registration_url_is_current_openai_flow(self):
+        url = adapter.build_authorization_url(
+            redirect_uri=self.redirect,
+            ext_agent_host_id=self.host_id,
+            attempt=self.attempt,
+        )
+        parsed = urllib.parse.urlparse(url)
+        qs = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(parsed.geturl().split("?")[0], "https://auth.openai.com/api/accounts/authorize")
+        self.assertEqual(qs["client_id"], ["dynamic_agent_client"])
+        self.assertEqual(qs["agent_name_hint"], [adapter.AGENT_NAME])
+        self.assertEqual(qs["ext_agent_host_id"], [self.host_id])
+        self.assertEqual(qs["resource"], ["https://api.openai.com/v1"])
+        self.assertEqual(qs["code_challenge_method"], ["S256"])
+        self.assertIn("chatgpt.tokens.use.direct", qs["scope"][0])
+        self.assertIn("offline_access", qs["scope"][0])
+
+    def test_07_returning_url_reuses_issued_client_without_agent_name(self):
+        url = adapter.build_authorization_url(
+            redirect_uri=self.redirect,
+            ext_agent_host_id=self.host_id,
+            attempt=self.attempt,
+            issued_client_id="oaiapp_issued",
+            retained_id_token="idtokenhint",
+            login_hint="user@example.com",
+        )
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        self.assertEqual(qs["client_id"], ["oaiapp_issued"])
+        self.assertNotIn("agent_name_hint", qs)
+        self.assertEqual(qs["id_token_hint"], ["idtokenhint"])
+        self.assertEqual(qs["login_hint"], ["user@example.com"])
+
+    def test_08_callback_requires_state_before_code(self):
+        with self.assertRaises(ValueError):
+            adapter.parse_loopback_callback(
+                "?code=abc&state=wrong&client_id=oaiapp_x",
+                expected_state="expected",
+                expected_client_id=None,
+                is_new_registration=True,
+            )
+
+    def test_09_new_callback_requires_issued_client(self):
+        with self.assertRaises(ValueError):
+            adapter.parse_loopback_callback(
+                "?code=abc&state=s",
+                expected_state="s",
+                expected_client_id=None,
+                is_new_registration=True,
+            )
+
+    def test_10_new_callback_returns_issued_client(self):
+        result = adapter.parse_loopback_callback(
+            "?code=abc&state=s&client_id=oaiapp_x&scope=offline_access+chatgpt.tokens.use.direct",
+            expected_state="s",
+            expected_client_id=None,
+            is_new_registration=True,
+        )
+        self.assertEqual(result["client_id"], "oaiapp_x")
+
+    def test_11_returning_callback_rejects_different_client(self):
+        with self.assertRaises(ValueError):
+            adapter.parse_loopback_callback(
+                "?code=abc&state=s&client_id=oaiapp_other",
+                expected_state="s",
+                expected_client_id="oaiapp_saved",
+                is_new_registration=False,
+            )
+
+    def test_12_token_endpoint_and_exchange_require_issued_client(self):
+        req = adapter.build_token_exchange_request(
+            client_id="oaiapp_x",
+            code="code",
+            code_verifier="verifier",
+            redirect_uri=self.redirect,
+        )
+        self.assertEqual(req["url"], "https://auth.openai.com/api/accounts/oauth/token")
+        self.assertNotIn("client_secret", req["data"])
+        with self.assertRaises(ValueError):
+            adapter.build_token_exchange_request(
+                client_id="dynamic_agent_client",
+                code="code",
+                code_verifier="verifier",
+                redirect_uri=self.redirect,
+            )
+
+    def test_13_refresh_request_omits_scope(self):
+        req = adapter.build_token_refresh_request(client_id="oaiapp_x", refresh_token="refresh")
+        self.assertEqual(req["url"], "https://auth.openai.com/api/accounts/oauth/token")
+        self.assertNotIn("scope", req["data"])
+        self.assertEqual(req["data"]["resource"], "https://api.openai.com/v1")
+
+    def test_14_scope_enforcement(self):
+        self.assertTrue(adapter.verify_granted_scopes("openid offline_access chatgpt.tokens.use.direct")[0])
+        self.assertFalse(adapter.verify_granted_scopes("openid offline_access")[0])
+        self.assertFalse(adapter.verify_granted_scopes("openid chatgpt.tokens.use.direct")[0])
+
+    def test_15_signature_verifier_is_mandatory(self):
+        ok, reason, claims = adapter.verify_id_token(
+            "x.y.z",
+            expected_client_id="oaiapp_x",
+            expected_nonce="n",
+            signature_verifier=None,
+        )
+        self.assertFalse(ok)
+        self.assertIn("required", reason)
+        self.assertIsNone(claims)
+
+    def test_16_verified_claims_require_exact_issuer_aud_nonce_sub_exp(self):
+        now = time.time()
+        base = {"iss": adapter.ISSUER, "aud": "oaiapp_x", "nonce": "n", "sub": "s", "exp": now + 60}
+        self.assertTrue(adapter.validate_verified_id_claims(base, expected_client_id="oaiapp_x", expected_nonce="n", now=now)[0])
+        for field, bad in [("iss", adapter.ISSUER + "/x"), ("aud", "other"), ("nonce", "other"), ("sub", ""), ("exp", now - 1)]:
+            claims = dict(base); claims[field] = bad
+            self.assertFalse(adapter.validate_verified_id_claims(claims, expected_client_id="oaiapp_x", expected_nonce="n", now=now)[0])
+
+    def test_17_fake_signature_verifier_failure_blocks(self):
+        def bad(_token):
+            raise ValueError("signature bad")
+        self.assertFalse(adapter.verify_id_token("x.y.z", expected_client_id="oaiapp_x", expected_nonce="n", signature_verifier=bad)[0])
+
+    def test_18_fake_signature_verifier_success(self):
+        claims = {"iss": adapter.ISSUER, "aud": "oaiapp_x", "nonce": "n", "sub": "s", "exp": time.time() + 60}
+        ok, _, returned = adapter.verify_id_token("x.y.z", expected_client_id="oaiapp_x", expected_nonce="n", signature_verifier=lambda _: claims)
+        self.assertTrue(ok)
+        self.assertEqual(returned["sub"], "s")
+
+    def test_19_storage_never_writes_plaintext_tokens(self):
         with tempfile.TemporaryDirectory() as tmp:
-            storage_path = Path(tmp) / "session.json"
-            storage = HostCredentialStorage(storage_path)
-            self.assertIsNone(storage.load_profile())
+            path = Path(tmp) / "profile.json"
+            storage = adapter.HostCredentialStorage(path, FakeProtector())
+            profile = {
+                "client_id": "oaiapp_x",
+                "access_token": "ACCESS_SECRET_SENTINEL",
+                "refresh_token": "REFRESH_SECRET_SENTINEL",
+                "id_token": "ID_SECRET_SENTINEL",
+            }
+            storage.save_profile_atomic(profile)
+            raw = path.read_text()
+            self.assertNotIn("ACCESS_SECRET_SENTINEL", raw)
+            self.assertNotIn("REFRESH_SECRET_SENTINEL", raw)
+            self.assertNotIn("ID_SECRET_SENTINEL", raw)
+            self.assertEqual(storage.load_profile()["access_token"], "ACCESS_SECRET_SENTINEL")
 
-            host_id_1 = generate_host_id()
-            profile = {"ext_agent_host_id": host_id_1}
-            self.assertTrue(storage.save_profile_atomic(profile))
+    def test_20_safe_status_is_credential_free(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+            storage.save_profile_atomic({
+                "profile_label": "p",
+                "client_id": "oaiapp_x",
+                "ext_agent_host_id": self.host_id,
+                "access_token": "ACCESS_SECRET_SENTINEL",
+                "refresh_token": "REFRESH_SECRET_SENTINEL",
+                "id_token": "ID_SECRET_SENTINEL",
+                "scopes": ["offline_access", "chatgpt.tokens.use.direct"],
+            })
+            encoded = json.dumps(storage.safe_status())
+            self.assertNotIn("ACCESS_SECRET_SENTINEL", encoded)
+            self.assertNotIn("REFRESH_SECRET_SENTINEL", encoded)
+            self.assertNotIn("ID_SECRET_SENTINEL", encoded)
 
-            loaded = storage.load_profile()
-            self.assertEqual(loaded["ext_agent_host_id"], host_id_1)
+    def test_21_refresh_rotation_replaces_token_set_atomically(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+            storage.save_profile_atomic({
+                "profile_label": "p",
+                "client_id": "oaiapp_x",
+                "refresh_token": "old_refresh",
+                "access_token": "old_access",
+                "id_token": "old_id",
+                "scopes": ["offline_access", "chatgpt.tokens.use.direct"],
+            })
+            transport = FakeTransport()
+            transport.refresh_payload = {
+                "access_token": "new_access",
+                "refresh_token": "new_refresh",
+                "id_token": "new_id",
+                "expires_in": 3600,
+                "scope": "offline_access chatgpt.tokens.use.direct",
+            }
+            result = adapter.refresh_profile(storage, transport)
+            self.assertEqual(result["status"], "REFRESHED")
+            profile = storage.load_profile()
+            self.assertEqual(profile["refresh_token"], "new_refresh")
+            self.assertEqual(profile["access_token"], "new_access")
 
-            # Reuse stable host ID
-            loaded["notes"] = "updated"
-            self.assertTrue(storage.save_profile_atomic(loaded))
-            reloaded = storage.load_profile()
-            self.assertEqual(reloaded["ext_agent_host_id"], host_id_1)
-            self.assertEqual(reloaded["notes"], "updated")
+    def test_22_refresh_failure_does_not_replace_old_profile(self):
+        class FailingStorage(adapter.HostCredentialStorage):
+            def save_profile_atomic(self, profile):
+                raise OSError("persistence failure")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+            base.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"old","access_token":"old_access","id_token":"old_id","scopes":["offline_access","chatgpt.tokens.use.direct"]})
+            storage = FailingStorage(base.storage_path, base.protector)
+            transport = FakeTransport()
+            transport.refresh_payload = {"access_token":"new","refresh_token":"newr","id_token":"newid","expires_in":3600,"scope":"offline_access chatgpt.tokens.use.direct"}
+            with self.assertRaises(OSError):
+                adapter.refresh_profile(storage, transport)
+            self.assertEqual(base.load_profile()["refresh_token"], "old")
 
-    def test_02_pkce_and_auth_url_construction(self):
-        auth_data = build_authorization_url(
-            client_id=self.client_id,
-            redirect_uri=self.redirect_uri,
-        )
-        self.assertIn("authorization_url", auth_data)
-        self.assertIn("code_verifier", auth_data)
-        self.assertIn("state", auth_data)
-        self.assertIn("nonce", auth_data)
-        self.assertIn("code_challenge_method=S256", auth_data["authorization_url"])
-        self.assertIn("resource=https%3A%2F%2Fapi.openai.com%2Fv1", auth_data["authorization_url"])
+    def test_23_refresh_lock_serializes_two_callers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+            storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","scopes":["offline_access","chatgpt.tokens.use.direct"]})
+            class Rotating(FakeTransport):
+                def post_form(self, url, data, headers=None):
+                    time.sleep(0.03)
+                    current = data["refresh_token"]
+                    n = int(current[1:]) + 1
+                    return {"access_token":f"a{n}","refresh_token":f"r{n}","id_token":f"i{n}","expires_in":3600,"scope":"offline_access chatgpt.tokens.use.direct"}
+            t = Rotating()
+            results = []
+            threads = [threading.Thread(target=lambda: results.append(adapter.refresh_profile(storage,t))) for _ in range(2)]
+            for th in threads: th.start()
+            for th in threads: th.join()
+            self.assertEqual(storage.load_profile()["refresh_token"], "r2")
+            self.assertEqual(len(results), 2)
 
-    def test_03_loopback_callback_parsing_and_state_validation(self):
-        auth_data = build_authorization_url(
-            client_id=self.client_id,
-            redirect_uri=self.redirect_uri,
-        )
-        expected_state = auth_data["state"]
-        valid_callback = f"{self.redirect_uri}?code=auth_code_xyz&state={expected_state}"
+    def test_24_model_catalog_parses_visible_slugs_only(self):
+        catalog = adapter.parse_model_catalog({"models":[
+            {"slug":"gpt-6-astra","visibility":"list"},
+            {"slug":"hidden","visibility":"hidden"},
+        ]})
+        self.assertEqual(catalog["authorized_models"], ["gpt-6-astra"])
 
-        parsed = parse_loopback_callback(valid_callback, expected_state)
-        self.assertEqual(parsed["code"], "auth_code_xyz")
+    def test_25_exact_astra_only(self):
+        self.assertTrue(adapter.validate_model_catalog({"user_authorized":True,"authorized_models":["gpt-6-astra"]})[0])
+        for name in ["gpt-6-astra-preview","GPT-6-ASTRA","gpt-6.1-sol"]:
+            self.assertFalse(adapter.validate_model_catalog({"user_authorized":True,"authorized_models":[name]})[0])
 
-        # State mismatch
-        bad_callback = f"{self.redirect_uri}?code=auth_code_xyz&state=wrong_state"
-        with self.assertRaises(ValueError):
-            parse_loopback_callback(bad_callback, expected_state)
+    def test_26_responses_request_has_stateless_supported_shape(self):
+        req = adapter.build_responses_plan_request(review_prompt="Review exact SHA.", review_context={"task_id":"TASK-0004","candidate_sha":"a"*40})
+        self.assertEqual(set(req), {"model","input","instructions","store","stream"})
+        self.assertFalse(req["store"])
+        self.assertTrue(req["stream"])
+        self.assertNotIn("context", req)
 
-        # OAuth error
-        error_callback = f"{self.redirect_uri}?error=access_denied&state={expected_state}"
-        with self.assertRaises(ValueError):
-            parse_loopback_callback(error_callback, expected_state)
+    def test_27_responses_builder_rejects_unsupported_stateful_fields(self):
+        for field in adapter.UNSUPPORTED_RESPONSE_FIELDS:
+            with self.subTest(field=field):
+                with self.assertRaises(ValueError):
+                    adapter.build_responses_plan_request(review_prompt="x", review_context={field:"bad"})
 
-    def test_04_token_exchange_and_refresh_request_builders(self):
-        exchange = build_token_exchange_request(
-            client_id=self.client_id,
-            code="code_123",
-            code_verifier="verifier_456",
-            redirect_uri=self.redirect_uri,
-        )
-        self.assertEqual(exchange["method"], "POST")
-        self.assertEqual(exchange["data"]["grant_type"], "authorization_code")
-        self.assertEqual(exchange["data"]["code_verifier"], "verifier_456")
+    def test_28_stream_requires_completed_event(self):
+        incomplete = [{"type":"response.output_text.delta","delta":"hello"}]
+        self.assertEqual(adapter.assemble_stream(incomplete)["status"], adapter.BLOCKED_INVALID_RESPONSE)
+        complete = incomplete + [{"type":"response.completed"}]
+        result = adapter.assemble_stream(complete)
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(result["text"], "hello")
 
-        refresh = build_token_refresh_request(
-            client_id=self.client_id,
-            refresh_token="ref_789",
-        )
-        self.assertEqual(refresh["method"], "POST")
-        self.assertEqual(refresh["data"]["grant_type"], "refresh_token")
-        self.assertEqual(refresh["data"]["refresh_token"], "ref_789")
+    def test_29_stream_usage_limit_maps_to_plan_block(self):
+        events=[{"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}]
+        self.assertEqual(adapter.assemble_stream(events)["status"], adapter.BLOCKED_PLAN_ALLOWANCE)
 
-    def test_05_scope_enforcement(self):
-        ok_scopes = ["openid", "profile", "email", "offline_access", "resource.invoke", "chatgpt.tokens.use.direct"]
-        valid, _ = verify_granted_scopes(ok_scopes)
-        self.assertTrue(valid)
+    def test_30_error_mapping_never_becomes_review_verdict(self):
+        for code in [401,403,429,500,503]:
+            status=adapter.map_http_status(code)
+            self.assertTrue(status.startswith("BLOCKED_"))
+            self.assertNotIn(status, ("APPROVED","REJECTED"))
 
-        # Missing chatgpt.tokens.use.direct
-        bad_scopes_1 = ["openid", "profile", "email", "offline_access", "resource.invoke"]
-        valid_1, reason_1 = verify_granted_scopes(bad_scopes_1)
-        self.assertFalse(valid_1)
-        self.assertIn("chatgpt.tokens.use.direct", reason_1)
+    def test_31_handoff_strips_live_credentials_before_task0003(self):
+        class FakeBridge:
+            def evaluate_review(self, **kwargs):
+                return kwargs["auth_profile"]
+        old=adapter.bridge
+        adapter.bridge=FakeBridge()
+        try:
+            result=adapter.evaluate_live_handoff(
+                expected_snapshot={},
+                review_request={},
+                model_catalog={},
+                auth_profile={"active":True,"expired":False,"profile_id":"p","access_token":"SECRET"},
+                plan_allowance={},
+                verdict_payload={},
+            )
+            self.assertEqual(result, {"active":True,"expired":False,"profile_id":"p"})
+        finally:
+            adapter.bridge=old
 
-        # Missing offline_access
-        bad_scopes_2 = ["openid", "profile", "email", "resource.invoke", "chatgpt.tokens.use.direct"]
-        valid_2, reason_2 = verify_granted_scopes(bad_scopes_2)
-        self.assertFalse(valid_2)
-        self.assertIn("offline_access", reason_2)
+    def test_32_sanitizer_removes_tokens_and_id_token_hint(self):
+        value={"access_token":"ACCESS_SENTINEL","url":"https://auth.openai.com/x?id_token_hint=ID_SENTINEL"}
+        encoded=json.dumps(adapter.sanitize_object(value))
+        self.assertNotIn("ACCESS_SENTINEL", encoded)
+        self.assertNotIn("ID_SENTINEL", encoded)
 
-    def test_06_id_token_validation(self):
-        import time
-        claims = {
-            "iss": "https://auth.openai.com",
-            "aud": self.client_id,
-            "nonce": "nonce_abc",
-            "exp": time.time() + 3600,
-        }
-        claims_bytes = json.dumps(claims).encode("utf-8")
-        payload_b64 = base64.urlsafe_b64encode(claims_bytes).rstrip(b"=").decode("ascii")
-        fake_id_token = f"header.{payload_b64}.signature"
+    def test_33_self_check_preserves_zero_spend_no_conversation_no_merge(self):
+        check=adapter.self_check()
+        self.assertTrue(check["zero_extra_spend"])
+        self.assertFalse(check["api_key_path"])
+        self.assertFalse(check["paid_fallback"])
+        self.assertFalse(check["ci_live_authorization"])
+        self.assertFalse(check["conversation_access"])
+        self.assertFalse(check["local_inference"])
+        self.assertFalse(check["merge_allowed"])
 
-        valid, reason = verify_id_token(
-            fake_id_token,
-            expected_client_id=self.client_id,
-            expected_nonce="nonce_abc",
-        )
-        self.assertTrue(valid, reason)
+    def test_34_source_has_no_openai_api_key_or_merge_path(self):
+        text=ADAPTER_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("OPENAI_API_KEY", text)
+        self.assertNotIn("merge_pull_request", text)
+        self.assertNotIn("enable_auto_merge", text)
+        self.assertNotIn("/conversations", text)
 
-        # Nonce mismatch
-        valid_nonce, _ = verify_id_token(
-            fake_id_token,
-            expected_client_id=self.client_id,
-            expected_nonce="wrong_nonce",
-        )
-        self.assertFalse(valid_nonce)
+    def test_35_live_jwks_verifier_endpoint_is_official(self):
+        self.assertEqual(adapter.JWKS_URL, "https://auth.openai.com/.well-known/jwks.json")
 
-        # Expired
-        expired_claims = dict(claims, exp=time.time() - 10)
-        expired_bytes = json.dumps(expired_claims).encode("utf-8")
-        expired_b64 = base64.urlsafe_b64encode(expired_bytes).rstrip(b"=").decode("ascii")
-        expired_token = f"header.{expired_b64}.signature"
-        valid_exp, _ = verify_id_token(
-            expired_token,
-            expected_client_id=self.client_id,
-            expected_nonce="nonce_abc",
-        )
-        self.assertFalse(valid_exp)
+    def test_36_public_client_has_no_client_secret_path(self):
+        text=ADAPTER_PATH.read_text(encoding="utf-8")
+        self.assertNotIn("OPENAI_CLIENT_SECRET", text)
+        self.assertNotIn('"client_secret"', text)
 
-    def test_07_exact_gpt_6_astra_model_enforcement(self):
-        valid_catalog = {"user_authorized": True, "authorized_models": ["gpt-6-astra", "gpt-4o"]}
-        self.assertEqual(validate_model_catalog(valid_catalog), (True, "MODEL_ALLOWED"))
 
-        # Similar names rejected
-        invalid_catalogs = [
-            {"user_authorized": True, "authorized_models": ["gpt-6-astra-preview"]},
-            {"user_authorized": True, "authorized_models": ["gpt-6"]},
-            {"user_authorized": False, "authorized_models": ["gpt-6-astra"]},
-            None,
-        ]
-        for cat in invalid_catalogs:
-            valid, status = validate_model_catalog(cat)
-            self.assertFalse(valid)
-            self.assertEqual(status, "BLOCKED_NO_ASTRA")
-
-    def test_08_stateless_responses_api_request_builder(self):
-        req = build_responses_plan_request(
-            prompt_instructions="Review this plan.",
-            review_context={"task_id": "TASK-0004"},
-        )
-        self.assertEqual(req["model"], "gpt-6-astra")
-        self.assertEqual(req["store"], False)
-        self.assertEqual(req["stream"], True)
-        self.assertEqual(req["input"], "Review this plan.")
-        self.assertIn("context", req)
-
-        # Missing instructions or context raises ValueError
-        with self.assertRaises(ValueError):
-            build_responses_plan_request(prompt_instructions="", review_context={})
-
-    def test_09_error_status_mapping(self):
-        self.assertEqual(map_network_or_http_error(401, "Unauthorized"), "BLOCKED_AUTH_REQUIRED")
-        self.assertEqual(map_network_or_http_error(403, "Forbidden"), "BLOCKED_AUTH_REQUIRED")
-        self.assertEqual(map_network_or_http_error(429, "Too Many Requests"), "BLOCKED_PLAN_ALLOWANCE")
-        self.assertEqual(map_network_or_http_error(500, "Internal Server Error"), "BLOCKED_INFRASTRUCTURE_ERROR")
-        self.assertEqual(map_network_or_http_error(None, "Connection timeout"), "BLOCKED_NETWORK_ERROR")
-
-    def test_10_credential_sanitization_in_objects(self):
-        sensitive_data = {
-            "profile_id": "safe_profile_1",
-            "access_token": "secret_token_val_12345",
-            "refresh_token": "secret_refresh_val_67890",
-            "nested": {
-                "client_secret": "my_secret_key_abc",
-            },
-        }
-        cleaned = sanitize_object(sensitive_data)
-        self.assertEqual(cleaned["profile_id"], "safe_profile_1")
-        # Check that secret fields are redacted
-        self.assertTrue(any("redacted" in str(v) or v == "[REDACTED-POTENTIAL-SECRET]" for v in cleaned.values()))
+if __name__ == "__main__":
+    unittest.main()
