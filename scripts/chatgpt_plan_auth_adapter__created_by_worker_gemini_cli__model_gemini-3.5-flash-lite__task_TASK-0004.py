@@ -922,6 +922,8 @@ def ensure_fresh_profile(storage: HostCredentialStorage, transport: Any) -> tupl
         return None, BLOCKED_INFRASTRUCTURE_ERROR
     if not profile or profile.get("session_state") not in (None, "ACTIVE"):
         return None, BLOCKED_AUTH_REQUIRED
+    if not _finite_number(profile.get("expires_at")):
+        return None, BLOCKED_AUTH_REQUIRED
     if needs_refresh(profile):
         refreshed = refresh_profile(storage, transport)
         if refreshed.get("status") != "REFRESHED":
