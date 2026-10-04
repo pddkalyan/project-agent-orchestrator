@@ -5,40 +5,39 @@ Public, zero-spend-by-default orchestration layer for a cloud-first cinematic R&
 ## Core design
 - Free cloud workers perform routine research, coding, experiments, and cloud-render orchestration.
 - GPT-6 Astra is reserved for milestone/final review and correction.
-- AI video inference stays in the cloud; the user's PC is not a rendering host.
+- AI/video inference stays in the cloud; the user's PC is not a rendering host.
 - Media providers are replaceable through provider-neutral adapters.
 - Persistent memory records successes, failures, reviewer corrections, provenance, and next actions.
 - PC cleanup stays audit-only unless a separate explicit removal approval is given.
 - Secrets and private movie assets must never be committed to this public repository.
 
 ## Autonomous worker loop
-TASK-0002 adds a bounded controller around `Cloud Worker Task`:
+TASK-0002 provides bounded free-worker retries, immutable task binding, safe bundle promotion, draft-PR-only candidate creation, structured failure evidence, and no auto-merge.
 
-1. A queue task starts the free cloud worker.
-2. Worker output is checked by deterministic task-specific preflight tests.
-3. A successful worker bundle is validated against the task allowlist, promoted to a deterministic candidate branch, and opened as a **draft** pull request.
-4. The controller dispatches the dedicated candidate regression workflow.
-5. A failed worker run persists structured job/failed-step diagnostics only. If retry is allowed, the exact queue task is revised, the retry is bound to an immutable task SHA/attempt, and `repository_dispatch` starts that bound attempt.
-6. At the retry ceiling the controller stops and surfaces `BLOCKED`; it does not loop indefinitely.
-7. GPT-6 Astra remains the final reviewer. The controller never merges or enables auto-merge.
+## Zero-cost Astra reviewer bridge
+TASK-0003 is approved and merged. It provides the offline exact-SHA/snapshot/schema/idempotency review boundary. The reviewer workflow remains disabled until a separate activation gate.
 
-`repository_dispatch` is used deliberately for controller-created retries/regressions so the system does not depend on a `GITHUB_TOKEN` push creating a second workflow run. Immutable `worker-context` metadata, dispatch/execution receipt refs, and pre-copy symlink checks prevent task drift, repeated logical execution, and staging-time dereference of external files.
+## Sign in with ChatGPT live adapter
+TASK-0004 adds a Windows-first, user-initiated Sign in with ChatGPT adapter and CLI while keeping CI offline.
 
-## Zero-cost Astra reviewer bridge & Sign in with ChatGPT Live Adapter
-TASK-0003 and TASK-0004 implement the zero-cost Astra reviewer bridge and live Sign in with ChatGPT authorization adapter & CLI (`chatgpt_plan_auth_cli`):
+The candidate now follows the current OpenAI OSS SIWC flow:
+- first-time authorization uses `dynamic_agent_client`, a stable `ext_agent_host_id`, `agent_name_hint`, PKCE S256, fresh state/nonce, and a `127.0.0.1/.../auth/callback` loopback URI;
+- the callback-issued `client_id` is saved and reused for token exchange and later sign-ins;
+- token exchange/refresh use `https://auth.openai.com/api/accounts/oauth/token` with no client secret or API key;
+- ID tokens require cryptographic signature verification against OpenAI JWKS plus exact issuer/audience/nonce/expiry/subject checks;
+- Windows credentials are stored outside the repo behind DPAPI with atomic replacement;
+- rotating refresh tokens are serialized;
+- model discovery uses the signed-in account and accepts exact `gpt-6-astra` only;
+- Responses requests are stateless with `store=false`, `stream=true`, and no conversation-history dependency;
+- live reviewer output must still pass the approved TASK-0003 immutable review gate.
 
-- self-hosted Windows reviewer support;
-- PKCE S256 and loopback authentication flow;
-- strict ID token and scope verification (`chatgpt.tokens.use.direct` and `offline_access`);
-- atomic refresh token rotation and host-local protected storage;
-- exact `gpt-6-astra` model catalog enforcement;
-- stateless Responses API request builder (`store=false`, `stream=true`);
-- structured APPROVED/REJECTED contract and immutable snapshot binding;
-- explicit prohibition on ChatGPT conversation scraping, local inference, merge, and auto-merge.
-
-Live Sign in with ChatGPT authorization runs post-merge via the Windows CLI on the self-hosted runner; CI remains offline and zero-spend.
+TASK-0004 does **not** enable automated inference yet. The real browser consent is a post-merge user action, and a later activation gate must confirm zero-extra-spend usage controls before automatic reviewer requests are enabled.
 
 ## Current phase
-TASK-0001 and TASK-0002 are approved and merged. TASK-0003 and TASK-0004 have been implemented and are pending Astra review. Paid spend remains disabled.
+TASK-0001, TASK-0002, and TASK-0003 are approved and merged.
+
+TASK-0004 free-worker run `37209531438` succeeded. Controller run `37210052342` validated and pushed its candidate branch but GitHub Actions repository policy blocked Actions from creating a pull request. Draft PR #6 was recovered through the trusted GitHub connector and then hardened against current OpenAI SIWC documentation. It is pending Astra review.
+
+Paid API-key fallback, local inference, ChatGPT conversation access, cleanup mutation, and auto-merge remain disabled.
 
 See `AGENTS.md` for hard rules and `memory/` for current project state.
