@@ -736,5 +736,92 @@ class TestTask0004(unittest.TestCase):
         self.assertTrue(adapter.needs_refresh({"expires_at":999,"earliest_refresh_at":5000}, now=now))
 
 
+    def test_61_multiline_sensitive_diagnostic_is_fully_redacted(self):
+        text = "refresh_token: |\n  VALUE_ONE\n  VALUE_TWO\npublic: ok"
+        clean = adapter.sanitize_text(text)
+        self.assertNotIn("VALUE_ONE", clean)
+        self.assertNotIn("VALUE_TWO", clean)
+        self.assertIn("public: ok", clean)
+
+    def test_62_wrong_account_or_stale_allowance_blocks(self):
+        now = time.time()
+        profile = {"profile_label":"default","subject":"sub-1","client_id":"oaiapp_x"}
+        base = {
+            "billing_mode":"ZERO_SPEND_PLAN","separately_billed":False,"credits_enabled":False,
+            "remaining_requests":1,"profile_id":"default","subject":"sub-1","client_id":"oaiapp_x",
+            "observed_at":now-1,"expires_at":now+60,
+        }
+        self.assertTrue(adapter._validate_allowance_evidence(base, profile)[0])
+        for field, value in (("subject","other"),("client_id","other"),("profile_id","other"),("remaining_requests",0),("expires_at",now-1)):
+            bad = dict(base); bad[field] = value
+            self.assertFalse(adapter._validate_allowance_evidence(bad, profile)[0])
+
+    def test_63_version_guard_prevents_stale_signin_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+            initial = {"profile_label":"p","client_id":"oaiapp_x","subject":"s","refresh_token":"r1","access_token":"a1","id_token":"i1","profile_version":1}
+            storage.save_profile_atomic(initial)
+            newer = dict(initial); newer["refresh_token"]="r2"; newer["profile_version"]=2
+            storage.save_profile_atomic(newer)
+            stale = dict(initial); stale["refresh_token"]="r0"
+            self.assertFalse(storage.replace_profile_if_version(expected_version=1, profile=stale, expected_subject="s", expected_client_id="oaiapp_x"))
+            self.assertEqual(storage.load_profile()["refresh_token"], "r2")
+
+    def test_64_invalid_refresh_payload_blocks_and_does_not_reuse_old_rotating_value(self):
+        class T:
+            def post_form(self, *args, **kwargs):
+                return {"access_token":"a2","refresh_token":"r2","token_type":"MAC","expires_in":3600,"scope":" ".join(adapter.REQUIRED_SCOPES)}
+        with tempfile.TemporaryDirectory() as tmp:
+            storage = adapter.HostCredentialStorage(Path(tmp) / "profile.json", FakeProtector())
+            storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r1","access_token":"a1","id_token":"i1","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+            result = adapter.refresh_profile(storage, T())
+            self.assertEqual(result["status"], adapter.BLOCKED_AUTH_REQUIRED)
+            saved = storage.load_profile()
+            self.assertEqual(saved["session_state"], "BLOCKED_REFRESH_INVALID")
+            self.assertEqual(saved.get("refresh_token"), "r2")
+            self.assertNotEqual(saved.get("refresh_token"), "r1")
+
+    def test_65_bad_lifetime_error_never_echoes_supplied_value(self):
+        claims={"iss":adapter.ISSUER,"sub":"s","email":"e@example.com"}
+        payload={"access_token":"a","refresh_token":"r","id_token":"i","token_type":"Bearer","expires_in":"VALUE_BAD","scope":" ".join(adapter.REQUIRED_SCOPES)}
+        with self.assertRaisesRegex(ValueError, "^invalid token lifetime$"):
+            adapter.normalize_token_response(payload,client_id="oaiapp_x",ext_agent_host_id=self.host_id,claims=claims)
+
+    def test_66_lock_setup_failure_releases_process_mutex(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = adapter.FileLock(Path(tmp) / "missing" / "x.lock", timeout_seconds=0.1)
+            original = Path.mkdir
+            try:
+                Path.mkdir = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("synthetic"))
+                with self.assertRaises(OSError):
+                    with lock:
+                        pass
+            finally:
+                Path.mkdir = original
+            self.assertTrue(adapter.FileLock._process_lock.acquire(timeout=0.1))
+            adapter.FileLock._process_lock.release()
+
+    def test_67_cli_uses_separate_registration_and_safe_exception_boundary(self):
+        cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
+        self.assertIn("save_registration_atomic(registration)", cli)
+        self.assertNotIn("save_profile_atomic(pending)", cli)
+        self.assertIn("def _safe_main()", cli)
+        self.assertNotIn('"message": str(exc)', cli)
+
+    def test_68_legacy_live_arguments_fail_closed_without_transport(self):
+        class Never:
+            def stream_sse(self,*args,**kwargs):
+                raise AssertionError("transport must not be called")
+        result = adapter.run_streamed_review(
+            profile={"access_token":"x"},
+            model_catalog={"user_authorized":True,"authorized_models":["gpt-6-astra"]},
+            activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
+            transport=Never(),
+            review_prompt="Review.",
+            review_context={"task_id":"TASK-0004"},
+        )
+        self.assertEqual(result["status"], adapter.BLOCKED_INVALID_RESPONSE)
+
+
 if __name__ == "__main__":
     unittest.main()
