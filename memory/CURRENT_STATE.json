@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "run_id": "20261004_0003_ASTRA_R2_CORRECTION",
-  "phase": "AUTONOMOUS_ORCHESTRATION_TASK_0002_CORRECTION",
-  "status": "TASK_0002_ASTRA_REJECTED_CORRECTIONS_IMPLEMENTED_AWAITING_EXACT_HEAD_REGRESSION",
+  "run_id": "20261004_0004_TASK_0003_BOOTSTRAP",
+  "phase": "ZERO_COST_ASTRA_REVIEWER_BRIDGE",
+  "status": "TASK_0002_APPROVED_MERGED_TASK_0003_PREPARING",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",
@@ -21,17 +21,13 @@
     "windows_regression_run_id": 37101797145
   },
   "task_0002": {
-    "review_status": "REJECTED_CORRECTIONS_IMPLEMENTED_PENDING_RETEST",
-    "worker_retry_ceiling": 3,
-    "worker_retry_ceiling_reached": true,
-    "last_worker_run_id": 37185234730,
-    "last_worker_result": "DETERMINISTIC_PREFLIGHT_FAILED",
-    "recovery_mode": "BOOTSTRAP_HARDENING_WITHOUT_ADDITIONAL_WORKER_CALL",
-    "unit_tests_count": 30,
-    "candidate_regression": "PENDING_CORRECTED_HEAD",
-    "astra_rejected_head": "e2ef36e3fb8a5bff41e50c4512a2696f1c315b3d",
-    "astra_blocking_findings": 4,
-    "workflow_level_fixtures": 4
+    "review_status": "APPROVED",
+    "reviewed_head": "c36fa8f3d9c6603a895e4df9d409b498958ddc44",
+    "merge_commit": "0ce06097fdc39ded8d18daa0d452c23dc0d5a208",
+    "controller_regression_run_id": 37191999338,
+    "pc_cleanup_regression_run_id": 37191999344,
+    "unit_tests_count": 34,
+    "workflow_level_fixtures": 5
   },
   "local_cleanup": {
     "old_project_path": "D:\\Documents\\AI-Movie-Studio",
@@ -39,5 +35,16 @@
     "backup_path": "D:\\Documents\\AI-Movie-Studio_BACKUP_20261003.zip",
     "active_local_project_path": "D:\\Documents\\project-agent-orchestrator",
     "future_cleanup_policy": "AUDIT_ONLY_UNLESS_SEPARATELY_APPROVED"
+  },
+  "task_0003": {
+    "objective": "zero-cost ChatGPT-plan Astra reviewer bridge",
+    "status": "PREPARING",
+    "issue_number": 3,
+    "paid_api_allowed": false,
+    "chatgpt_plan_usage_only": true,
+    "automatic_credit_use_allowed": false,
+    "local_inference": false,
+    "initial_runtime": "SELF_HOSTED_WINDOWS_REVIEWER_BRIDGE",
+    "one_time_user_oauth_required": true
   }
 }
