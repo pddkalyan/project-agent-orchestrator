@@ -95,3 +95,5 @@
 {"file":"memory/CURRENT_STATE.json","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R1_CORRECTION","kind":"modified"}
 {"file":"memory/NEXT_ACTIONS.json","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R1_CORRECTION","kind":"modified"}
 {"file":"PROVENANCE_REGISTRY.jsonl","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R1_CORRECTION","kind":"modified"}
+{"file":".github/workflows/chatgpt_plan_reviewer_regression.yml","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R1_CORRECTION_FINALIZE","kind":"modified","reason":"checkout and verify exact PR head rather than relying on pull-request merge preview"}
+{"file":"PROVENANCE_REGISTRY.jsonl","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R1_CORRECTION_FINALIZE","kind":"modified"}
