@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0004",
-  "review_status": "PENDING_ASTRA_REVIEW",
+  "review_status": "R1_CORRECTED_PENDING_ASTRA_R2",
   "worker": {
     "agent": "worker_gemini_cli",
     "model": "gemini-3.5-flash-lite"
@@ -20,10 +20,10 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "verification_results": {
-    "status": "PENDING_ASTRA_EXACT_HEAD_LOCAL_TEST",
-    "deterministic_tests_expected": 60,
+    "status": "PENDING_ASTRA_R2_EXACT_HEAD_LOCAL_TEST",
+    "deterministic_tests_expected": 68,
     "exact_head_task0004_ci_available": false,
-    "reason": "TASK-0004 intentionally does not modify workflow files. Existing repository regressions run on the PR head but do not execute the new TASK-0004 test module. Astra is requested to execute the offline test module locally on the exact head.",
+    "reason": "Astra R1 rejected the prior exact head. The six findings were corrected and the TASK-0004 module now contains 68 deterministic offline tests. Existing repository regressions run on the PR head but still do not execute the TASK-0004 module; Astra R2 must run it locally on the new exact head.",
     "live_authorization_performed": false,
     "live_openai_calls_performed": false,
     "zero_extra_spend_boundary": true,
@@ -34,6 +34,7 @@
     "no_merge_or_auto_merge": true
   },
   "review_focus": [
+    "Astra R1 six-finding correction verification on exact correction head",
     "current OpenAI SIWC endpoint and dynamic_agent_client registration semantics",
     "callback-issued client_id persistence before token exchange and reuse for returning sign-in",
     "stable urn:uuid ext_agent_host_id and exact 127.0.0.1 /auth/callback loopback URI",
@@ -50,7 +51,12 @@
     "private-key/auth-code/id_token_hint/bearer/token diagnostics are redacted; invalid refresh grants fail closed",
     "live streamed reviewer transport is impossible unless a separate activation policy sets reviewer_enabled=true and zero_extra_spend_confirmed=true",
     "exact gpt-6-astra catalog and required plan scopes are rechecked immediately before live reviewer transport",
-    "non-Bearer token responses are rejected and expired profiles refresh even if earliest_refresh_at is stale/future"
+    "non-Bearer token responses are rejected and expired profiles refresh even if earliest_refresh_at is stale/future",
+    "single production live-review pipeline must refresh session, query account-bound catalog, validate fresh account-bound zero-spend allowance, execute TASK-0003 evaluation/schema/dedup, and fail closed",
+    "returning sign-in uses separate registration metadata plus profile-version CAS so concurrent refresh cannot be rolled back",
+    "refresh response validation blocks invalid token values/types/lifetimes and never retries a consumed rotating token",
+    "FileLock releases process mutex/handles on every acquisition failure and uses bounded nonblocking Windows lock attempts",
+    "public diagnostics use structured safe statuses and multiline credential continuations are redacted"
   ],
   "known_limitations": [
     "The user has not performed real browser authorization yet; that is intentionally post-merge.",
@@ -65,5 +71,19 @@
     "failed_controller_run_id": 37210052342,
     "failure_reason": "Controller validated, committed and pushed candidate branch successfully; repository Actions policy blocked GitHub Actions from creating the pull request. Draft PR #6 was recovered through the trusted GitHub connector.",
     "recovered_pr_number": 6
+  },
+  "reviewed_rejected_sha": "ca0426c45eec6b73db9fb94be6a75f45b33f4acf",
+  "correction_head": "ff15ab922bf968ad946220e11c7e3a676df04a28",
+  "astra_r1": {
+    "status": "REJECTED",
+    "findings": [
+      "R1-01 live inference lacked mandatory allowance/current-session/account-bound catalog checks",
+      "R1-02 TASK-0003 handoff was optional/disconnected",
+      "R1-03 credential-bearing diagnostics could escape",
+      "R1-04 returning sign-in could roll back rotated credentials",
+      "R1-05 refresh could report invalid credentials ready or retain a consumed token",
+      "R1-06 Windows lock acquisition failure could leave process mutex held"
+    ],
+    "correction_status": "IMPLEMENTED_PENDING_R2"
   }
 }
