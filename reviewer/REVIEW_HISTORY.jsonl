@@ -3,3 +3,5 @@
 {"schema_version":1,"event":"PROMOTION_RECOVERY","task_id":"TASK-0003","failed_controller_run_id":37201480700,"reason":"workflow-file push permission unavailable to controller GitHub App","status":"RECOVERED_TO_REVIEW_BRANCH"}
 {"schema_version":1,"event":"ASTRA_REVIEW","task_id":"TASK-0003","review_number":1,"reviewed_head":"5e8c0e62b5427255f4c3d2ca3c665196b9e372bd","status":"REJECTED","finding_ids":["TASK-0003-R1-01","TASK-0003-R1-02","TASK-0003-R1-03","TASK-0003-R1-04"]}
 {"schema_version":1,"event":"CORRECTIONS_IMPLEMENTED","task_id":"TASK-0003","review_number":1,"status":"PENDING_EXACT_HEAD_REGRESSION","deterministic_tests_expected":51}
+{"schema_version":1,"event":"ASTRA_REVIEW","task_id":"TASK-0003","review_number":2,"reviewed_head":"eed83559ed86390946fb8eb7dfbccaca4680a431","status":"REJECTED","resolved":["TASK-0003-R1-01","TASK-0003-R1-04"],"finding_ids":["TASK-0003-R2-01","TASK-0003-R2-02","TASK-0003-R2-03"]}
+{"schema_version":1,"event":"CORRECTIONS_IMPLEMENTED","task_id":"TASK-0003","review_number":2,"status":"PENDING_EXACT_HEAD_REGRESSION","deterministic_tests_expected":68}
