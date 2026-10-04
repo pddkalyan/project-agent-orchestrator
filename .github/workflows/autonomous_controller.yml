@@ -1,0 +1,249 @@
+name: Autonomous Controller
+
+on:
+  workflow_run:
+    workflows:
+      - "Cloud Worker Task"
+    types:
+      - completed
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  controller:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: controller-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
+    if: >-
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'repository_dispatch') &&
+      github.event.workflow_run.conclusion != 'skipped'
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable worker context
+        uses: actions/download-artifact@v4
+        with:
+          name: worker-context
+          path: ${{ runner.temp }}/worker-context-${{ github.event.workflow_run.id }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify immutable source/task binding
+        id: task
+        shell: bash
+        run: |
+          set -euo pipefail
+          HELPER_REPO="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          FAILURE_FLOW_REPO="scripts/autonomous_controller_failure_flow__created_by_bootstrap_chatgpt__model_gpt-5.6-sol__task_TASK-0002.sh"
+          TRUSTED_HELPER="$RUNNER_TEMP/trusted-autonomous-controller.py"
+          TRUSTED_FAILURE_FLOW="$RUNNER_TEMP/trusted-controller-failure-flow.sh"
+          CONTEXT="$RUNNER_TEMP/worker-context-$SOURCE_RUN_ID/worker_context.json"
+          test -f "$CONTEXT"
+
+          TASK_FILE="$(jq -er '.task_file' "$CONTEXT")"
+          TASK_ID="$(jq -er '.task_id' "$CONTEXT")"
+          TASK_SHA="$(jq -er '.task_sha' "$CONTEXT")"
+          SOURCE_ATTEMPT="$(jq -er '.retry_attempt' "$CONTEXT")"
+          CONTEXT_EVENT="$(jq -er '.event_name' "$CONTEXT")"
+          DISPATCH_KEY="$(jq -r '.dispatch_key // ""' "$CONTEXT")"
+          SOURCE_WORKER_RUN_ID="$(jq -r '.source_worker_run_id // ""' "$CONTEXT")"
+
+          [[ "$TASK_FILE" =~ ^tasks/queue/[A-Za-z0-9._-]+\.json$ ]] || { echo "Invalid bound task_file" >&2; exit 10; }
+          [[ "$TASK_ID" =~ ^TASK-[0-9]+$ ]] || { echo "Invalid bound task_id" >&2; exit 10; }
+          [[ "$TASK_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid bound task_sha" >&2; exit 10; }
+          [[ "$SOURCE_ATTEMPT" =~ ^[0-9]+$ ]] || { echo "Invalid bound retry_attempt" >&2; exit 10; }
+          [[ "$CONTEXT_EVENT" == "${{ github.event.workflow_run.event }}" ]] || { echo "Worker-context event mismatch" >&2; exit 10; }
+
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git cat-file -e "$TASK_SHA^{commit}"
+          if ! git merge-base --is-ancestor "$TASK_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "Bound task SHA is not on trusted default-branch lineage: $TASK_SHA" >&2
+            exit 10
+          fi
+          git show "$TASK_SHA:$TASK_FILE" > /tmp/source-task.json
+          git show "$TASK_SHA:$HELPER_REPO" > "$TRUSTED_HELPER"
+          git show "$TASK_SHA:$FAILURE_FLOW_REPO" > "$TRUSTED_FAILURE_FLOW"
+          chmod 700 "$TRUSTED_FAILURE_FLOW"
+          python -m py_compile "$TRUSTED_HELPER"
+          EXECUTE="$(python "$TRUSTED_HELPER" context-execute "$CONTEXT")"
+          [[ "$EXECUTE" == "true" || "$EXECUTE" == "false" ]] || { echo "Invalid execute flag" >&2; exit 10; }
+
+          if [[ "$CONTEXT_EVENT" == "push" ]]; then
+            [[ "$TASK_SHA" == "$WORKFLOW_HEAD_SHA" ]] || { echo "Push worker context SHA mismatch" >&2; exit 11; }
+            mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r --root "$TASK_SHA" | grep '^tasks/queue/[A-Za-z0-9._-]*\.json$' || true)
+            [[ "${#TASK_FILES[@]}" -eq 1 && "${TASK_FILES[0]}" == "$TASK_FILE" ]] || { echo "Push task derivation mismatch" >&2; exit 11; }
+            python "$TRUSTED_HELPER" verify-binding /tmp/source-task.json "$TASK_FILE" "$TASK_SHA" "$TASK_ID" "$SOURCE_ATTEMPT" >/dev/null
+          elif [[ "$CONTEXT_EVENT" == "repository_dispatch" ]]; then
+            [[ "$DISPATCH_KEY" =~ ^[0-9a-f]{32}$ ]] || { echo "Missing/invalid dispatch binding key" >&2; exit 11; }
+            [[ "$SOURCE_WORKER_RUN_ID" =~ ^[0-9]+$ ]] || { echo "Missing/invalid source worker run binding" >&2; exit 11; }
+            python "$TRUSTED_HELPER" verify-binding /tmp/source-task.json "$TASK_FILE" "$TASK_SHA" "$TASK_ID" "$SOURCE_ATTEMPT" "$DISPATCH_KEY" "$SOURCE_WORKER_RUN_ID" >/dev/null
+          else
+            echo "Unsupported bound worker event: $CONTEXT_EVENT" >&2
+            exit 11
+          fi
+
+          MAX_RETRIES="$(jq -er '.max_controller_retries // 3' /tmp/source-task.json)"
+          echo "task_file=$TASK_FILE" >> "$GITHUB_OUTPUT"
+          echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
+          echo "task_sha=$TASK_SHA" >> "$GITHUB_OUTPUT"
+          echo "source_attempt=$SOURCE_ATTEMPT" >> "$GITHUB_OUTPUT"
+          echo "max_retries=$MAX_RETRIES" >> "$GITHUB_OUTPUT"
+          echo "dispatch_key=$DISPATCH_KEY" >> "$GITHUB_OUTPUT"
+          echo "execute=$EXECUTE" >> "$GITHUB_OUTPUT"
+
+      - name: Record duplicate dispatch no-op
+        if: steps.task.outputs.execute == 'false'
+        shell: bash
+        run: |
+          echo "Duplicate repository_dispatch delivery was already claimed by another worker run; no controller side effects will run." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download exact worker success bundle
+        if: steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: worker-bundle-${{ steps.task.outputs.task_id }}
+          path: ${{ runner.temp }}/worker-bundle-${{ github.event.workflow_run.id }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate and promote successful candidate
+        id: promote
+        if: steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TASK_ID="${{ steps.task.outputs.task_id }}"
+          TASK_FILE="${{ steps.task.outputs.task_file }}"
+          BUNDLE_DIR="$RUNNER_TEMP/worker-bundle-$SOURCE_RUN_ID"
+          HELPER="$RUNNER_TEMP/trusted-autonomous-controller.py"
+
+          test -d "$BUNDLE_DIR"
+          python "$HELPER" validate-bundle "$BUNDLE_DIR" /tmp/source-task.json > /tmp/validation.json
+          jq -e '.valid == true and (.files | type == "array")' /tmp/validation.json >/dev/null
+
+          BRANCH="candidate/${TASK_ID}/worker-${SOURCE_RUN_ID}"
+          MARKER="[controller-run:${SOURCE_RUN_ID}]"
+          git config user.name "Project Agent Autonomous Controller"
+          git config user.email "autonomous-controller@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$BRANCH:refs/remotes/origin/$BRANCH"
+            if ! git log -1 --format=%B "origin/$BRANCH" | grep -Fq "$MARKER"; then
+              echo "Deterministic candidate branch exists without this run marker; refusing to overwrite." >&2
+              exit 20
+            fi
+          else
+            git checkout -B "$BRANCH" "${{ steps.task.outputs.task_sha }}"
+            python "$HELPER" promote-bundle "$BUNDLE_DIR" /tmp/validation.json "$PWD" > /tmp/promotion.json
+            jq -e '.valid == true' /tmp/promotion.json >/dev/null
+            while IFS= read -r file; do
+              [[ -n "$file" ]] || continue
+              git add -- "$file"
+            done < <(jq -r '.files[]' /tmp/promotion.json)
+
+            if git diff --cached --quiet; then
+              echo "Validated worker bundle produced no candidate changes." >&2
+              exit 21
+            fi
+            git commit -m "candidate: ${TASK_ID} worker run ${SOURCE_RUN_ID} ${MARKER}"
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
+
+          EXISTING_PR="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base "$DEFAULT_BRANCH" --state open --json number,isDraft,url --jq '.[0] // empty')"
+          if [[ -n "$EXISTING_PR" ]]; then
+            PR_NUMBER="$(jq -r '.number' <<<"$EXISTING_PR")"
+            IS_DRAFT="$(jq -r '.isDraft' <<<"$EXISTING_PR")"
+            if [[ "$IS_DRAFT" != "true" ]]; then
+              echo "Existing candidate PR is not draft; refusing to alter review state." >&2
+              exit 22
+            fi
+          else
+            WORKER_MODEL="$(jq -r '.preferred_worker_model // "unknown"' /tmp/source-task.json)"
+            CHANGED_FILES="$(jq -r '.files[]' /tmp/validation.json | sed 's/^/- /')"
+            {
+              echo "Automated validated candidate for **${TASK_ID}**."
+              echo
+              echo "- Worker model: ${WORKER_MODEL}"
+              echo "- Source worker workflow run: ${SOURCE_RUN_ID}"
+              echo "- Bound task commit: ${{ steps.task.outputs.task_sha }}"
+              echo "- Spend policy: **USD 0**"
+              echo "- Astra review: **required before merge**"
+              echo "- Auto-merge: **disabled**"
+              echo
+              echo "Validated candidate files:"
+              printf '%s\n' "${CHANGED_FILES}"
+            } > /tmp/pr-body.md
+            gh pr create --repo "$GITHUB_REPOSITORY" --draft --base "$DEFAULT_BRANCH" --head "$BRANCH" \
+              --title "${TASK_ID}: autonomous worker candidate — Astra review required" \
+              --body-file /tmp/pr-body.md
+            PR_NUMBER="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base "$DEFAULT_BRANCH" --state open --json number --jq '.[0].number')"
+          fi
+
+          test -n "$PR_NUMBER"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch candidate regression
+        if: steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg ref "${{ steps.promote.outputs.branch }}" \
+            --arg pr "${{ steps.promote.outputs.pr_number }}" \
+            --arg task "${{ steps.task.outputs.task_id }}" \
+            --arg source_run "$SOURCE_RUN_ID" \
+            '{event_type:"controller_candidate_regression",client_payload:{candidate_ref:$ref,pr_number:$pr,task_id:$task,source_worker_run_id:$source_run}}' \
+            > /tmp/regression-dispatch.json
+          gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input /tmp/regression-dispatch.json
+          echo "Candidate regression dispatched for PR #${{ steps.promote.outputs.pr_number }}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect structured failure evidence and retry, resume, or block
+        id: failure
+        if: steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion != 'success'
+        shell: bash
+        env:
+          TASK_ID: ${{ steps.task.outputs.task_id }}
+          TASK_FILE: ${{ steps.task.outputs.task_file }}
+          TASK_SHA: ${{ steps.task.outputs.task_sha }}
+          SOURCE_ATTEMPT: ${{ steps.task.outputs.source_attempt }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TRUSTED_HELPER: ${{ runner.temp }}/trusted-autonomous-controller.py
+          EVIDENCE_OUT: ${{ runner.temp }}/controller_failure_evidence.json
+          GH_BIN: gh
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/trusted-controller-failure-flow.sh"
+
+      - name: Upload structured failure evidence
+        if: always() && steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion != 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: controller-failure-evidence-${{ steps.task.outputs.task_id }}-${{ github.event.workflow_run.id }}
+          path: ${{ runner.temp }}/controller_failure_evidence.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -6,7 +6,10 @@ on:
       - main
     paths:
       - ".github/workflows/autonomous_controller.yml"
+      - ".github/workflows/worker_task.yml"
+      - ".github/workflows/autonomous_controller_regression.yml"
       - "scripts/autonomous_controller__created_by_worker_gemini_cli__model_*__task_TASK-0002.py"
+      - "scripts/autonomous_controller_failure_flow__created_by_bootstrap_chatgpt__model_gpt-5.6-sol__task_TASK-0002.sh"
       - "tests/test_autonomous_controller__created_by_worker_gemini_cli__model_*__task_TASK-0002.py"
       - "docs/autonomous_controller__created_by_worker_gemini_cli__model_*__task_TASK-0002.md"
       - "review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_*.json"
@@ -89,16 +92,21 @@ jobs:
         run: |
           set -euo pipefail
           WORKFLOW=".github/workflows/autonomous_controller.yml"
+          WORKER=".github/workflows/worker_task.yml"
           SCRIPT="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          FAILURE_FLOW="scripts/autonomous_controller_failure_flow__created_by_bootstrap_chatgpt__model_gpt-5.6-sol__task_TASK-0002.sh"
           TEST="tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
           PACKET="review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json"
 
           test -f "$WORKFLOW"
+          test -f "$WORKER"
           test -f "$SCRIPT"
+          test -f "$FAILURE_FLOW"
           test -f "$TEST"
           test -f "$PACKET"
 
           python -m py_compile "$SCRIPT" "$TEST"
+          bash -n "$FAILURE_FLOW"
           python "$TEST"
 
           grep -q 'workflow_run:' "$WORKFLOW"
@@ -123,9 +131,35 @@ jobs:
           grep -q 'gh pr create' "$WORKFLOW"
           grep -q -- '--draft' "$WORKFLOW"
           grep -q 'git push origin' "$WORKFLOW"
-          grep -q 'worker_task_retry' "$WORKFLOW"
+          grep -q 'worker_task_retry' "$FAILURE_FLOW"
           grep -q 'controller_candidate_regression' "$WORKFLOW"
           grep -q '/dispatches' "$WORKFLOW"
+
+          grep -q 'worker-context' "$WORKFLOW"
+          grep -q 'task_sha' "$WORKFLOW"
+          grep -q 'dispatch_key' "$WORKFLOW"
+          grep -q 'controller-dispatch-receipts/' "$FAILURE_FLOW"
+          grep -q 'validate-retry-record' "$FAILURE_FLOW"
+          grep -q 'concurrency:' "$WORKFLOW"
+          grep -q 'worker-context' "$WORKER"
+          grep -q 'claim-worker-execution' "$WORKER"
+          grep -q 'claim-worker-execution' "$SCRIPT"
+          grep -q 'persist-credentials: false' "$WORKER"
+          grep -q 'validate-staging' "$WORKER"
+          grep -q 'task_sha' "$WORKER"
+          grep -q 'dispatch_key' "$WORKER"
+          grep -q 'stage-bundle' "$WORKER"
+          grep -q 'write-worker-failure-evidence' "$WORKER"
+          grep -q 'runner.temp' "$WORKER"
+          grep -q 'runner.temp' "$WORKFLOW"
+          grep -q 'trusted-autonomous-controller.py' "$WORKFLOW"
+          grep -q 'trusted-controller-failure-flow.sh' "$WORKFLOW"
+          grep -q 'promote-bundle' "$WORKFLOW"
+
+          if grep -Eq 'gh run view.*--log-failed|sanitized_log_excerpt' "$WORKFLOW"; then
+            echo "Raw failed-log persistence is forbidden; use structured diagnostics only." >&2
+            exit 34
+          fi
 
           if grep -Eq 'pattern-match:|merge-merges:' "$WORKFLOW"; then
             echo "Unsupported download-artifact input found." >&2
@@ -152,6 +186,7 @@ jobs:
           state = json.loads(Path("memory/CURRENT_STATE.json").read_text())
           tests = Path("tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text().lower()
           workflow = Path(".github/workflows/autonomous_controller.yml").read_text()
+          worker = Path(".github/workflows/worker_task.yml").read_text()
           script = Path("scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text()
 
           assert packet.get("review_status") == "PENDING_ASTRA_REVIEW"
@@ -160,9 +195,19 @@ jobs:
           assert state.get("local_video_inference") is False
           assert state.get("pc_cleanup_mode") == "AUDIT_ONLY"
 
-          for word in ("symlink", "manifest", "duplicate", "traversal", "absolute", "secret", "retry", "idempot"):
+          for word in ("symlink", "manifest", "duplicate", "traversal", "absolute", "secret", "retry", "idempot", "binding", "dispatch", "github_pat", "private_key"):
               assert word in tests, f"missing test coverage keyword: {word}"
-          assert tests.count("def test_") >= 13, "expected at least 13 deterministic tests"
+          assert tests.count("def test_") >= 34, "expected at least 34 deterministic tests"
+          assert worker.index("validate-staging") < worker.index("- name: Stage worker bundle with immutable validator"), "symlink/type validation must precede bundle staging"
+          assert "gh run view" not in workflow, "raw failed logs must not be persisted"
+          assert "downloaded_worker_context" not in workflow, "controller context must not be downloaded inside checkout"
+          assert "downloaded_worker_bundle" not in workflow, "controller bundle must not be downloaded inside checkout"
+          assert "cp \"worker_result_" not in worker, "raw worker_result must never be copied into failed evidence"
+          for step in ("Validate and promote successful candidate", "Dispatch candidate regression", "Collect structured failure evidence and retry, resume, or block"):
+              marker = f"- name: {step}"
+              pos = workflow.index(marker)
+              window = workflow[pos:pos+400]
+              assert "steps.task.outputs.execute == 'true'" in window, f"{step} must be gated by execute=true"
 
           lower_combined = (workflow + "\n" + script).lower()
           for forbidden in ("remove-item", "reg delete", "stop-service", "uninstall-package"):
@@ -170,6 +215,356 @@ jobs:
           PY
 
           echo "TASK-0002 autonomous controller regression passed."
+
+      - name: "Run Astra Review #4 production-path fixtures"
+        shell: bash
+        run: |
+          set -euo pipefail
+          HELPER="$PWD/scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          FAILURE_FLOW="$PWD/scripts/autonomous_controller_failure_flow__created_by_bootstrap_chatgpt__model_gpt-5.6-sol__task_TASK-0002.sh"
+          CONTROLLER="$PWD/.github/workflows/autonomous_controller.yml"
+          WORKER="$PWD/.github/workflows/worker_task.yml"
+          ROOT="$RUNNER_TEMP/task0002-astra-r4"
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+
+          echo "Production fixture 1: actual retry flow ignores context outside checkout, survives post-push dispatch failure, and resumes same attempt"
+          git init --bare -q "$ROOT/origin.git"
+          git clone -q "$ROOT/origin.git" "$ROOT/retry-work"
+          git -C "$ROOT/retry-work" config user.email test@example.invalid
+          git -C "$ROOT/retry-work" config user.name test
+          mkdir -p "$ROOT/retry-work/tasks/queue"
+          cat > "$ROOT/retry-work/tasks/queue/task2.json" <<'JSON'
+          {
+            "task_id": "TASK-0002",
+            "retry_attempt": 1,
+            "max_controller_retries": 3,
+            "allowed_paths": []
+          }
+          JSON
+          git -C "$ROOT/retry-work" add .
+          git -C "$ROOT/retry-work" commit -qm "source attempt"
+          git -C "$ROOT/retry-work" branch -M main
+          git -C "$ROOT/retry-work" push -q -u origin main
+          SOURCE_SHA="$(git -C "$ROOT/retry-work" rev-parse HEAD)"
+
+          mkdir -p "$ROOT/runner-temp/worker-context-999"
+          cat > "$ROOT/runner-temp/worker-context-999/worker_context.json" <<JSON
+          {"task_file":"tasks/queue/task2.json","task_id":"TASK-0002","task_sha":"$SOURCE_SHA","retry_attempt":1,"event_name":"push","dispatch_key":"","source_worker_run_id":"","execute":true}
+          JSON
+          test -z "$(git -C "$ROOT/retry-work" status --porcelain -uall)"
+
+          TOKEN="github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdef"
+          python - "$ROOT/jobs.json" "$TOKEN" <<'PY'
+          import json, sys
+          path, token = sys.argv[1:]
+          data = {
+              "jobs": [{
+                  "name": "api_key: |\n  BLOCK_SCALAR_SECRET_VALUE\n  continuation",
+                  "conclusion": "failure",
+                  "steps": [{
+                      "name": "request failed with " + token + "\n-----BEGIN PRIVATE KEY-----\nPRIVATE_KEY_PAYLOAD\n-----END PRIVATE KEY-----",
+                      "number": 7,
+                      "conclusion": "failure"
+                  }]
+              }]
+          }
+          open(path, "w", encoding="utf-8").write(json.dumps(data))
+          PY
+
+          mkdir -p "$ROOT/bin"
+          cat > "$ROOT/bin/fake-gh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "$1" != "api" ]]; then
+            echo "unsupported fake gh command" >&2
+            exit 90
+          fi
+          shift
+          if [[ "$1" == *"/actions/runs/"*"/jobs?per_page=100" ]]; then
+            cat "$FAKE_JOBS_JSON"
+            exit 0
+          fi
+          if [[ "$*" == *"--method POST"* && "$*" == *"/dispatches"* ]]; then
+            if [[ ! -e "$FAIL_DISPATCH_ONCE_FILE" ]]; then
+              : > "$FAIL_DISPATCH_ONCE_FILE"
+              exit 91
+            fi
+            count=0
+            [[ -f "$DISPATCH_COUNT_FILE" ]] && count="$(cat "$DISPATCH_COUNT_FILE")"
+            echo "$((count + 1))" > "$DISPATCH_COUNT_FILE"
+            exit 0
+          fi
+          echo "unsupported fake gh api: $*" >&2
+          exit 92
+          SH
+          chmod 700 "$ROOT/bin/fake-gh"
+
+          cp "$HELPER" "$ROOT/runner-temp/trusted.py"
+          cp "$FAILURE_FLOW" "$ROOT/runner-temp/trusted-flow.sh"
+          chmod 700 "$ROOT/runner-temp/trusted-flow.sh"
+          : > "$ROOT/summary.txt"
+
+          export TASK_ID="TASK-0002"
+          export TASK_FILE="tasks/queue/task2.json"
+          export TASK_SHA="$SOURCE_SHA"
+          export SOURCE_ATTEMPT="1"
+          export SOURCE_RUN_ID="999"
+          export SOURCE_CONCLUSION="failure"
+          export DEFAULT_BRANCH="main"
+          export GITHUB_REPOSITORY="fixture/repo"
+          export TRUSTED_HELPER="$ROOT/runner-temp/trusted.py"
+          export EVIDENCE_OUT="$ROOT/runner-temp/controller_failure_evidence.json"
+          export GH_BIN="$ROOT/bin/fake-gh"
+          export RUNNER_TEMP="$ROOT/runner-temp"
+          export GITHUB_STEP_SUMMARY="$ROOT/summary.txt"
+          export FAKE_JOBS_JSON="$ROOT/jobs.json"
+          export FAIL_DISPATCH_ONCE_FILE="$ROOT/dispatch-failed-once"
+          export DISPATCH_COUNT_FILE="$ROOT/dispatch-count"
+
+          set +e
+          (cd "$ROOT/retry-work" && "$ROOT/runner-temp/trusted-flow.sh")
+          FIRST_RC=$?
+          set -e
+          test "$FIRST_RC" -ne 0
+
+          FIRST_RETRY_SHA="$(git --git-dir="$ROOT/origin.git" rev-parse refs/heads/main)"
+          git --git-dir="$ROOT/origin.git" show "$FIRST_RETRY_SHA:tasks/queue/task2.json" > "$ROOT/after-first.json"
+          test "$(jq -r '.retry_attempt' "$ROOT/after-first.json")" = "2"
+          test "$(jq -r '.controller_retry_state.dispatch_status' "$ROOT/after-first.json")" = "PENDING_DISPATCH"
+          ! grep -Fq "BLOCK_SCALAR_SECRET_VALUE" "$ROOT/after-first.json"
+          ! grep -Fq "$TOKEN" "$ROOT/after-first.json"
+          ! grep -Fq "PRIVATE_KEY_PAYLOAD" "$ROOT/after-first.json"
+          ! grep -Fq "BLOCK_SCALAR_SECRET_VALUE" "$EVIDENCE_OUT"
+          ! grep -Fq "$TOKEN" "$EVIDENCE_OUT"
+          ! grep -Fq "PRIVATE_KEY_PAYLOAD" "$EVIDENCE_OUT"
+
+          COUNT_AFTER_FIRST="$(git --git-dir="$ROOT/origin.git" rev-list --count refs/heads/main)"
+          (cd "$ROOT/retry-work" && "$ROOT/runner-temp/trusted-flow.sh")
+          SECOND_RETRY_SHA="$(git --git-dir="$ROOT/origin.git" rev-parse refs/heads/main)"
+          COUNT_AFTER_SECOND="$(git --git-dir="$ROOT/origin.git" rev-list --count refs/heads/main)"
+          test "$SECOND_RETRY_SHA" = "$FIRST_RETRY_SHA"
+          test "$COUNT_AFTER_SECOND" = "$COUNT_AFTER_FIRST"
+          test "$(cat "$DISPATCH_COUNT_FILE")" = "1"
+          RECEIPTS="$(git --git-dir="$ROOT/origin.git" for-each-ref --format='%(refname)' refs/heads/controller-dispatch-receipts/ | wc -l)"
+          test "$RECEIPTS" = "1"
+
+          echo "Production fixture 2: candidate replacement helper is inert during trusted promotion"
+          mkdir -p "$ROOT/promotion/bundle/scripts" "$ROOT/promotion/destination/scripts"
+          MALICIOUS_PATH="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          cat > "$ROOT/promotion/bundle/$MALICIOUS_PATH" <<PY
+          from pathlib import Path
+          Path("$ROOT/MALICIOUS_HELPER_EXECUTED").write_text("should-not-run")
+          PY
+          echo SAFE_AFTER > "$ROOT/promotion/bundle/zz_after.txt"
+          printf '%s\n%s\n' "$MALICIOUS_PATH" "zz_after.txt" > "$ROOT/promotion/bundle/changed-files.txt"
+          cat > "$ROOT/promotion/task.json" <<JSON
+          {"allowed_paths":["$MALICIOUS_PATH","zz_after.txt"]}
+          JSON
+          python "$HELPER" validate-bundle "$ROOT/promotion/bundle" "$ROOT/promotion/task.json" > "$ROOT/promotion/validation.json"
+          jq -e '.valid == true' "$ROOT/promotion/validation.json" >/dev/null
+          python "$HELPER" promote-bundle "$ROOT/promotion/bundle" "$ROOT/promotion/validation.json" "$ROOT/promotion/destination" > "$ROOT/promotion/result.json"
+          jq -e '.valid == true' "$ROOT/promotion/result.json" >/dev/null
+          test ! -e "$ROOT/MALICIOUS_HELPER_EXECUTED"
+          grep -Fxq SAFE_AFTER "$ROOT/promotion/destination/zz_after.txt"
+
+          mkdir -p "$ROOT/promotion/symlink-bundle/scripts"
+          cp "$ROOT/promotion/bundle/$MALICIOUS_PATH" "$ROOT/promotion/symlink-bundle/$MALICIOUS_PATH"
+          echo EXTERNAL_PROMOTION_SENTINEL > "$ROOT/external-promotion.txt"
+          ln -s "$ROOT/external-promotion.txt" "$ROOT/promotion/symlink-bundle/zz_after.txt"
+          printf '%s\n%s\n' "$MALICIOUS_PATH" "zz_after.txt" > "$ROOT/promotion/symlink-bundle/changed-files.txt"
+          if python "$HELPER" validate-bundle "$ROOT/promotion/symlink-bundle" "$ROOT/promotion/task.json" >/dev/null 2>&1; then
+            echo "Trusted bundle validator accepted symlink after malicious helper replacement" >&2
+            exit 61
+          fi
+          test ! -e "$ROOT/MALICIOUS_HELPER_EXECUTED"
+
+          echo "Production fixture 3: failed-worker evidence never reads worker_result metadata"
+          mkdir -p "$ROOT/failed-work"
+          echo EXTERNAL_FAILURE_SENTINEL > "$ROOT/external-failure.txt"
+          ln -s "$ROOT/external-failure.txt" "$ROOT/failed-work/worker_result_TASK-0002.json"
+          mkdir -p "$ROOT/linked-parent-target"
+          echo LINKED_PARENT_SENTINEL > "$ROOT/linked-parent-target/worker_result_TASK-0002.json"
+          ln -s "$ROOT/linked-parent-target" "$ROOT/failed-work/linked-metadata-parent"
+          python "$HELPER" write-worker-failure-evidence "$ROOT/safe-failure-evidence" TASK-0002 "$SOURCE_SHA" 12345 > "$ROOT/failure-evidence-result.json"
+          jq -e '.valid == true' "$ROOT/failure-evidence-result.json" >/dev/null
+          ! grep -R -Fq "EXTERNAL_FAILURE_SENTINEL" "$ROOT/safe-failure-evidence"
+          ! grep -R -Fq "LINKED_PARENT_SENTINEL" "$ROOT/safe-failure-evidence"
+          test ! -e "$ROOT/safe-failure-evidence/worker_result_TASK-0002.json"
+          jq -e '.task_id == "TASK-0002" and .worker_run_id == "12345"' "$ROOT/safe-failure-evidence/failure-metadata.json" >/dev/null
+
+          echo "Production fixture 4: concurrent/repeated worker deliveries use one production execution claim"
+          RECEIPT_STATE="$ROOT/receipt-state"
+          mkdir -p "$RECEIPT_STATE"
+          cat > "$ROOT/bin/fake-gh-receipt" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          : "${RECEIPT_STATE:?}"
+          : "${RECEIPT_API_COUNT:?}"
+          [[ "$1" == "api" ]] || exit 90
+          shift
+
+          exec 9>"$RECEIPT_STATE/.lock"
+          flock 9
+          count=0
+          [[ -f "$RECEIPT_API_COUNT" ]] && count="$(cat "$RECEIPT_API_COUNT")"
+          echo "$((count + 1))" > "$RECEIPT_API_COUNT"
+
+          if [[ "${1:-}" == "--method" ]]; then
+            [[ "${2:-}" == "POST" ]] || exit 91
+            endpoint="${3:-}"
+            shift 3
+            ref=""
+            sha=""
+            while [[ "$#" -gt 0 ]]; do
+              case "$1" in
+                -f)
+                  case "$2" in
+                    ref=*) ref="${2#ref=}" ;;
+                    sha=*) sha="${2#sha=}" ;;
+                  esac
+                  shift 2
+                  ;;
+                *) shift ;;
+              esac
+            done
+            [[ "$endpoint" == */git/refs ]] || exit 92
+            key="${ref##*/}"
+            file="$RECEIPT_STATE/$key"
+            if [[ -e "$file" ]]; then
+              exit 1
+            fi
+            printf '%s\n' "$sha" > "$file"
+            printf '{"ref":"%s","object":{"sha":"%s"}}\n' "$ref" "$sha"
+            exit 0
+          fi
+
+          endpoint="${1:-}"
+          key="${endpoint##*/}"
+          file="$RECEIPT_STATE/$key"
+          [[ -f "$file" ]] || exit 1
+          sha="$(cat "$file")"
+          printf '{"object":{"sha":"%s"}}\n' "$sha"
+          SH
+          chmod 700 "$ROOT/bin/fake-gh-receipt"
+          export RECEIPT_STATE
+          export RECEIPT_API_COUNT="$ROOT/receipt-api-count"
+          : > "$RECEIPT_API_COUNT"
+
+          CLAIM_KEY="$(python "$HELPER" dispatch-key TASK-0002 "$SOURCE_SHA" 2 999)"
+          MODEL_MARKERS="$ROOT/model-executions.log"
+          SIDE_EFFECT_MARKERS="$ROOT/duplicate-side-effects.log"
+          : > "$MODEL_MARKERS"
+          : > "$SIDE_EFFECT_MARKERS"
+
+          claim_delivery() {
+            local idx="$1"
+            local result_file="$ROOT/claim-$idx.json"
+            python "$HELPER" claim-worker-execution fixture/repo "$CLAIM_KEY" "$SOURCE_SHA" "$ROOT/bin/fake-gh-receipt" > "$result_file"
+            local execute
+            execute="$(jq -r '.execute | tostring' "$result_file")"
+            if [[ "$execute" == "true" ]]; then
+              {
+                flock 8
+                echo "model-invocation-$idx" >> "$MODEL_MARKERS"
+              } 8>"$ROOT/model-marker.lock"
+            else
+              # This branch models the production execute=false path. Controller
+              # effectful steps are separately required to be execute=true-gated.
+              :
+            fi
+          }
+          export -f claim_delivery
+          export ROOT HELPER CLAIM_KEY SOURCE_SHA MODEL_MARKERS SIDE_EFFECT_MARKERS
+
+          claim_delivery one &
+          P1=$!
+          claim_delivery two &
+          P2=$!
+          wait "$P1"
+          wait "$P2"
+
+          TRUE_COUNT="$(jq -r '.execute' "$ROOT"/claim-{one,two}.json | grep -c '^true$' || true)"
+          FALSE_COUNT="$(jq -r '.execute' "$ROOT"/claim-{one,two}.json | grep -c '^false$' || true)"
+          test "$TRUE_COUNT" = "1"
+          test "$FALSE_COUNT" = "1"
+          test "$(wc -l < "$MODEL_MARKERS" | tr -d ' ')" = "1"
+
+          # Repeated delivery, including the case where dispatch succeeded but
+          # the controller receipt write failed, must not execute the model again.
+          claim_delivery replay
+          test "$(jq -r '.execute' "$ROOT/claim-replay.json")" = "false"
+          test "$(wc -l < "$MODEL_MARKERS" | tr -d ' ')" = "1"
+
+          # Duplicate controller context is valid false; malformed type fails.
+          cat > "$ROOT/context-false.json" <<'JSON'
+          {"execute":false}
+          JSON
+          test "$(python "$HELPER" context-execute "$ROOT/context-false.json")" = "false"
+          cat > "$ROOT/context-bad.json" <<'JSON'
+          {"execute":"false"}
+          JSON
+          if python "$HELPER" context-execute "$ROOT/context-bad.json" >/dev/null 2>&1; then
+            echo "Malformed execute value unexpectedly passed" >&2
+            exit 62
+          fi
+
+          # A conflicting immutable receipt must fail closed before model work.
+          CONFLICT_KEY="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          printf '%s\n' "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" > "$RECEIPT_STATE/$CONFLICT_KEY"
+          if python "$HELPER" claim-worker-execution fixture/repo "$CONFLICT_KEY" "$SOURCE_SHA" "$ROOT/bin/fake-gh-receipt" >/dev/null 2>&1; then
+            echo "Conflicting receipt SHA unexpectedly passed" >&2
+            exit 64
+          fi
+          test "$(wc -l < "$MODEL_MARKERS" | tr -d ' ')" = "1"
+
+          # Malformed bindings fail before any GitHub API side effect.
+          API_BEFORE="$(cat "$RECEIPT_API_COUNT")"
+          if python "$HELPER" claim-worker-execution fixture/repo bad-key "$SOURCE_SHA" "$ROOT/bin/fake-gh-receipt" >/dev/null 2>&1; then
+            echo "Malformed dispatch key unexpectedly passed" >&2
+            exit 65
+          fi
+          test "$(cat "$RECEIPT_API_COUNT")" = "$API_BEFORE"
+
+          python - "$CONTROLLER" <<'PY'
+          import sys
+          text = open(sys.argv[1], encoding="utf-8").read()
+          effectful = [
+              "Download exact worker success bundle",
+              "Validate and promote successful candidate",
+              "Dispatch candidate regression",
+              "Collect structured failure evidence and retry, resume, or block",
+              "Upload structured failure evidence",
+          ]
+          for name in effectful:
+              marker = f"- name: {name}"
+              pos = text.index(marker)
+              window = text[pos:pos + 500]
+              assert "steps.task.outputs.execute == 'true'" in window, name
+          PY
+          test ! -s "$SIDE_EFFECT_MARKERS"
+
+          echo "Production fixture 5: worker trusted staging rejects symlink metadata and copies normal files via same command used in workflow"
+          mkdir -p "$ROOT/staging/scripts"
+          echo SAFE_CANDIDATE > "$ROOT/staging/README.md"
+          printf 'README.md\n' > "$ROOT/staging/changed-files.txt"
+          echo '{}' > "$ROOT/staging/worker_result_TASK-0002.json"
+          python "$HELPER" stage-bundle "$ROOT/staging" changed-files.txt worker_result_TASK-0002.json "$ROOT/staged-bundle" > "$ROOT/stage-ok.json"
+          jq -e '.valid == true' "$ROOT/stage-ok.json" >/dev/null
+          grep -Fxq SAFE_CANDIDATE "$ROOT/staged-bundle/README.md"
+
+          rm -rf "$ROOT/staged-bundle"
+          rm "$ROOT/staging/worker_result_TASK-0002.json"
+          echo STAGING_SENTINEL > "$ROOT/staging-sentinel.txt"
+          ln -s "$ROOT/staging-sentinel.txt" "$ROOT/staging/worker_result_TASK-0002.json"
+          if python "$HELPER" stage-bundle "$ROOT/staging" changed-files.txt worker_result_TASK-0002.json "$ROOT/staged-bundle" >/dev/null 2>&1; then
+            echo "Metadata symlink unexpectedly staged" >&2
+            exit 63
+          fi
+          test ! -e "$ROOT/staged-bundle"
+          test "$(grep -c 'write-worker-failure-evidence' "$WORKER")" -ge 1
+
+          echo "All Astra Review #4 production-path fixtures passed."
 
       - name: Record regression evidence
         shell: bash
