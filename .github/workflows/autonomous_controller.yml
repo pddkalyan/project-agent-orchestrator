@@ -122,7 +122,7 @@ jobs:
 
       - name: Validate and promote successful candidate
         id: promote
-        if: github.event.workflow_run.conclusion == 'success'
+        if: steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -175,19 +175,19 @@ jobs:
           else
             WORKER_MODEL="$(jq -r '.preferred_worker_model // "unknown"' /tmp/source-task.json)"
             CHANGED_FILES="$(jq -r '.files[]' /tmp/validation.json | sed 's/^/- /')"
-            cat > /tmp/pr-body.md <<EOF
-Automated validated candidate for **${TASK_ID}**.
-
-- Worker model: ${WORKER_MODEL}
-- Source worker workflow run: ${SOURCE_RUN_ID}
-- Bound task commit: ${{ steps.task.outputs.task_sha }}
-- Spend policy: **USD 0**
-- Astra review: **required before merge**
-- Auto-merge: **disabled**
-
-Validated candidate files:
-${CHANGED_FILES}
-EOF
+            {
+              echo "Automated validated candidate for **${TASK_ID}**."
+              echo
+              echo "- Worker model: ${WORKER_MODEL}"
+              echo "- Source worker workflow run: ${SOURCE_RUN_ID}"
+              echo "- Bound task commit: ${{ steps.task.outputs.task_sha }}"
+              echo "- Spend policy: **USD 0**"
+              echo "- Astra review: **required before merge**"
+              echo "- Auto-merge: **disabled**"
+              echo
+              echo "Validated candidate files:"
+              printf '%s\n' "${CHANGED_FILES}"
+            } > /tmp/pr-body.md
             gh pr create --repo "$GITHUB_REPOSITORY" --draft --base "$DEFAULT_BRANCH" --head "$BRANCH" \
               --title "${TASK_ID}: autonomous worker candidate — Astra review required" \
               --body-file /tmp/pr-body.md
@@ -199,7 +199,7 @@ EOF
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch candidate regression
-        if: github.event.workflow_run.conclusion == 'success'
+        if: steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion == 'success'
         shell: bash
         run: |
           set -euo pipefail
@@ -356,8 +356,8 @@ EOF
           cp /tmp/controller_failure_evidence.json controller_failure_evidence.json
           echo "Queued bounded retry $NEXT_ATTEMPT for $TASK_ID with immutable binding $DISPATCH_KEY." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload sanitized failure evidence
-        if: github.event.workflow_run.conclusion != 'success'
+      - name: Upload structured failure evidence
+        if: steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion != 'success'
         uses: actions/upload-artifact@v4
         with:
           name: controller-failure-evidence-${{ steps.task.outputs.task_id }}-${{ github.event.workflow_run.id }}
