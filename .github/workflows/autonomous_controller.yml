@@ -66,13 +66,11 @@ jobs:
           CONTEXT_EVENT="$(jq -er '.event_name' "$CONTEXT")"
           DISPATCH_KEY="$(jq -r '.dispatch_key // ""' "$CONTEXT")"
           SOURCE_WORKER_RUN_ID="$(jq -r '.source_worker_run_id // ""' "$CONTEXT")"
-          EXECUTE="$(jq -r 'if (.execute | type) == "boolean" then (.execute | tostring) else error("execute must be boolean") end' "$CONTEXT")"
 
           [[ "$TASK_FILE" =~ ^tasks/queue/[A-Za-z0-9._-]+\.json$ ]] || { echo "Invalid bound task_file" >&2; exit 10; }
           [[ "$TASK_ID" =~ ^TASK-[0-9]+$ ]] || { echo "Invalid bound task_id" >&2; exit 10; }
           [[ "$TASK_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid bound task_sha" >&2; exit 10; }
           [[ "$SOURCE_ATTEMPT" =~ ^[0-9]+$ ]] || { echo "Invalid bound retry_attempt" >&2; exit 10; }
-          [[ "$EXECUTE" == "true" || "$EXECUTE" == "false" ]] || { echo "Invalid execute flag" >&2; exit 10; }
           [[ "$CONTEXT_EVENT" == "${{ github.event.workflow_run.event }}" ]] || { echo "Worker-context event mismatch" >&2; exit 10; }
 
           git fetch --no-tags origin "$DEFAULT_BRANCH"
@@ -84,6 +82,8 @@ jobs:
           git show "$TASK_SHA:$TASK_FILE" > /tmp/source-task.json
           git show "$TASK_SHA:$HELPER_REPO" > "$TRUSTED_HELPER"
           python -m py_compile "$TRUSTED_HELPER"
+          EXECUTE="$(python "$TRUSTED_HELPER" context-execute "$CONTEXT")"
+          [[ "$EXECUTE" == "true" || "$EXECUTE" == "false" ]] || { echo "Invalid execute flag" >&2; exit 10; }
 
           if [[ "$CONTEXT_EVENT" == "push" ]]; then
             [[ "$TASK_SHA" == "$WORKFLOW_HEAD_SHA" ]] || { echo "Push worker context SHA mismatch" >&2; exit 11; }
