@@ -20,29 +20,45 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "verification_results": {
-    "status": "PENDING_EXACT_HEAD_CI",
-    "deterministic_tests_expected": 10,
-    "live_authorization_enabled": false,
+    "status": "PENDING_ASTRA_EXACT_HEAD_LOCAL_TEST",
+    "deterministic_tests_expected": 41,
+    "exact_head_task0004_ci_available": false,
+    "reason": "TASK-0004 intentionally does not modify workflow files. Existing repository regressions run on the PR head but do not execute the new TASK-0004 test module. Astra is requested to execute the offline test module locally on the exact head.",
+    "live_authorization_performed": false,
     "live_openai_calls_performed": false,
     "zero_extra_spend_boundary": true,
-    "self_hosted_reviewer_only": true,
+    "no_api_key_path": true,
+    "no_paid_fallback": true,
     "no_local_inference": true,
     "no_conversation_access": true,
     "no_merge_or_auto_merge": true
   },
   "review_focus": [
-    "stable host identity storage and reuse across sign-ins",
-    "PKCE S256 challenge/verifier generation and state/nonce binding",
-    "strict ID token verification (issuer, audience, nonce, expiry, signature)",
+    "current OpenAI SIWC authorize/token/JWKS endpoints and dynamic_agent_client registration semantics",
+    "stable urn:uuid ext_agent_host_id reuse and exact 127.0.0.1 /auth/callback loopback handling",
+    "PKCE S256, fresh state/nonce, callback-issued client_id binding and returning-account client identity checks",
+    "mandatory cryptographic ID-token signature verification plus exact issuer/audience/nonce/expiry/subject validation",
     "scope enforcement requiring chatgpt.tokens.use.direct and offline_access",
-    "atomic refresh rotation and protected storage persistence",
-    "exact gpt-6-astra model catalog enforcement",
-    "stateless Responses API request builder enforcing store=false, stream=true",
-    "error status mapping for 401, 403, 429, 5xx and network failures",
-    "seamless integration into TASK-0003 immutable review evaluation gate",
-    "credential-free status output and aggressive secret sanitization"
+    "DPAPI-protected host-local credential envelope with no plaintext tokens in repository or status output",
+    "serialized atomic rotating refresh-token replacement and refresh persistence failure behavior",
+    "account-specific model catalog parsing and exact gpt-6-astra-only enforcement",
+    "stateless Responses request builder with store=false, stream=true and rejection of unsupported/stateful fields",
+    "stream completion/error mapping without APPROVED/REJECTED on infrastructure/auth/allowance failure",
+    "credential-free live handoff into TASK-0003 exact snapshot/verdict/schema/idempotency boundary",
+    "zero-spend/no-api-key/no-paid-fallback/no-conversation/no-local-inference/no-merge boundaries"
   ],
   "known_limitations": [
-    "TASK-0004 provides the live adapter and CLI implementation; live browser authentication is performed post-merge by the user on the Windows self-hosted reviewer machine."
-  ]
+    "The user has not performed real browser authorization yet; that is intentionally post-merge.",
+    "The live Windows verifier requires PyJWT[crypto] at runtime for JWKS signature verification; CI tests use an injected fake verifier.",
+    "TASK-0004 does not enable the self-hosted reviewer workflow or automatic inference. A separate activation gate is required.",
+    "OpenAI plan usage can be subject to account usage/credit settings; automatic reviewer inference must remain disabled until the later activation gate confirms the user's zero-extra-spend controls."
+  ],
+  "recovery": {
+    "source_worker_run_id": 37209531438,
+    "source_worker_bundle_artifact_id": 11306450927,
+    "source_worker_bundle_digest": "sha256:1a3a1704f53d820c1f0493674990ab93b644560826ab32a8ec075e3627076452",
+    "failed_controller_run_id": 37210052342,
+    "failure_reason": "Controller validated, committed and pushed candidate branch successfully; repository Actions policy blocked GitHub Actions from creating the pull request. Draft PR #6 was recovered through the trusted GitHub connector.",
+    "recovered_pr_number": 6
+  }
 }
