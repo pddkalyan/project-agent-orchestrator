@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0003",
+  "objective": "Build a zero-extra-spend, disabled-by-default reviewer bridge scaffold that can later use user-authorized ChatGPT-plan access to review exact PR SHAs automatically. The scaffold must be testable offline and must not perform live authorization or paid API calls.",
+  "preferred_worker_model": "gemini-3.5-flash-lite",
+  "astra_review_required": true,
+  "retry_attempt": 0,
+  "max_controller_retries": 3,
+  "allowed_paths": [
+    ".github/workflows/chatgpt_plan_reviewer.yml",
+    ".github/workflows/chatgpt_plan_reviewer_regression.yml",
+    "reviewer/ASTRA_REVIEWER_INSTRUCTIONS.md",
+    "reviewer/PROJECT_CONTEXT.md",
+    "reviewer/REVIEW_CONTRACT.schema.json",
+    "reviewer/SAFETY_BOUNDARIES.json",
+    "reviewer/REVIEW_HISTORY.jsonl",
+    "scripts/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py",
+    "tests/test_chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.py",
+    "docs/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.md",
+    "review_packets/astra_review_TASK-0003__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json",
+    "memory/CURRENT_STATE.json",
+    "memory/NEXT_ACTIONS.json",
+    "README.md",
+    "PROVENANCE_REGISTRY.jsonl"
+  ],
+  "constraints": [
+    "USD 0 extra spend; no paid API fallback or API-key billing.",
+    "Do not implement or execute live authorization in this task; create only interfaces, disabled workflow scaffolding, docs, and offline tests.",
+    "Use gpt-6-astra only if a future user-authorized model catalog exposes that exact identifier; otherwise produce BLOCKED_NO_ASTRA.",
+    "Do not access or claim access to existing ChatGPT conversations or memory.",
+    "No local AI inference, no destructive PC actions, no merge or auto-merge.",
+    "Do not store or print authentication material; any future authorization state must remain host-local and outside the repository.",
+    "Reviewer is review-only: APPROVED or REJECTED; it must not implement fixes."
+  ],
+  "functional_requirements": [
+    "Create a self-hosted-only reviewer workflow that is disabled/fails closed until a local authorization profile is available.",
+    "Create deterministic bridge logic for exact-model policy, exact-SHA review packet validation, CI evidence binding, verdict validation, blocked statuses, and idempotency.",
+    "Support statuses APPROVED, REJECTED, BLOCKED_AUTH_REQUIRED, BLOCKED_NO_ASTRA, and BLOCKED_PLAN_ALLOWANCE.",
+    "Create reviewer context files preserving zero-spend, no-local-inference, audit-only cleanup, bounded retries, and reviewer-only Astra rules.",
+    "A REJECTED verdict must deterministically map to a bounded correction package for the existing free-worker/controller loop.",
+    "An APPROVED verdict must bind to the exact reviewed SHA and must not merge.",
+    "Add offline regression tests using fakes for model catalog, approval, rejection, auth unavailable, allowance unavailable, SHA drift, malformed verdict, duplicate delivery, and secret-like input.",
+    "Regression must verify reviewer workflow is self-hosted-only and contains no API-key billing, merge/auto-merge, local inference, destructive cleanup, or conversation-scraping behavior.",
+    "Document the future one-time user authorization as a separate post-review setup step."
+  ],
+  "acceptance_criteria": [
+    "All TASK-0003 tests run without network calls or credentials.",
+    "Exact gpt-6-astra is selected only from an explicitly supplied fake authorized catalog.",
+    "Missing Astra, missing authorization, or unavailable plan allowance returns a blocked state rather than using a substitute or paid fallback.",
+    "Exact-SHA mismatch fails before reviewer invocation.",
+    "REJECTED output creates a deterministic bounded correction package; APPROVED records exact-SHA approval only.",
+    "Duplicate delivery is idempotent.",
+    "No authentication material or secret-like values are persisted in review history/evidence in tests.",
+    "Workflow is self-hosted-only and disabled until local authorization exists.",
+    "Review packet remains PENDING_ASTRA_REVIEW and accurately describes offline scaffold status."
+  ]
+}
