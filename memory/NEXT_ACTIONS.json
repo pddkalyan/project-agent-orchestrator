@@ -1,12 +1,11 @@
 {
   "schema_version": 1,
   "next": [
-    "Keep PR #6 draft and unmerged until GPT-6 Astra performs R2 and approves the new exact correction head.",
-    "Have Astra run all 68 TASK-0004 deterministic offline tests locally on the exact correction head.",
-    "Adversarially re-test each R1 finding: fresh session/account-bound catalog/allowance, mandatory TASK-0003 handoff and dedup, diagnostic secrecy, sign-in/refresh write races, strict refresh validation, and Windows lock cleanup.",
-    "If Astra R2 rejects, apply its concrete correction package and require another exact-SHA review; do not merge a stale SHA.",
+    "Keep PR #6 draft and unmerged until GPT-6 Astra performs R3 and approves the final exact correction head.",
+    "Have Astra run all 78 TASK-0004 deterministic offline tests locally on the exact correction head.",
+    "Adversarially re-test R2-01 through R2-05, especially process-restart refresh uncertainty, explicit malformed scope values, NaN/infinity/boolean timestamps, pending-registration retry reuse, and malformed stream event containment.",
+    "If Astra R3 rejects, apply its exact correction package and require another exact-SHA review; never merge a stale SHA.",
     "After exact-SHA approval and merge, perform the one-time Windows Continue with ChatGPT sign-in manually; never run browser authorization in CI.",
-    "Before automated reviewer inference, keep the separate zero-extra-spend activation gate and exact gpt-6-astra-only requirement.",
-    "Preserve no-conversation-access, no-local-inference, audit-only cleanup, reviewer-only Astra and no-auto-merge boundaries."
+    "Keep the separate zero-extra-spend activation gate, current account-bound exact gpt-6-astra catalog check, no-conversation-access, no-local-inference, audit-only cleanup, and no-auto-merge boundaries."
   ]
 }
