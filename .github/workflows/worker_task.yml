@@ -152,7 +152,7 @@ jobs:
           test -f "$TEST"
           test -f "$PACKET"
 
-          python -m unittest "$TEST"
+          python "$TEST"
 
           grep -q 'workflow_run:' "$WORKFLOW"
           grep -q 'Cloud Worker Task' "$WORKFLOW"
@@ -201,6 +201,7 @@ jobs:
           name: "failed-worker-bundle-${{ steps.task.outputs.task_id }}"
           path: failed_worker_bundle/
           retention-days: 30
+          include-hidden-files: true
 
       - name: Stage failed preflight evidence
         if: failure() && steps.task.outputs.task_id == 'TASK-0001'
@@ -286,3 +287,4 @@ jobs:
           name: "worker-bundle-${{ steps.task.outputs.task_id }}"
           path: worker_bundle/
           retention-days: 30
+          include-hidden-files: true
