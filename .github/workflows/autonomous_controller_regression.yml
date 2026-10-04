@@ -131,7 +131,7 @@ jobs:
           grep -q 'gh pr create' "$WORKFLOW"
           grep -q -- '--draft' "$WORKFLOW"
           grep -q 'git push origin' "$WORKFLOW"
-          grep -q 'worker_task_retry' "$WORKFLOW"
+          grep -q 'worker_task_retry' "$FAILURE_FLOW"
           grep -q 'controller_candidate_regression' "$WORKFLOW"
           grep -q '/dispatches' "$WORKFLOW"
 
