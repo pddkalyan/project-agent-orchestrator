@@ -93,27 +93,16 @@ jobs:
             exit 0
           fi
 
-          KEY="${{ steps.task.outputs.dispatch_key }}"
-          TASK_SHA="${{ steps.task.outputs.task_sha }}"
-          REF="refs/heads/worker-execution-receipts/$KEY"
-          API_REF="heads/worker-execution-receipts/$KEY"
-
-          if EXISTING="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/$API_REF" 2>/dev/null)"; then
-            SHA="$(jq -r '.object.sha' <<<"$EXISTING")"
-            [[ "$SHA" == "$TASK_SHA" ]] || { echo "Execution receipt points at unexpected SHA" >&2; exit 14; }
-            echo "execute=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="$REF" -f sha="$TASK_SHA" >/dev/null 2>&1; then
-            echo "execute=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          EXISTING="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/$API_REF")"
-          SHA="$(jq -r '.object.sha' <<<"$EXISTING")"
-          [[ "$SHA" == "$TASK_SHA" ]] || { echo "Concurrent execution receipt mismatch" >&2; exit 14; }
-          echo "execute=false" >> "$GITHUB_OUTPUT"
+          TRUSTED_HELPER="$RUNNER_TEMP/task0002-trusted-validator.py"
+          test -f "$TRUSTED_HELPER"
+          RESULT="$(python "$TRUSTED_HELPER" claim-worker-execution \
+            "$GITHUB_REPOSITORY" \
+            "${{ steps.task.outputs.dispatch_key }}" \
+            "${{ steps.task.outputs.task_sha }}" \
+            gh)"
+          jq -e '.valid == true and (.execute | type) == "boolean"' <<<"$RESULT" >/dev/null
+          EXECUTE="$(jq -r '.execute | tostring' <<<"$RESULT")"
+          echo "execute=$EXECUTE" >> "$GITHUB_OUTPUT"
 
       - name: Record immutable worker context
         shell: bash
