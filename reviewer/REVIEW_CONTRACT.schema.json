@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReviewContract",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "task_id": { "type": "string" },
+    "reviewed_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "reviewer_model": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["APPROVED", "REJECTED", "BLOCKED_AUTH_REQUIRED", "BLOCKED_NO_ASTRA", "BLOCKED_PLAN_ALLOWANCE"]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": { "type": "string", "enum": ["P1", "P2", "P3"] },
+          "issue": { "type": "string" },
+          "correction": { "type": "string" }
+        },
+        "required": ["severity", "issue", "correction"]
+      }
+    },
+    "correction_package": {
+      "type": "object",
+      "properties": {
+        "summary": { "type": "string" },
+        "actions": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "required": ["schema_version", "task_id", "reviewed_sha", "reviewer_model", "status"]
+}
