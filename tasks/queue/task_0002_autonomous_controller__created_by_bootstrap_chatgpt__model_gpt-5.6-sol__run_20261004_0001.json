@@ -7,7 +7,7 @@
   "objective": "Build the bounded autonomous orchestration controller that removes the current manual babysitting step between Cloud Worker Task runs and Astra review. The controller must automatically handle worker success/failure, validate worker artifacts against the task allowlist, promote a successful candidate to a draft pull request, and create bounded retry task revisions on worker failure using sanitized failure evidence. It must stop after a configured retry limit and surface a blocker instead of looping forever. It must never auto-merge, never call paid services, never invoke Astra through a paid API, never access or modify the user's PC, and never weaken the zero-spend/safety boundaries.",
   "preferred_worker_model": "gemini-3.5-flash-lite",
   "astra_review_required": true,
-  "retry_attempt": 0,
+  "retry_attempt": 1,
   "max_controller_retries": 3,
   "allowed_paths": [
     ".github/workflows/autonomous_controller.yml",
@@ -71,5 +71,13 @@
     "no direct-to-main implementation promotion",
     "no auto-merge",
     "truthful evidence"
+  ],
+  "retry_reason": "Run 37183951054 failed in TASK-0002 deterministic preflight after the free Gemini worker completed successfully. The first failure was a harness bug: `python -m unittest \"$TEST\"` treated the hyphenated filename (`gemini-3.5-flash-lite`) as a module path and could not import it. The harness is now corrected to execute the test file directly with `python \"$TEST\"`. Independent replay of the candidate test file then exposed a worker defect: the test itself uses `importlib.import_module(...)` on the hyphenated controller filename and fails with ModuleNotFoundError at `gemini-3`. Correct the test to load the controller by exact file path (for example importlib.util.spec_from_file_location/module_from_spec/exec_module) or equivalent safe file-based loading. Do not rename provenance-bearing files merely to work around this. Also correct the review packet: previous run did NOT pass deterministic preflight, so no truthful evidence may claim PASS until the current run actually passes. The generic worker-bundle uploader is now configured with include-hidden-files=true so `.github/workflows/autonomous_controller.yml` can be preserved in the candidate bundle.",
+  "orchestrator_corrections": [
+    "TASK-0002 retry #1: tests must execute successfully when invoked as `python <exact-test-file-path>` on Linux.",
+    "Load the hyphenated controller module by exact filesystem path rather than `importlib.import_module` using the filename as a Python module name.",
+    "Do not rename the required provenance-bearing controller/test filenames.",
+    "Review packet worker_preflight_evidence must be truthful: set PASS only after the deterministic preflight and unit tests actually pass in the current run.",
+    "Keep `.github/workflows/autonomous_controller.yml` in the worker candidate; artifact upload now includes hidden files."
   ]
 }
