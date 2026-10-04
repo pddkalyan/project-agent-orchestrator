@@ -36,6 +36,7 @@ WindowsDPAPIProtector = adapter.WindowsDPAPIProtector
 build_authorization_url = adapter.build_authorization_url
 build_token_exchange_request = adapter.build_token_exchange_request
 generate_host_id = adapter.generate_host_id
+ensure_fresh_profile = adapter.ensure_fresh_profile
 list_models = adapter.list_models
 new_authorization_attempt = adapter.new_authorization_attempt
 normalize_token_response = adapter.normalize_token_response
@@ -127,11 +128,12 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_models(args: argparse.Namespace) -> int:
     storage = _require_windows_storage(Path(args.storage))
-    profile = storage.load_profile()
+    transport = HttpTransport()
+    profile, status = ensure_fresh_profile(storage, transport)
     if not profile:
-        _json({"status": BLOCKED_AUTH_REQUIRED})
+        _json({"status": status})
         return 1
-    result = list_models(profile, HttpTransport())
+    result = list_models(profile, transport)
     _json(result)
     return 0 if result.get("astra_available") else 1
 
