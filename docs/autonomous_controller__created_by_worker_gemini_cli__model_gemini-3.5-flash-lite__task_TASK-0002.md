@@ -1,49 +1,95 @@
 # Autonomous Controller Architecture & Operations (TASK-0002)
 
 **Original worker:** `worker_gemini_cli` / `gemini-3.5-flash-lite`  
-**Recovery hardening after bounded worker retries:** `bootstrap_chatgpt` / `gpt-5.6-sol`  
+**Recovery hardening:** `bootstrap_chatgpt` / `gpt-5.6-sol`  
 **Task:** `TASK-0002`
 
 ## Purpose
 
-TASK-0002 builds the bounded orchestration layer between `Cloud Worker Task` and the Astra review gate. It removes routine manual babysitting while preserving fail-closed repository boundaries, zero spend, no local AI inference, and no automatic merge.
+TASK-0002 provides a bounded autonomous loop around `Cloud Worker Task` while preserving zero paid spend, no local AI/video inference, Astra as reviewer, audit-only PC cleanup, and no automatic merge.
 
-## Event and trust boundary
+## Immutable task binding
 
-`.github/workflows/autonomous_controller.yml` listens only to completed runs of `Cloud Worker Task`. The controller job proceeds only when the triggering workflow repository exactly equals the current repository, the triggering branch equals the repository default branch, the triggering event is `push` or the controller's `repository_dispatch` retry, and the triggering run is not skipped.
+Every worker run now publishes a small `worker-context` artifact before model work. It binds:
 
-Before any write, the workflow verifies the exact triggering `head_sha` is on the trusted default-branch lineage. It then uses `git diff-tree` on that immutable commit and requires **exactly one** `tasks/queue/*.json` change. The source task is read with `git show <sha>:<path>` rather than from an ambiguous current working tree.
+- exact queue task path,
+- immutable task commit SHA,
+- task ID,
+- retry attempt,
+- triggering event type,
+- dispatch key and previous worker-run ID for controller-created retries,
+- whether this logical dispatch was actually claimed for execution.
 
-Permissions are deliberately scoped to `actions: read`, `contents: write`, and `pull-requests: write`.
+For normal push runs, the task SHA must equal the workflow run head SHA and that exact commit must contain exactly one queue-task change.
+
+For `repository_dispatch` retries, the worker checks out the `task_sha` from the dispatch payload, verifies the task ID/attempt and deterministic dispatch key, and reads that exact immutable task revision. The controller later downloads the same `worker-context` from the triggering run and validates the same binding before any artifact promotion or retry mutation. It does **not** derive a dispatched retry task from the workflow run's moving default-branch head.
+
+This means unrelated commits or another task update can land between retry creation and execution without changing which task/attempt the retry belongs to.
+
+## Duplicate dispatch protection
+
+Controller processing of a source worker run is serialized with a GitHub Actions concurrency group.
+
+Controller retry dispatches use a deterministic key derived from task ID, retry task SHA, retry attempt, and source worker-run ID. The worker claims that key through a dedicated `worker-execution-receipts/<dispatch-key>` ref before model execution. Repeated or concurrent delivery of the same dispatch therefore becomes a no-op worker run with `execute=false` in its immutable context.
+
+The controller separately records completed dispatch delivery using `controller-dispatch-receipts/<dispatch-key>`.
+
+## Failure and dispatch recovery
+
+A failed worker run persists only structured GitHub job/failed-step metadata. Raw failed log bodies are not copied into queue-task commits or controller evidence artifacts.
+
+If retry is allowed, the controller changes only the bound queue task and writes a `controller_retry_state` record with the source worker run, next attempt, and `PENDING_DISPATCH`. The retry commit includes the source-run marker.
+
+If repository dispatch fails after the retry commit was pushed, a later processing of the same source run finds that marker, validates the pending retry record, reuses the same retry SHA and attempt, and retries dispatch. It does not increment the attempt again.
+
+After successful dispatch, a controller receipt ref is written. Repeated processing sees the receipt and does not dispatch again. If a duplicate dispatch is nevertheless delivered, the worker execution-receipt claim prevents a second logical model execution.
+
+## Credential handling
+
+The controller uses allowlisted structured diagnostics rather than arbitrary failed logs.
+
+The helper additionally redacts recognized credential forms including fine-grained `github_pat_...` tokens, classic GitHub tokens, Google/AWS/Slack-like token formats, bearer values, credential labels, multiline credential values following a bare label, and complete private-key blocks. Job and step names are passed through the same conservative sanitization before persistence.
+
+## Worker staging and symlink boundary
+
+Before any successful worker candidate is copied into an artifact bundle, the worker calls the reviewed helper to validate:
+
+- `changed-files.txt` itself,
+- every manifest candidate file,
+- worker-result metadata,
+- every path component from repository root to file.
+
+Any symlink file, symlinked parent directory, non-regular file, unsafe path, or missing file fails before the copy/upload step. Failed-run evidence no longer copies arbitrary worker-changed files.
+
+The controller still validates the downloaded bundle independently and also checks promotion destination path components before copying a candidate into a branch. This keeps the original filesystem type boundary from being lost by `cp`.
 
 ## Success path
 
-The controller downloads the exact `worker-bundle-<TASK_ID>` artifact from the triggering worker run using `run-id` and `github-token`. The Python helper validates `changed-files.txt` against the actual bundle and the task's exact `allowed_paths`.
+For a real executed worker run that succeeds, the controller:
 
-Validation rejects absolute or Windows-drive paths, backslash/non-normalized paths and `..` traversal, symlink files or directories, duplicate manifest entries, manifest entries absent from the bundle, candidate files absent from the manifest, and any candidate path outside `task.allowed_paths`.
+1. verifies immutable task binding from `worker-context`,
+2. downloads the exact task worker bundle from that workflow run,
+3. validates exact manifest-to-bundle correspondence and task allowlist,
+4. checks promotion destination components,
+5. creates a deterministic candidate branch from the bound task SHA,
+6. opens or reuses a **draft** PR,
+7. dispatches the candidate regression workflow.
 
-After validation, the controller creates a deterministic branch `candidate/<TASK_ID>/worker-<RUN_ID>` from the exact worker source commit, copies only validated files, commits with a source-run idempotency marker, pushes the branch, and creates or reuses a **draft** PR. Existing non-draft PR state is never silently changed.
-
-The controller then sends a `repository_dispatch` event named `controller_candidate_regression`. The default-branch regression workflow checks out the candidate ref and independently runs the unit/static regression suite. No auto-merge action exists.
-
-## Failure and bounded retry path
-
-For a failed worker run, the controller obtains GitHub Actions job/failed-step metadata and captures failed logs only into a temporary file. The helper sanitizes secret-like lines and bounds the excerpt before anything is persisted.
-
-The retry decision uses `retry_attempt` and `max_controller_retries` from the exact current task. Below the limit, only that queue task may change; the controller commits an idempotency marker, pushes the default branch, then emits `repository_dispatch: worker_task_retry` with the exact task path. At the limit, no task-file mutation or worker dispatch occurs. The controller writes `BLOCKED` evidence to the job summary/artifact and stops.
-
-A prior `[controller-run:<RUN_ID>]` marker or a moved task attempt causes duplicate/stale retry delivery to stop without another mutation.
-
-## Why repository_dispatch is used
-
-Controller-created `GITHUB_TOKEN` pushes are not relied upon to recursively start another workflow. Retries and candidate regression are explicitly requested with `repository_dispatch`, while the normal human/bootstrap task path continues to support `push`.
+No merge or auto-merge action exists.
 
 ## Deterministic verification
 
-The Python unit suite covers allowlist acceptance/rejection, absolute/traversal/non-normalized paths, relative and directory symlinks, missing/duplicate manifests, extra/missing bundle files, metadata allowance, retry below/at limit, invalid retry values, idempotency keys, secret sanitization/bounds, and failed-job summarization.
+The Python suite contains at least 30 offline tests covering path normalization, manifest matching, symlink files/parents/metadata, staging safety, promotion destinations, retry ceilings, immutable task binding, deterministic dispatch keys, retry-resume records, fine-grained tokens, multiline credentials, private-key blocks, bounded diagnostics, and job/step sanitization.
 
-The separate `Autonomous Controller Regression` workflow executes the tests on the exact candidate ref and statically checks controller source guards, cross-run artifact inputs, fail-closed writes, repository-dispatch retries/regression, absence of merge/auto-merge behavior, and preserved zero-spend/local-PC boundaries.
+The dedicated `Autonomous Controller Regression` also runs Linux workflow-level fixtures for the four Astra rejection cases:
+
+1. TASK-0002 binding remains correct after an unrelated TASK-0003 commit.
+2. synthetic fine-grained, multiline and private-key credentials do not survive sanitization.
+3. a previously committed pending retry is rediscovered and reused without another attempt increment.
+4. allowed-path symlink, symlink-parent and metadata-symlink fixtures fail before staging/copy, while ordinary files still stage.
+
+Static regression checks also verify the actual worker/controller workflows use the binding, receipt, staging and structured-diagnostics mechanisms.
 
 ## Remaining gate
 
-TASK-0002 is not self-approving. GPT-6 Astra must review the exact tested candidate. Merge remains an explicit post-review action.
+TASK-0002 remains pending Astra review. PR #2 stays draft. Merge is a separate explicit post-review action.
