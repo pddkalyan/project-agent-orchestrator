@@ -352,6 +352,7 @@ class PyJWTSignatureVerifier:
             key.key,
             algorithms=["RS256"],
             options={"verify_aud": False, "verify_iss": False},
+            leeway=5,
         )
 
 
@@ -613,19 +614,20 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
         except Exception as exc:
             text = sanitize_text(exc)
             return {"status": map_transport_error(text), "message": text}
-        for key in ("access_token", "refresh_token", "id_token", "expires_in", "scope"):
+        for key in ("access_token", "refresh_token", "expires_in"):
             if key not in payload:
                 return {"status": BLOCKED_AUTH_REQUIRED, "message": "refresh response incomplete"}
         updated = dict(current)
+        refreshed_scopes = payload.get("scope")
         updated.update(
             {
                 "access_token": payload["access_token"],
                 "refresh_token": payload["refresh_token"],
-                "id_token": payload["id_token"],
+                "id_token": payload.get("id_token", current.get("id_token")),
                 "expires_in": int(payload["expires_in"]),
                 "expires_at": int(time.time()) + int(payload["expires_in"]),
                 "earliest_refresh_at": payload.get("earliest_refresh_at"),
-                "scopes": sorted(set(str(payload["scope"]).split())),
+                "scopes": sorted(set(str(refreshed_scopes).split())) if refreshed_scopes else list(current.get("scopes", [])),
                 "saved_at": int(time.time()),
             }
         )
@@ -634,6 +636,30 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
             return {"status": BLOCKED_AUTH_REQUIRED, "message": "required plan scopes missing after refresh"}
         storage.save_profile_atomic(updated)
         return {"status": "REFRESHED", "profile": storage.safe_status()}
+
+
+
+def needs_refresh(profile: Mapping[str, Any], *, now: float | None = None, skew_seconds: int = 120) -> bool:
+    current = time.time() if now is None else now
+    expires_at = profile.get("expires_at")
+    if not isinstance(expires_at, (int, float)):
+        return True
+    earliest = profile.get("earliest_refresh_at")
+    if isinstance(earliest, (int, float)) and current < earliest:
+        return False
+    return current + skew_seconds >= expires_at
+
+
+def ensure_fresh_profile(storage: HostCredentialStorage, transport: Any) -> tuple[dict[str, Any] | None, str]:
+    profile = storage.load_profile()
+    if not profile:
+        return None, BLOCKED_AUTH_REQUIRED
+    if needs_refresh(profile):
+        refreshed = refresh_profile(storage, transport)
+        if refreshed.get("status") != "REFRESHED":
+            return None, str(refreshed.get("status", BLOCKED_AUTH_REQUIRED))
+        profile = storage.load_profile()
+    return profile, "PROFILE_READY"
 
 
 def parse_model_catalog(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -728,6 +754,34 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     if not completed:
         return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
     return {"status": "COMPLETED", "completed": True, "text": "".join(text_parts)}
+
+
+
+def run_streamed_review(
+    *,
+    profile: Mapping[str, Any],
+    transport: Any,
+    review_prompt: str,
+    review_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    access_token = profile.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        return {"status": BLOCKED_AUTH_REQUIRED, "completed": False}
+    request = build_responses_plan_request(
+        review_prompt=review_prompt,
+        review_context=review_context,
+    )
+    try:
+        events = list(
+            transport.stream_sse(
+                RESPONSES_URL,
+                request,
+                {"Authorization": f"Bearer {access_token}"},
+            )
+        )
+    except Exception as exc:
+        return {"status": map_transport_error(sanitize_text(exc)), "completed": False}
+    return assemble_stream(events)
 
 
 def map_response_error_code(code: str) -> str:
