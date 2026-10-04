@@ -1,0 +1,201 @@
+name: Autonomous Controller Regression
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/autonomous_controller.yml"
+      - "scripts/autonomous_controller__created_by_worker_gemini_cli__model_*__task_TASK-0002.py"
+      - "tests/test_autonomous_controller__created_by_worker_gemini_cli__model_*__task_TASK-0002.py"
+      - "docs/autonomous_controller__created_by_worker_gemini_cli__model_*__task_TASK-0002.md"
+      - "review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_*.json"
+      - "memory/**"
+      - "README.md"
+      - "PROVENANCE_REGISTRY.jsonl"
+  repository_dispatch:
+    types:
+      - controller_candidate_regression
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Candidate commit or branch to test
+        required: true
+        type: string
+      pr_number:
+        description: Optional pull request number
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve candidate ref
+        id: candidate
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_SHA: ${{ github.event.pull_request.head.sha }}
+          DISPATCH_REF: ${{ github.event.client_payload.candidate_ref }}
+          MANUAL_REF: ${{ inputs.candidate_ref }}
+          DISPATCH_PR: ${{ github.event.client_payload.pr_number }}
+          MANUAL_PR: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request)
+              CANDIDATE_REF="$PR_SHA"
+              PR_NUMBER="${{ github.event.pull_request.number }}"
+              ;;
+            repository_dispatch)
+              CANDIDATE_REF="$DISPATCH_REF"
+              PR_NUMBER="$DISPATCH_PR"
+              ;;
+            workflow_dispatch)
+              CANDIDATE_REF="$MANUAL_REF"
+              PR_NUMBER="$MANUAL_PR"
+              ;;
+            *)
+              echo "Unsupported event: $EVENT_NAME" >&2
+              exit 2
+              ;;
+          esac
+          test -n "$CANDIDATE_REF"
+          if [[ ! "$CANDIDATE_REF" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "Unsafe candidate ref" >&2
+            exit 3
+          fi
+          echo "candidate_ref=$CANDIDATE_REF" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.candidate.outputs.candidate_ref }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run TASK-0002 deterministic regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKFLOW=".github/workflows/autonomous_controller.yml"
+          SCRIPT="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          TEST="tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          PACKET="review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json"
+
+          test -f "$WORKFLOW"
+          test -f "$SCRIPT"
+          test -f "$TEST"
+          test -f "$PACKET"
+
+          python -m py_compile "$SCRIPT" "$TEST"
+          python "$TEST"
+
+          grep -q 'workflow_run:' "$WORKFLOW"
+          grep -q 'Cloud Worker Task' "$WORKFLOW"
+          grep -q 'actions: read' "$WORKFLOW"
+          grep -q 'contents: write' "$WORKFLOW"
+          grep -q 'pull-requests: write' "$WORKFLOW"
+          grep -q '^    if:' "$WORKFLOW"
+          grep -q 'github.event.workflow_run.head_repository.full_name' "$WORKFLOW"
+          grep -q 'github.event.repository.default_branch' "$WORKFLOW"
+          grep -q 'github.event.workflow_run.head_branch' "$WORKFLOW"
+          grep -q "github.event.workflow_run.event == 'push'" "$WORKFLOW"
+          grep -q "github.event.workflow_run.event == 'repository_dispatch'" "$WORKFLOW"
+          grep -q 'github.event.workflow_run.head_sha' "$WORKFLOW"
+          grep -q 'git merge-base --is-ancestor' "$WORKFLOW"
+          grep -q 'git diff-tree' "$WORKFLOW"
+          grep -q 'git show' "$WORKFLOW"
+          grep -q 'actions/download-artifact@v4' "$WORKFLOW"
+          grep -q 'run-id:' "$WORKFLOW"
+          grep -q 'github-token:' "$WORKFLOW"
+          grep -q 'secrets.GITHUB_TOKEN' "$WORKFLOW"
+          grep -q 'gh pr create' "$WORKFLOW"
+          grep -q -- '--draft' "$WORKFLOW"
+          grep -q 'git push origin' "$WORKFLOW"
+          grep -q 'worker_task_retry' "$WORKFLOW"
+          grep -q 'controller_candidate_regression' "$WORKFLOW"
+          grep -q '/dispatches' "$WORKFLOW"
+
+          if grep -Eq 'pattern-match:|merge-merges:' "$WORKFLOW"; then
+            echo "Unsupported download-artifact input found." >&2
+            exit 30
+          fi
+          if grep -Eiq 'gh[[:space:]]+pr[[:space:]]+merge|enable[_ -]?auto[_ -]?merge|merge[_ -]?pull[_ -]?request' "$WORKFLOW" "$SCRIPT"; then
+            echo "Auto-merge/merge behavior is forbidden." >&2
+            exit 31
+          fi
+          if grep -Eq 'git push[^\n]*\|\|[[:space:]]*echo|gh pr create[^\n]*\|\|[[:space:]]*echo' "$WORKFLOW"; then
+            echo "Write failures must fail closed." >&2
+            exit 32
+          fi
+          if grep -Eq 'find[[:space:]]+tasks/queue' "$WORKFLOW" "$SCRIPT"; then
+            echo "Ambiguous task discovery is forbidden." >&2
+            exit 33
+          fi
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          packet = json.loads(Path("review_packets/astra_review_TASK-0002__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite.json").read_text())
+          state = json.loads(Path("memory/CURRENT_STATE.json").read_text())
+          tests = Path("tests/test_autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text().lower()
+          workflow = Path(".github/workflows/autonomous_controller.yml").read_text()
+          script = Path("scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py").read_text()
+
+          assert packet.get("review_status") == "PENDING_ASTRA_REVIEW"
+          assert state.get("spend_limit_usd") == 0
+          assert state.get("astra_role") == "reviewer"
+          assert state.get("local_video_inference") is False
+          assert state.get("pc_cleanup_mode") == "AUDIT_ONLY"
+
+          for word in ("symlink", "manifest", "duplicate", "traversal", "absolute", "secret", "retry", "idempot"):
+              assert word in tests, f"missing test coverage keyword: {word}"
+          assert tests.count("def test_") >= 13, "expected at least 13 deterministic tests"
+
+          lower_combined = (workflow + "\n" + script).lower()
+          for forbidden in ("remove-item", "reg delete", "stop-service", "uninstall-package"):
+              assert forbidden not in lower_combined, f"destructive local-PC behavior found: {forbidden}"
+          PY
+
+          echo "TASK-0002 autonomous controller regression passed."
+
+      - name: Record regression evidence
+        shell: bash
+        env:
+          CANDIDATE_REF: ${{ steps.candidate.outputs.candidate_ref }}
+          PR_NUMBER: ${{ steps.candidate.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          evidence = {
+              "workflow_run_id": os.environ["GITHUB_RUN_ID"],
+              "candidate_ref": os.environ.get("CANDIDATE_REF"),
+              "pr_number": os.environ.get("PR_NUMBER") or None,
+              "runner_os": os.environ.get("RUNNER_OS"),
+              "python": os.popen("python --version 2>&1").read().strip(),
+              "result": "PASS",
+          }
+          with open("task_0002_regression_evidence.json", "w", encoding="utf-8") as f:
+              json.dump(evidence, f, indent=2)
+              f.write("\n")
+          PY
+
+      - name: Upload regression evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-0002-autonomous-controller-regression-evidence
+          path: task_0002_regression_evidence.json
+          retention-days: 30
