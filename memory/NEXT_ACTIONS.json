@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "next": [
-    "Run Autonomous Controller Regression on the corrected exact PR #2 head and require all 30 unit tests plus four workflow-level Astra rejection fixtures to pass.",
-    "Run PC Cleanup Audit Regression on the same corrected head to confirm TASK-0001 safety remains intact.",
-    "If both exact-head regressions pass, add a final non-self-referential evidence comment and resubmit PR #2 to GPT-6 Astra.",
-    "Do not merge or enable auto-merge before Astra approval and the separate explicit promotion gate."
+    "Queue TASK-0003 to implement a zero-cost Sign in with ChatGPT reviewer bridge and self-hosted reviewer workflow.",
+    "Require account-authorized model discovery; use gpt-6-astra only if the signed-in account catalog exposes that exact model.",
+    "Keep paid API keys, credit fallback, automatic credit purchases, local inference, auto-merge, and conversation scraping disabled.",
+    "After deterministic TASK-0003 regression passes, review the bridge before asking for the one-time Continue with ChatGPT authorization."
   ]
 }
