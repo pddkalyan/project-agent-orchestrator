@@ -114,6 +114,6 @@ This integration does not read or expose existing ChatGPT conversations or ChatG
 
 ## Current test/review status
 
-The candidate contains 41 deterministic offline tests. TASK-0004 intentionally does not edit GitHub workflow files, so the existing repository regressions do not execute this new test module. GPT-6 Astra should run the test module locally on the exact PR head during final review.
+The candidate contains 49 deterministic offline tests. TASK-0004 intentionally does not edit GitHub workflow files, so the existing repository regressions do not execute this new test module. GPT-6 Astra should run the test module locally on the exact PR head during final review.
 
 No live browser sign-in or OpenAI inference has been performed as part of TASK-0004 development.
