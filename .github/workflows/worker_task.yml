@@ -311,21 +311,16 @@ jobs:
           set -euo pipefail
           test -s changed-files.txt
 
-      - name: Stage worker bundle
+      - name: Stage worker bundle with immutable validator
         if: steps.claim.outputs.execute == 'true'
         shell: bash
         run: |
           set -euo pipefail
+          TRUSTED_HELPER="$RUNNER_TEMP/task0002-trusted-validator.py"
           BUNDLE="$RUNNER_TEMP/worker-bundle-$GITHUB_RUN_ID"
           rm -rf "$BUNDLE"
-          mkdir -p "$BUNDLE"
-          cp -- "worker_result_${{ steps.task.outputs.task_id }}.json" "$BUNDLE/"
-          cp -- changed-files.txt "$BUNDLE/"
-          while IFS= read -r file; do
-            [[ -z "$file" ]] && continue
-            mkdir -p "worker_bundle/$(dirname "$file")"
-            cp -- "$file" "worker_bundle/$file"
-          done < changed-files.txt
+          python "$TRUSTED_HELPER" stage-bundle "$PWD" "changed-files.txt" "worker_result_${{ steps.task.outputs.task_id }}.json" "$BUNDLE" > "$RUNNER_TEMP/stage-result.json"
+          jq -e '.valid == true' "$RUNNER_TEMP/stage-result.json" >/dev/null
           git diff --binary > "$BUNDLE/worker_patch_${{ steps.task.outputs.task_id }}.patch" || true
 
       - name: Upload worker bundle
