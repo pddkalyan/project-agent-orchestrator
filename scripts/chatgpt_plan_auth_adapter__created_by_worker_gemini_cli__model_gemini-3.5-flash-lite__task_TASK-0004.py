@@ -591,6 +591,8 @@ def normalize_token_response(payload: Mapping[str, Any], *, client_id: str, ext_
     required = ("access_token", "refresh_token", "id_token", "token_type", "expires_in", "scope")
     if any(not payload.get(k) for k in required):
         raise ValueError("token response missing required fields")
+    if str(payload["token_type"]).lower() != "bearer":
+        raise ValueError("token_type must be Bearer")
     ok, reason = verify_granted_scopes(str(payload["scope"]))
     if not ok:
         raise ValueError(reason)
@@ -638,7 +640,9 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
             {
                 "access_token": payload["access_token"],
                 "refresh_token": payload["refresh_token"],
-                "id_token": payload.get("id_token", current.get("id_token")),
+                # Retain the previously verified ID token as a returning-account
+                # hint. A refresh response is not used to replace verified identity.
+                "id_token": current.get("id_token"),
                 "expires_in": int(payload["expires_in"]),
                 "expires_at": int(time.time()) + int(payload["expires_in"]),
                 "earliest_refresh_at": payload.get("earliest_refresh_at"),
@@ -658,6 +662,8 @@ def needs_refresh(profile: Mapping[str, Any], *, now: float | None = None, skew_
     current = time.time() if now is None else now
     expires_at = profile.get("expires_at")
     if not isinstance(expires_at, (int, float)):
+        return True
+    if current >= expires_at:
         return True
     earliest = profile.get("earliest_refresh_at")
     if isinstance(earliest, (int, float)) and current < earliest:
@@ -775,13 +781,31 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 def run_streamed_review(
     *,
     profile: Mapping[str, Any],
+    model_catalog: Mapping[str, Any],
+    activation_policy: Mapping[str, Any],
     transport: Any,
     review_prompt: str,
     review_context: Mapping[str, Any],
 ) -> dict[str, Any]:
+    """Execute only after the separate activation gate explicitly enables it."""
+    if activation_policy.get("reviewer_enabled") is not True:
+        return {"status": BLOCKED_PLAN_ALLOWANCE, "completed": False, "reason": "reviewer activation gate is disabled"}
+    if activation_policy.get("zero_extra_spend_confirmed") is not True:
+        return {"status": BLOCKED_PLAN_ALLOWANCE, "completed": False, "reason": "zero-extra-spend controls are not confirmed"}
+
+    model_ok, model_status = validate_model_catalog(model_catalog)
+    if not model_ok:
+        return {"status": model_status, "completed": False}
+
+    scopes = profile.get("scopes")
+    scopes_ok, _ = verify_granted_scopes(scopes if isinstance(scopes, list) else [])
+    if not scopes_ok:
+        return {"status": BLOCKED_AUTH_REQUIRED, "completed": False}
+
     access_token = profile.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         return {"status": BLOCKED_AUTH_REQUIRED, "completed": False}
+
     request = build_responses_plan_request(
         review_prompt=review_prompt,
         review_context=review_context,
