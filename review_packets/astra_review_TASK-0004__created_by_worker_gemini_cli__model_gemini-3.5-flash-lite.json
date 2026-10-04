@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0004",
-  "review_status": "R1_CORRECTED_PENDING_ASTRA_R2",
+  "review_status": "R2_CORRECTED_PENDING_ASTRA_R3",
   "worker": {
     "agent": "worker_gemini_cli",
     "model": "gemini-3.5-flash-lite"
@@ -20,10 +20,10 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "verification_results": {
-    "status": "PENDING_ASTRA_R2_EXACT_HEAD_LOCAL_TEST",
-    "deterministic_tests_expected": 68,
+    "status": "PENDING_ASTRA_R3_EXACT_HEAD_LOCAL_TEST",
+    "deterministic_tests_expected": 78,
     "exact_head_task0004_ci_available": false,
-    "reason": "Astra R1 rejected the prior exact head. The six findings were corrected and the TASK-0004 module now contains 68 deterministic offline tests. Existing repository regressions run on the PR head but still do not execute the TASK-0004 module; Astra R2 must run it locally on the new exact head.",
+    "reason": "Astra R2 rejected the prior exact head with five findings. Those findings are corrected and the TASK-0004 module now contains 78 deterministic offline tests. Generic GitHub regressions do not execute the TASK-0004 module; Astra R3 must run all 78 tests locally on the final exact correction head.",
     "live_authorization_performed": false,
     "live_openai_calls_performed": false,
     "zero_extra_spend_boundary": true,
@@ -34,6 +34,7 @@
     "no_merge_or_auto_merge": true
   },
   "review_focus": [
+    "Astra R2 five-finding correction verification on the new exact head",
     "Astra R1 six-finding correction verification on exact correction head",
     "current OpenAI SIWC endpoint and dynamic_agent_client registration semantics",
     "callback-issued client_id persistence before token exchange and reuse for returning sign-in",
@@ -56,7 +57,12 @@
     "returning sign-in uses separate registration metadata plus profile-version CAS so concurrent refresh cannot be rolled back",
     "refresh response validation blocks invalid token values/types/lifetimes and never retries a consumed rotating token",
     "FileLock releases process mutex/handles on every acquisition failure and uses bounded nonblocking Windows lock attempts",
-    "public diagnostics use structured safe statuses and multiline credential continuations are redacted"
+    "public diagnostics use structured safe statuses and multiline credential continuations are redacted",
+    "refresh must persist REFRESH_IN_PROGRESS before dispatch and never automatically resubmit the old rotating credential after uncertain completion or restart",
+    "refresh scope omission may inherit prior grant, but any supplied scope must be a nonblank string containing the complete required grant",
+    "allowance and session timestamps must be finite non-boolean numbers with valid ordering and freshness",
+    "pending registration metadata must be loaded, profile/host/client-bound, and reused after failed first exchange",
+    "all malformed stream event shapes and decoding/assembly failures must return secret-free BLOCKED outcomes"
   ],
   "known_limitations": [
     "The user has not performed real browser authorization yet; that is intentionally post-merge.",
@@ -85,5 +91,17 @@
       "R1-06 Windows lock acquisition failure could leave process mutex held"
     ],
     "correction_status": "IMPLEMENTED_PENDING_R2"
+  },
+  "astra_r2": {
+    "status": "REJECTED",
+    "reviewed_sha": "e66937f2c712501f2d8dea30800a27d4873b1e3a",
+    "findings": [
+      "R2-01 potentially consumed refresh tokens remained reusable",
+      "R2-02 explicit invalid refresh scopes inherited prior grant",
+      "R2-03 non-finite timestamps bypassed allowance validation",
+      "R2-04 saved pending registration was not reused",
+      "R2-05 malformed stream events escaped structured failure boundary"
+    ],
+    "correction_status": "IMPLEMENTED_PENDING_R3"
   }
 }
