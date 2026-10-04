@@ -15,6 +15,9 @@ permissions:
 jobs:
   controller:
     runs-on: ubuntu-latest
+    concurrency:
+      group: controller-${{ github.event.workflow_run.id }}
+      cancel-in-progress: false
     if: >-
       github.event.workflow_run.head_repository.full_name == github.repository &&
       github.event.workflow_run.head_branch == github.event.repository.default_branch &&
@@ -22,7 +25,7 @@ jobs:
       github.event.workflow_run.conclusion != 'skipped'
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+      WORKFLOW_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
       SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
       SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -38,42 +41,78 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verify source and derive exact task
+      - name: Download immutable worker context
+        uses: actions/download-artifact@v4
+        with:
+          name: worker-context
+          path: downloaded_worker_context
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify immutable source/task binding
         id: task
         shell: bash
         run: |
           set -euo pipefail
+          HELPER="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
+          CONTEXT="downloaded_worker_context/worker_context.json"
+          test -f "$CONTEXT"
+
+          TASK_FILE="$(jq -er '.task_file' "$CONTEXT")"
+          TASK_ID="$(jq -er '.task_id' "$CONTEXT")"
+          TASK_SHA="$(jq -er '.task_sha' "$CONTEXT")"
+          SOURCE_ATTEMPT="$(jq -er '.retry_attempt' "$CONTEXT")"
+          CONTEXT_EVENT="$(jq -er '.event_name' "$CONTEXT")"
+          DISPATCH_KEY="$(jq -r '.dispatch_key // ""' "$CONTEXT")"
+          SOURCE_WORKER_RUN_ID="$(jq -r '.source_worker_run_id // ""' "$CONTEXT")"
+          EXECUTE="$(jq -er '.execute' "$CONTEXT")"
+
+          [[ "$TASK_FILE" =~ ^tasks/queue/[A-Za-z0-9._-]+\.json$ ]] || { echo "Invalid bound task_file" >&2; exit 10; }
+          [[ "$TASK_ID" =~ ^TASK-[0-9]+$ ]] || { echo "Invalid bound task_id" >&2; exit 10; }
+          [[ "$TASK_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid bound task_sha" >&2; exit 10; }
+          [[ "$SOURCE_ATTEMPT" =~ ^[0-9]+$ ]] || { echo "Invalid bound retry_attempt" >&2; exit 10; }
+          [[ "$EXECUTE" == "true" || "$EXECUTE" == "false" ]] || { echo "Invalid execute flag" >&2; exit 10; }
+          [[ "$CONTEXT_EVENT" == "${{ github.event.workflow_run.event }}" ]] || { echo "Worker-context event mismatch" >&2; exit 10; }
+
           git fetch --no-tags origin "$DEFAULT_BRANCH"
-          git cat-file -e "$SOURCE_SHA^{commit}"
-          if ! git merge-base --is-ancestor "$SOURCE_SHA" "origin/$DEFAULT_BRANCH"; then
-            echo "Triggering source commit is not on the trusted default-branch lineage: $SOURCE_SHA" >&2
+          git cat-file -e "$TASK_SHA^{commit}"
+          if ! git merge-base --is-ancestor "$TASK_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "Bound task SHA is not on trusted default-branch lineage: $TASK_SHA" >&2
             exit 10
           fi
+          git show "$TASK_SHA:$TASK_FILE" > /tmp/source-task.json
 
-          mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r --root "$SOURCE_SHA" | grep '^tasks/queue/[A-Za-z0-9._-]*\.json$' || true)
-          if [[ "${#TASK_FILES[@]}" -ne 1 ]]; then
-            echo "Expected exactly one queue task in source commit $SOURCE_SHA; found ${#TASK_FILES[@]}." >&2
-            printf '%s\n' "${TASK_FILES[@]}" >&2
+          if [[ "$CONTEXT_EVENT" == "push" ]]; then
+            [[ "$TASK_SHA" == "$WORKFLOW_HEAD_SHA" ]] || { echo "Push worker context SHA mismatch" >&2; exit 11; }
+            mapfile -t TASK_FILES < <(git diff-tree --no-commit-id --name-only -r --root "$TASK_SHA" | grep '^tasks/queue/[A-Za-z0-9._-]*\.json$' || true)
+            [[ "${#TASK_FILES[@]}" -eq 1 && "${TASK_FILES[0]}" == "$TASK_FILE" ]] || { echo "Push task derivation mismatch" >&2; exit 11; }
+            python "$HELPER" verify-binding /tmp/source-task.json "$TASK_FILE" "$TASK_SHA" "$TASK_ID" "$SOURCE_ATTEMPT" >/dev/null
+          elif [[ "$CONTEXT_EVENT" == "repository_dispatch" ]]; then
+            [[ "$DISPATCH_KEY" =~ ^[0-9a-f]{32}$ ]] || { echo "Missing/invalid dispatch binding key" >&2; exit 11; }
+            [[ "$SOURCE_WORKER_RUN_ID" =~ ^[0-9]+$ ]] || { echo "Missing/invalid source worker run binding" >&2; exit 11; }
+            python "$HELPER" verify-binding /tmp/source-task.json "$TASK_FILE" "$TASK_SHA" "$TASK_ID" "$SOURCE_ATTEMPT" "$DISPATCH_KEY" "$SOURCE_WORKER_RUN_ID" >/dev/null
+          else
+            echo "Unsupported bound worker event: $CONTEXT_EVENT" >&2
             exit 11
           fi
 
-          TASK_FILE="${TASK_FILES[0]}"
-          git show "$SOURCE_SHA:$TASK_FILE" > /tmp/source-task.json
-          TASK_ID="$(jq -er '.task_id' /tmp/source-task.json)"
-          if [[ ! "$TASK_ID" =~ ^TASK-[0-9]+$ ]]; then
-            echo "Invalid task_id: $TASK_ID" >&2
-            exit 12
-          fi
-          SOURCE_ATTEMPT="$(jq -er '.retry_attempt // 0' /tmp/source-task.json)"
           MAX_RETRIES="$(jq -er '.max_controller_retries // 3' /tmp/source-task.json)"
-
           echo "task_file=$TASK_FILE" >> "$GITHUB_OUTPUT"
           echo "task_id=$TASK_ID" >> "$GITHUB_OUTPUT"
+          echo "task_sha=$TASK_SHA" >> "$GITHUB_OUTPUT"
           echo "source_attempt=$SOURCE_ATTEMPT" >> "$GITHUB_OUTPUT"
           echo "max_retries=$MAX_RETRIES" >> "$GITHUB_OUTPUT"
+          echo "dispatch_key=$DISPATCH_KEY" >> "$GITHUB_OUTPUT"
+          echo "execute=$EXECUTE" >> "$GITHUB_OUTPUT"
+
+      - name: Record duplicate dispatch no-op
+        if: steps.task.outputs.execute == 'false'
+        shell: bash
+        run: |
+          echo "Duplicate repository_dispatch delivery was already claimed by another worker run; no controller side effects will run." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Download exact worker success bundle
-        if: github.event.workflow_run.conclusion == 'success'
+        if: steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion == 'success'
         uses: actions/download-artifact@v4
         with:
           name: worker-bundle-${{ steps.task.outputs.task_id }}
@@ -108,9 +147,10 @@ jobs:
               exit 20
             fi
           else
-            git checkout -B "$BRANCH" "$SOURCE_SHA"
+            git checkout -B "$BRANCH" "${{ steps.task.outputs.task_sha }}"
             while IFS= read -r file; do
               [[ -n "$file" ]] || continue
+              python "$HELPER" validate-destination "$PWD" "$file" >/dev/null
               mkdir -p "$(dirname "$file")"
               cp -- "$BUNDLE_DIR/$file" "$file"
               git add -- "$file"
@@ -140,7 +180,7 @@ Automated validated candidate for **${TASK_ID}**.
 
 - Worker model: ${WORKER_MODEL}
 - Source worker workflow run: ${SOURCE_RUN_ID}
-- Source commit: ${SOURCE_SHA}
+- Bound task commit: ${{ steps.task.outputs.task_sha }}
 - Spend policy: **USD 0**
 - Astra review: **required before merge**
 - Auto-merge: **disabled**
@@ -173,71 +213,72 @@ EOF
           gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input /tmp/regression-dispatch.json
           echo "Candidate regression dispatched for PR #${{ steps.promote.outputs.pr_number }}." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Collect sanitized failure evidence and retry or block
+      - name: Collect structured failure evidence and retry, resume, or block
         id: failure
-        if: github.event.workflow_run.conclusion != 'success'
+        if: steps.task.outputs.execute == 'true' && github.event.workflow_run.conclusion != 'success'
         shell: bash
         run: |
           set -euo pipefail
           TASK_ID="${{ steps.task.outputs.task_id }}"
           TASK_FILE="${{ steps.task.outputs.task_file }}"
+          TASK_SHA="${{ steps.task.outputs.task_sha }}"
+          SOURCE_ATTEMPT="${{ steps.task.outputs.source_attempt }}"
           HELPER="scripts/autonomous_controller__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0002.py"
           MARKER="[controller-run:${SOURCE_RUN_ID}]"
 
           git fetch --no-tags origin "$DEFAULT_BRANCH"
-          if git log "origin/$DEFAULT_BRANCH" --format=%B -n 250 | grep -Fq "$MARKER"; then
-            echo "Source run ${SOURCE_RUN_ID} was already processed; no duplicate retry." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
 
-          git show "origin/$DEFAULT_BRANCH:$TASK_FILE" > /tmp/current-task.json
-          CURRENT_ID="$(jq -er '.task_id' /tmp/current-task.json)"
-          CURRENT_ATTEMPT="$(jq -er '.retry_attempt // 0' /tmp/current-task.json)"
-          SOURCE_ATTEMPT="${{ steps.task.outputs.source_attempt }}"
-          if [[ "$CURRENT_ID" != "$TASK_ID" || "$CURRENT_ATTEMPT" != "$SOURCE_ATTEMPT" ]]; then
-            echo "Task state moved since source run; refusing stale retry mutation." >&2
-            exit 40
-          fi
-
+          # Persist only allowlisted job/failed-step metadata. Raw failed log
+          # bodies are deliberately not persisted or inserted into retry JSON.
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100" > /tmp/jobs.json
           python "$HELPER" summarize-jobs /tmp/jobs.json > /tmp/job-summary.json
-
-          : > /tmp/raw-failed.log
-          gh run view "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > /tmp/raw-failed.log 2>/dev/null || true
-          python "$HELPER" sanitize /tmp/raw-failed.log > /tmp/sanitized-failed.log
-
           python - <<'PY'
           import json
           from pathlib import Path
           jobs = json.loads(Path('/tmp/job-summary.json').read_text())
-          excerpt = Path('/tmp/sanitized-failed.log').read_text(encoding='utf-8', errors='replace').strip()
           evidence = {
               'source_worker_run_id': '${{ github.event.workflow_run.id }}',
               'source_conclusion': '${{ github.event.workflow_run.conclusion }}',
               'task_id': '${{ steps.task.outputs.task_id }}',
+              'bound_task_sha': '${{ steps.task.outputs.task_sha }}',
+              'bound_retry_attempt': int('${{ steps.task.outputs.source_attempt }}'),
               'failed_jobs': jobs.get('failed_jobs', []),
-              'sanitized_log_excerpt': excerpt,
           }
           Path('/tmp/controller_failure_evidence.json').write_text(json.dumps(evidence, indent=2) + '\n', encoding='utf-8')
           PY
 
-          DECISION="$(python "$HELPER" check-retry /tmp/current-task.json)"
-          ACTION="$(jq -r '.action' <<<"$DECISION")"
-          if [[ "$ACTION" == "BLOCKED" ]]; then
-            echo "### ${TASK_ID} BLOCKED" >> "$GITHUB_STEP_SUMMARY"
-            echo "Retry ceiling reached for source worker run ${SOURCE_RUN_ID}. No queue-task commit or new worker run was created." >> "$GITHUB_STEP_SUMMARY"
-            jq -r '.failed_jobs[]? | "- job: \(.name) — \(.conclusion)"' /tmp/controller_failure_evidence.json >> "$GITHUB_STEP_SUMMARY"
-            cp /tmp/controller_failure_evidence.json controller_failure_evidence.json
-            echo "blocked=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "$ACTION" != "RETRY" ]]; then
-            echo "Retry decision failed closed: $DECISION" >&2
-            exit 41
-          fi
+          NEXT_ATTEMPT="$((SOURCE_ATTEMPT + 1))"
+          RETRY_SHA="$(git log "origin/$DEFAULT_BRANCH" --fixed-strings --grep="$MARKER" -n 1 --format=%H || true)"
 
-          NEXT_ATTEMPT="$(jq -r '.next_attempt' <<<"$DECISION")"
-          REASON="$(python - <<'PY'
+          if [[ -n "$RETRY_SHA" ]]; then
+            # Recovery path: a previous delivery already committed the retry,
+            # but dispatch/receipt completion may have failed. Reuse exactly
+            # that immutable commit and do not increment the attempt again.
+            git show "$RETRY_SHA:$TASK_FILE" > /tmp/retry-task.json
+            python "$HELPER" validate-retry-record /tmp/retry-task.json "$SOURCE_RUN_ID" "$NEXT_ATTEMPT" >/dev/null
+          else
+            git show "origin/$DEFAULT_BRANCH:$TASK_FILE" > /tmp/current-task.json
+            CURRENT_ID="$(jq -er '.task_id' /tmp/current-task.json)"
+            CURRENT_ATTEMPT="$(jq -er '.retry_attempt // 0' /tmp/current-task.json)"
+            [[ "$CURRENT_ID" == "$TASK_ID" && "$CURRENT_ATTEMPT" == "$SOURCE_ATTEMPT" ]] || {
+              echo "Task state moved since bound worker run; refusing stale retry mutation." >&2
+              exit 40
+            }
+
+            DECISION="$(python "$HELPER" check-retry /tmp/current-task.json)"
+            ACTION="$(jq -r '.action' <<<"$DECISION")"
+            if [[ "$ACTION" == "BLOCKED" ]]; then
+              echo "### ${TASK_ID} BLOCKED" >> "$GITHUB_STEP_SUMMARY"
+              echo "Retry ceiling reached for source worker run ${SOURCE_RUN_ID}; no retry commit or dispatch was created." >> "$GITHUB_STEP_SUMMARY"
+              jq -r '.failed_jobs[]? | "- job: \(.name) — \(.conclusion)"' /tmp/controller_failure_evidence.json >> "$GITHUB_STEP_SUMMARY"
+              cp /tmp/controller_failure_evidence.json controller_failure_evidence.json
+              echo "blocked=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            [[ "$ACTION" == "RETRY" ]] || { echo "Retry decision failed closed: $DECISION" >&2; exit 41; }
+            NEXT_ATTEMPT="$(jq -r '.next_attempt' <<<"$DECISION")"
+
+            REASON="$(python - <<'PY'
           import json
           from pathlib import Path
           ev = json.loads(Path('/tmp/controller_failure_evidence.json').read_text())
@@ -246,13 +287,12 @@ EOF
               (" steps=" + ','.join(f"{s.get('name')}:{s.get('conclusion')}" for s in j.get('steps', [])) if j.get('steps') else '')
               for j in ev.get('failed_jobs', [])
           )
-          excerpt = ev.get('sanitized_log_excerpt', '')[:3000]
-          print(f"Autonomous controller retry after Cloud Worker Task run {ev['source_worker_run_id']} concluded {ev['source_conclusion']}. {jobs}. Sanitized excerpt: {excerpt}".strip())
+          print(f"Autonomous controller retry after Cloud Worker Task run {ev['source_worker_run_id']} concluded {ev['source_conclusion']}. Structured diagnostics: {jobs}".strip())
           PY
-          )"
+            )"
 
-          git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
-          python - "$TASK_FILE" "$NEXT_ATTEMPT" "$REASON" "$SOURCE_RUN_ID" <<'PY'
+            git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
+            python - "$TASK_FILE" "$NEXT_ATTEMPT" "$REASON" "$SOURCE_RUN_ID" <<'PY'
           import json, sys
           from pathlib import Path
           path, attempt, reason, run_id = sys.argv[1:]
@@ -260,6 +300,11 @@ EOF
           data = json.loads(p.read_text(encoding='utf-8'))
           data['retry_attempt'] = int(attempt)
           data['retry_reason'] = reason
+          data['controller_retry_state'] = {
+              'source_worker_run_id': str(run_id),
+              'attempt': int(attempt),
+              'dispatch_status': 'PENDING_DISPATCH',
+          }
           evidence = data.setdefault('controller_retry_evidence', [])
           marker = {'source_worker_run_id': str(run_id), 'next_attempt': int(attempt)}
           if marker not in evidence:
@@ -267,26 +312,49 @@ EOF
           p.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
           PY
 
-          mapfile -t CHANGED < <(git status --porcelain -uall | awk '{print $2}')
-          if [[ "${#CHANGED[@]}" -ne 1 || "${CHANGED[0]}" != "$TASK_FILE" ]]; then
-            echo "Retry mutation touched unexpected paths: ${CHANGED[*]}" >&2
-            exit 42
+            mapfile -t CHANGED < <(git status --porcelain -uall | awk '{print $2}')
+            [[ "${#CHANGED[@]}" -eq 1 && "${CHANGED[0]}" == "$TASK_FILE" ]] || {
+              echo "Retry mutation touched unexpected paths: ${CHANGED[*]}" >&2
+              exit 42
+            }
+
+            git config user.name "Project Agent Autonomous Controller"
+            git config user.email "autonomous-controller@users.noreply.github.com"
+            git add -- "$TASK_FILE"
+            git commit -m "controller: retry ${TASK_ID} attempt ${NEXT_ATTEMPT} ${MARKER}"
+            git push origin "HEAD:refs/heads/$DEFAULT_BRANCH"
+            RETRY_SHA="$(git rev-parse HEAD)"
           fi
 
-          git config user.name "Project Agent Autonomous Controller"
-          git config user.email "autonomous-controller@users.noreply.github.com"
-          git add -- "$TASK_FILE"
-          git commit -m "controller: retry ${TASK_ID} attempt ${NEXT_ATTEMPT} ${MARKER}"
-          git push origin "HEAD:refs/heads/$DEFAULT_BRANCH"
+          DISPATCH_KEY="$(python "$HELPER" dispatch-key "$TASK_ID" "$RETRY_SHA" "$NEXT_ATTEMPT" "$SOURCE_RUN_ID")"
+          RECEIPT_BRANCH="controller-dispatch-receipts/$DISPATCH_KEY"
+          if RECEIPT="$(git ls-remote --heads origin "$RECEIPT_BRANCH")" && [[ -n "$RECEIPT" ]]; then
+            RECEIPT_SHA="$(awk '{print $1}' <<<"$RECEIPT")"
+            [[ "$RECEIPT_SHA" == "$RETRY_SHA" ]] || { echo "Dispatch receipt SHA mismatch" >&2; exit 43; }
+            echo "Retry dispatch already completed for $DISPATCH_KEY; no duplicate dispatch." >> "$GITHUB_STEP_SUMMARY"
+            cp /tmp/controller_failure_evidence.json controller_failure_evidence.json
+            exit 0
+          fi
 
           jq -n \
             --arg task_file "$TASK_FILE" \
-            --arg source_run "$SOURCE_RUN_ID" \
-            '{event_type:"worker_task_retry",client_payload:{task_file:$task_file,source_worker_run_id:$source_run}}' \
+            --arg task_sha "$RETRY_SHA" \
+            --arg task_id "$TASK_ID" \
+            --argjson retry_attempt "$NEXT_ATTEMPT" \
+            --arg source_worker_run_id "$SOURCE_RUN_ID" \
+            --arg dispatch_key "$DISPATCH_KEY" \
+            '{event_type:"worker_task_retry",client_payload:{task_file:$task_file,task_sha:$task_sha,task_id:$task_id,retry_attempt:$retry_attempt,source_worker_run_id:$source_worker_run_id,dispatch_key:$dispatch_key}}' \
             > /tmp/worker-dispatch.json
+
+          # If this API call fails, no receipt is created. Reprocessing finds
+          # the existing retry commit and resumes this exact dispatch.
           gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" --input /tmp/worker-dispatch.json
+
+          # Receipt is separate from the retry mutation. Re-delivery after a
+          # successful dispatch observes this ref and does not dispatch again.
+          git push origin "$RETRY_SHA:refs/heads/$RECEIPT_BRANCH"
           cp /tmp/controller_failure_evidence.json controller_failure_evidence.json
-          echo "Queued bounded retry ${NEXT_ATTEMPT} for ${TASK_ID} via repository_dispatch." >> "$GITHUB_STEP_SUMMARY"
+          echo "Queued bounded retry $NEXT_ATTEMPT for $TASK_ID with immutable binding $DISPATCH_KEY." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload sanitized failure evidence
         if: github.event.workflow_run.conclusion != 'success'
