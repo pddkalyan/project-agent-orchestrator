@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "next": [
-    "Keep PR #6 draft and unmerged until GPT-6 Astra performs R5 and approves the new exact correction head.",
-    "Have Astra run all 86 TASK-0004 deterministic offline tests locally on the exact correction head.",
-    "Adversarially verify contradictory text-done events, empty-delta/nonempty-final mismatch, malformed lifecycle payloads, invalid/duplicate/early completion, post-completion events, and content-part identity mismatches.",
-    "Preserve successful realistic streaming through TASK-0003 and stale-SHA rejection.",
-    "If Astra R5 rejects, apply its exact correction package and require another exact-SHA review; never merge a stale SHA.",
-    "After exact-SHA approval and merge, perform the one-time Windows Continue with ChatGPT sign-in manually; never run browser authorization in CI."
+    "Keep PR #6 draft and unmerged.",
+    "Freeze the final exact PR head after removing the temporary self-review workflow.",
+    "Have GPT-6 Astra perform one final exact-head review and run all 106 TASK-0004 deterministic tests.",
+    "If and only if Astra APPROVES the exact frozen SHA, verify the PR head is unchanged immediately before any merge.",
+    "After merge, perform the one-time Windows Continue with ChatGPT sign-in manually; never run browser authorization in CI.",
+    "Preserve zero-extra-spend, exact gpt-6-astra-only, no-conversation/history/memory access, no-local-inference, no-cleanup-mutation, and no-auto-merge boundaries."
   ]
 }
