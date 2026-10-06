@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0004",
-  "review_status": "R4_CORRECTED_PENDING_ASTRA_R5",
+  "review_status": "SELF_REVIEW_COMPLETE_PENDING_FINAL_ASTRA",
   "worker": {
     "agent": "worker_gemini_cli",
     "model": "gemini-3.5-flash-lite"
@@ -20,10 +20,10 @@
     "PROVENANCE_REGISTRY.jsonl"
   ],
   "verification_results": {
-    "status": "PENDING_ASTRA_R5_EXACT_HEAD_LOCAL_TEST",
-    "deterministic_tests_expected": 86,
+    "status": "PENDING_FINAL_ASTRA_EXACT_HEAD_106_TEST_RUN",
+    "deterministic_tests_expected": 106,
     "exact_head_task0004_ci_available": false,
-    "reason": "Astra R4 rejected the prior exact head with two stream-state findings. Both are corrected with an explicit validated stream state machine; the TASK-0004 module now contains 86 deterministic offline tests.",
+    "reason": "GPT-5.6 Sol completed a broad adversarial self-review. 93/93 tests passed on an executable checkpoint; additional hardening expanded the suite to 106 tests. GitHub subsequently returned startup_failure before allocating runners, so the final Astra review must execute all 106 tests on the frozen exact head.",
     "live_authorization_performed": false,
     "live_openai_calls_performed": false,
     "zero_extra_spend_boundary": true,
@@ -34,43 +34,14 @@
     "no_merge_or_auto_merge": true
   },
   "review_focus": [
-    "Astra R4 two-finding stream-state correction verification on new exact head",
-    "Astra R3 two-finding correction verification on final exact head",
-    "Astra R2 five-finding correction verification on the new exact head",
-    "Astra R1 six-finding correction verification on exact correction head",
-    "current OpenAI SIWC endpoint and dynamic_agent_client registration semantics",
-    "callback-issued client_id persistence before token exchange and reuse for returning sign-in",
-    "stable urn:uuid ext_agent_host_id and exact 127.0.0.1 /auth/callback loopback URI",
-    "PKCE S256, fresh state/nonce, strict callback state/client binding",
-    "mandatory cryptographic ID-token JWKS signature verification plus exact issuer/audience/nonce/expiry/subject checks",
-    "required chatgpt.tokens.use.direct and offline_access scope enforcement",
-    "DPAPI-protected token storage, atomic persistence, separate profile registrations and credential-free status output",
-    "serialized rotating refresh, optional retained ID token/scope on refresh, and invalid_grant/revocation error mapping",
-    "account model catalog visible-slug parsing and exact gpt-6-astra-only enforcement",
-    "stateless Responses request shape store=false/stream=true and blocked unsupported stateful fields",
-    "stream completion and plan/auth/infrastructure error handling before TASK-0003 handoff",
-    "TASK-0003 immutable snapshot/schema/idempotency gates remain mandatory",
-    "no OPENAI_API_KEY/client-secret/paid fallback/conversation access/local inference/cleanup mutation/merge or auto-merge",
-    "private-key/auth-code/id_token_hint/bearer/token diagnostics are redacted; invalid refresh grants fail closed",
-    "live streamed reviewer transport is impossible unless a separate activation policy sets reviewer_enabled=true and zero_extra_spend_confirmed=true",
-    "exact gpt-6-astra catalog and required plan scopes are rechecked immediately before live reviewer transport",
-    "non-Bearer token responses are rejected and expired profiles refresh even if earliest_refresh_at is stale/future",
-    "single production live-review pipeline must refresh session, query account-bound catalog, validate fresh account-bound zero-spend allowance, execute TASK-0003 evaluation/schema/dedup, and fail closed",
-    "returning sign-in uses separate registration metadata plus profile-version CAS so concurrent refresh cannot be rolled back",
-    "refresh response validation blocks invalid token values/types/lifetimes and never retries a consumed rotating token",
-    "FileLock releases process mutex/handles on every acquisition failure and uses bounded nonblocking Windows lock attempts",
-    "public diagnostics use structured safe statuses and multiline credential continuations are redacted",
-    "refresh must persist REFRESH_IN_PROGRESS before dispatch and never automatically resubmit the old rotating credential after uncertain completion or restart",
-    "refresh scope omission may inherit prior grant, but any supplied scope must be a nonblank string containing the complete required grant",
-    "allowance and session timestamps must be finite non-boolean numbers with valid ordering and freshness",
-    "pending registration metadata must be loaded, profile/host/client-bound, and reused after failed first exchange",
-    "all malformed stream event shapes and decoding/assembly failures must return secret-free BLOCKED outcomes",
-    "normal Responses lifecycle events are accepted while unknown/malformed/failure/incomplete events remain blocked",
-    "replacement-write failure contract is verified behaviorally: restart stays blocked and the old rotating credential is never resubmitted",
-    "failure to persist the initial REFRESH_IN_PROGRESS fence sends zero refresh requests",
-    "response.output_text.done must match all accumulated deltas immediately and duplicate/mismatched done events fail closed",
-    "recognized lifecycle events require valid payload shapes and matching output/content identity",
-    "response.completed requires a valid completed response and must be terminal; any later event fails closed"
+    "Run all 106 TASK-0004 deterministic tests on the exact final PR head.",
+    "Verify R4-01/R4-02 are resolved in the production path, not only tests.",
+    "Adversarially verify realistic Responses streams including reasoning output items and assistant message identity.",
+    "Verify exact terminal response model/output consistency and fail-closed unknown/tool/refusal/error handling.",
+    "Verify durable refresh fencing and terminal refresh credential invalidation across restart.",
+    "Verify bounded fresh account-bound allowance, exact model catalog, full scopes, and no paid fallback.",
+    "Verify TASK-0003 exact-SHA/schema/idempotency/dedup pipeline remains mandatory.",
+    "Verify CLI registration/host/profile concurrency, secret suppression, and permanent zero-spend/no-merge boundaries."
   ],
   "known_limitations": [
     "The user has not performed real browser authorization yet; that is intentionally post-merge.",
@@ -129,5 +100,34 @@
       "R4-02 lifecycle and terminal events lacked payload/order validation"
     ],
     "correction_status": "IMPLEMENTED_PENDING_R5"
+  },
+  "self_review": {
+    "model": "gpt-5.6-sol",
+    "scope": "full TASK-0004 implementation adversarial pass after Astra R4",
+    "r4_findings_fixed": [
+      "R4-01",
+      "R4-02"
+    ],
+    "additional_hardening": [
+      "reasoning output-item/event support before assistant verdict message",
+      "stream item/output/content identity and sequence validation",
+      "terminal response output and exact-model consistency",
+      "top-level stream error handling",
+      "monotonic lifecycle and unique output-index enforcement",
+      "bounded allowance freshness",
+      "strict refresh token_type validation",
+      "terminal refresh credential invalidation",
+      "duplicate OAuth callback parameter rejection",
+      "serialized stable host-id creation",
+      "registration sidecar filtering and permissions",
+      "current SIWC error classification"
+    ],
+    "deterministic_tests_expected": 106,
+    "executed_checkpoint": {
+      "tests": 93,
+      "result": "PASS",
+      "workflow_run_id": 37426789615,
+      "note": "A later GitHub Actions startup/platform failure prevented execution of subsequently added tests 94-106; those final tests must be run by the final Astra review."
+    }
   }
 }
