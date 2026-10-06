@@ -1187,8 +1187,10 @@ class TestTask0004(unittest.TestCase):
 
         events=valid_stream_events('{"status":"APPROVED"}')
         late=deepcopy(events)
-        late_event={"type":"response.in_progress","response":{"id":"resp_test","status":"in_progress","model":adapter.EXACT_REVIEWER_MODEL,"output":[]},"sequence_number":late[3]["sequence_number"]+0.5}
+        late_event={"type":"response.in_progress","response":{"id":"resp_test","status":"in_progress","model":adapter.EXACT_REVIEWER_MODEL,"output":[]}}
         late.insert(4,late_event)
+        for i,event in enumerate(late,1):
+            event["sequence_number"]=i
         self.assertEqual(adapter.assemble_stream(late)["status"],adapter.BLOCKED_INVALID_RESPONSE)
 
     def test_102_output_index_cannot_be_reused_after_reasoning_completion(self):
@@ -1211,6 +1213,35 @@ class TestTask0004(unittest.TestCase):
         for i,e in enumerate(no_created,1):
             e["sequence_number"]=i
         self.assertEqual(adapter.assemble_stream(no_created)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+
+    def test_105_missing_response_model_blocks(self):
+        events=valid_stream_events('{"status":"APPROVED"}')
+        created=deepcopy(events[0])
+        created["response"].pop("model",None)
+        events[0]=created
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_106_terminal_refresh_error_clears_unusable_rotating_credential(self):
+        class T:
+            def __init__(self): self.calls=0
+            def post_form(self,*args,**kwargs):
+                self.calls+=1
+                raise adapter.SafeTransportError(http_status=400,code="invalid_grant",category="http")
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"profile.json"
+            storage=adapter.HostCredentialStorage(path,FakeProtector())
+            storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+            t=T()
+            result=adapter.refresh_profile(storage,t)
+            self.assertEqual(result["status"],adapter.BLOCKED_AUTH_REQUIRED)
+            saved=storage.load_profile()
+            self.assertEqual(saved["session_state"],"BLOCKED_REFRESH_TERMINAL")
+            self.assertNotIn("refresh_token",saved)
+            self.assertNotIn("access_token",saved)
+            restarted=adapter.HostCredentialStorage(path,FakeProtector())
+            self.assertEqual(adapter.ensure_fresh_profile(restarted,t)[1],adapter.BLOCKED_AUTH_REQUIRED)
+            self.assertEqual(t.calls,1)
 
 
 if __name__ == "__main__":
