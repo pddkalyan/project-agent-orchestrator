@@ -3,199 +3,103 @@
   "title": "Movie Studio Production State",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "project_id",
-    "spend_limit_usd",
-    "production",
-    "episodes"
-  ],
+  "required": ["schema_version", "project_id", "spend_limit_usd", "production", "movie_bible", "episodes", "generation_jobs", "idempotency_index"],
   "properties": {
-    "schema_version": {
-      "const": 1
-    },
-    "project_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "spend_limit_usd": {
-      "type": "number",
-      "const": 0
-    },
+    "schema_version": {"const": 1},
+    "project_id": {"type": "string", "minLength": 1},
+    "spend_limit_usd": {"type": "number", "const": 0},
     "production": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "aspect_ratio",
-        "target_episode_minutes",
-        "local_video_inference",
-        "final_storage_provider"
-      ],
+      "required": ["aspect_ratio", "target_episode_minutes", "local_video_inference", "final_storage_provider"],
       "properties": {
-        "aspect_ratio": {
-          "const": "16:9"
-        },
-        "target_episode_minutes": {
-          "type": "number",
-          "minimum": 1,
-          "default": 20
-        },
-        "local_video_inference": {
-          "const": false
-        },
-        "final_storage_provider": {
-          "const": "Google Drive"
-        }
+        "aspect_ratio": {"const": "16:9"},
+        "target_episode_minutes": {"type": "number", "minimum": 1, "default": 20},
+        "local_video_inference": {"const": false},
+        "final_storage_provider": {"const": "Google Drive"}
       }
     },
-    "episodes": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/episode"
-      }
-    }
+    "movie_bible": {"$ref": "#/$defs/movie_bible"},
+    "episodes": {"type": "array", "items": {"$ref": "#/$defs/episode"}},
+    "generation_jobs": {"type": "array", "items": {"$ref": "#/$defs/generation_job"}},
+    "idempotency_index": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}}
   },
   "$defs": {
+    "string_map": {"type": "object", "additionalProperties": {"type": "string"}},
+    "entity_map": {"type": "object", "additionalProperties": {"$ref": "#/$defs/string_map"}},
+    "movie_bible": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "story_rules", "characters", "voices", "locations", "continuity_facts"],
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "story_rules": {"$ref": "#/$defs/string_map"},
+        "characters": {"$ref": "#/$defs/entity_map"},
+        "voices": {"$ref": "#/$defs/entity_map"},
+        "locations": {"$ref": "#/$defs/entity_map"},
+        "continuity_facts": {"$ref": "#/$defs/string_map"}
+      }
+    },
     "review": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "gate",
-        "asset_version",
-        "status"
-      ],
+      "required": ["gate", "asset_version", "status"],
       "properties": {
-        "gate": {
-          "enum": [
-            "VISUAL_QA",
-            "CONTINUITY_QA",
-            "AUDIO_QA",
-            "TECHNICAL_QA",
-            "TIMELINE_QA",
-            "ARCHIVE_QA"
-          ]
-        },
-        "asset_version": {
-          "type": "string",
-          "minLength": 1
-        },
-        "status": {
-          "enum": [
-            "PENDING",
-            "PASS",
-            "FAIL",
-            "BLOCKED"
-          ]
-        },
-        "reason": {
-          "type": "string"
-        }
+        "gate": {"enum": ["VISUAL_QA", "CONTINUITY_QA", "AUDIO_QA", "TECHNICAL_QA", "TIMELINE_QA", "ARCHIVE_QA"]},
+        "asset_version": {"type": "string", "minLength": 1},
+        "status": {"enum": ["PENDING", "PASS", "FAIL", "BLOCKED"]},
+        "reason": {"type": "string"}
+      }
+    },
+    "generation_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "shot_id", "idempotency_key", "input_fingerprint", "max_attempts", "attempts", "status"],
+      "properties": {
+        "job_id": {"type": "string", "minLength": 1},
+        "shot_id": {"type": "string", "minLength": 1},
+        "idempotency_key": {"type": "string", "minLength": 1},
+        "input_fingerprint": {"type": "string", "minLength": 1},
+        "max_attempts": {"type": "integer", "minimum": 1},
+        "attempts": {"type": "integer", "minimum": 0},
+        "status": {"enum": ["QUEUED", "RUNNING", "SUCCEEDED", "RETRYABLE", "EXHAUSTED"]},
+        "provider_job_id": {"type": ["string", "null"]},
+        "output_asset_version": {"type": ["string", "null"]},
+        "last_error": {"type": ["string", "null"]}
       }
     },
     "shot": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "shot_id",
-        "status",
-        "canonical",
-        "reviews"
-      ],
+      "required": ["shot_id", "status", "asset_version", "has_dialogue_or_audio", "canonical", "reviews"],
       "properties": {
-        "shot_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "status": {
-          "enum": [
-            "PLANNED",
-            "GENERATING",
-            "GENERATED",
-            "VISUAL_QA",
-            "CONTINUITY_QA",
-            "AUDIO_QA",
-            "APPROVED",
-            "UPSCALING",
-            "CANONICAL",
-            "REJECTED",
-            "BLOCKED"
-          ]
-        },
-        "canonical": {
-          "type": "boolean"
-        },
-        "reviews": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/review"
-          }
-        }
+        "shot_id": {"type": "string", "minLength": 1},
+        "status": {"enum": ["PLANNED", "GENERATING", "GENERATED", "VISUAL_QA", "CONTINUITY_QA", "AUDIO_QA", "APPROVED", "UPSCALING", "CANONICAL", "REJECTED", "BLOCKED"]},
+        "asset_version": {"type": "string"},
+        "has_dialogue_or_audio": {"type": "boolean"},
+        "canonical": {"type": "boolean"},
+        "reviews": {"type": "array", "items": {"$ref": "#/$defs/review"}}
       }
     },
     "scene": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "scene_id",
-        "status",
-        "shots"
-      ],
+      "required": ["scene_id", "status", "shots"],
       "properties": {
-        "scene_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "status": {
-          "enum": [
-            "PLANNED",
-            "GENERATING",
-            "REVIEW",
-            "APPROVED",
-            "BLOCKED"
-          ]
-        },
-        "shots": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/shot"
-          }
-        }
+        "scene_id": {"type": "string", "minLength": 1},
+        "status": {"enum": ["PLANNED", "GENERATING", "REVIEW", "APPROVED", "BLOCKED"]},
+        "shots": {"type": "array", "items": {"$ref": "#/$defs/shot"}}
       }
     },
     "episode": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "episode_id",
-        "status",
-        "scenes",
-        "final_master_verified"
-      ],
+      "required": ["episode_id", "status", "scenes", "final_master_verified"],
       "properties": {
-        "episode_id": {
-          "type": "string",
-          "minLength": 1
-        },
-        "status": {
-          "enum": [
-            "PLANNED",
-            "IN_PRODUCTION",
-            "ASSEMBLING",
-            "FINAL_QC",
-            "ARCHIVING",
-            "COMPLETED",
-            "BLOCKED"
-          ]
-        },
-        "scenes": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/scene"
-          }
-        },
-        "final_master_verified": {
-          "type": "boolean"
-        }
+        "episode_id": {"type": "string", "minLength": 1},
+        "status": {"enum": ["PLANNED", "IN_PRODUCTION", "ASSEMBLING", "FINAL_QC", "ARCHIVING", "COMPLETED", "BLOCKED"]},
+        "scenes": {"type": "array", "items": {"$ref": "#/$defs/scene"}},
+        "final_master_verified": {"type": "boolean"}
       }
     }
   }
