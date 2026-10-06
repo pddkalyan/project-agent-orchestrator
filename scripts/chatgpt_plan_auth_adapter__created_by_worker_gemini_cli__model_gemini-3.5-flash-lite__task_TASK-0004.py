@@ -1028,63 +1028,147 @@ def build_responses_plan_request(*, review_prompt: str, review_context: Mapping[
 
 
 def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Assemble verdict text while validating normal Responses lifecycle events."""
+    """Validate a single-message Responses stream and assemble its verdict text."""
     text_parts: list[str] = []
-    completed = False
     final_text: str | None = None
-    ignorable_lifecycle = {
-        "response.queued",
-        "response.created",
-        "response.in_progress",
-        "response.output_item.added",
-        "response.output_item.done",
-        "response.content_part.added",
-        "response.content_part.done",
-    }
+    terminal = False
+    response_started = False
+    active_output: int | None = None
+    active_content: tuple[int, int] | None = None
+    text_done_seen = False
+
+    def invalid() -> dict[str, Any]:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+
+    def valid_index(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
     for event in events:
+        if terminal:
+            return invalid()
         if not isinstance(event, Mapping):
-            return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+            return invalid()
         event_type = event.get("type")
         if not isinstance(event_type, str):
-            return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+            return invalid()
 
-        if event_type in ignorable_lifecycle:
+        if event_type in {"response.queued", "response.created", "response.in_progress"}:
+            response = event.get("response")
+            if not isinstance(response, Mapping):
+                return invalid()
+            status = response.get("status")
+            if event_type == "response.queued":
+                if status not in ("queued", "in_progress"):
+                    return invalid()
+            else:
+                if status not in ("in_progress",):
+                    return invalid()
+            response_started = True
             continue
+
+        if event_type == "response.output_item.added":
+            if not response_started or active_output is not None:
+                return invalid()
+            output_index = event.get("output_index")
+            item = event.get("item")
+            if not valid_index(output_index) or not isinstance(item, Mapping):
+                return invalid()
+            active_output = output_index
+            continue
+
+        if event_type == "response.content_part.added":
+            output_index = event.get("output_index")
+            content_index = event.get("content_index")
+            part = event.get("part")
+            if (
+                active_output is None
+                or output_index != active_output
+                or not valid_index(content_index)
+                or not isinstance(part, Mapping)
+                or active_content is not None
+            ):
+                return invalid()
+            if part.get("type") != "output_text":
+                return invalid()
+            active_content = (output_index, content_index)
+            continue
+
         if event_type == "response.output_text.delta":
+            if active_content is None or text_done_seen:
+                return invalid()
+            if event.get("output_index") != active_content[0] or event.get("content_index") != active_content[1]:
+                return invalid()
             delta = event.get("delta")
             if not isinstance(delta, str):
-                return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+                return invalid()
             text_parts.append(delta)
-        elif event_type == "response.output_text.done":
+            continue
+
+        if event_type == "response.output_text.done":
+            if active_content is None or text_done_seen:
+                return invalid()
+            if event.get("output_index") != active_content[0] or event.get("content_index") != active_content[1]:
+                return invalid()
             text = event.get("text")
             if not isinstance(text, str):
-                return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+                return invalid()
+            streamed_text = "".join(text_parts)
+            if text != streamed_text:
+                return invalid()
             final_text = text
-        elif event_type == "response.completed":
-            completed = True
-        elif event_type == "response.failed":
+            text_done_seen = True
+            continue
+
+        if event_type == "response.content_part.done":
+            if active_content is None or not text_done_seen:
+                return invalid()
+            if event.get("output_index") != active_content[0] or event.get("content_index") != active_content[1]:
+                return invalid()
+            part = event.get("part")
+            if not isinstance(part, Mapping) or part.get("type") != "output_text":
+                return invalid()
+            part_text = part.get("text")
+            if not isinstance(part_text, str) or part_text != final_text:
+                return invalid()
+            active_content = None
+            continue
+
+        if event_type == "response.output_item.done":
+            if active_output is None or active_content is not None or not text_done_seen:
+                return invalid()
+            if event.get("output_index") != active_output or not isinstance(event.get("item"), Mapping):
+                return invalid()
+            active_output = None
+            continue
+
+        if event_type == "response.completed":
+            if not response_started or active_output is not None or active_content is not None or not text_done_seen:
+                return invalid()
+            response = event.get("response")
+            if not isinstance(response, Mapping) or response.get("status") != "completed":
+                return invalid()
+            terminal = True
+            continue
+
+        if event_type == "response.failed":
             response = event.get("response")
             error = response.get("error") if isinstance(response, Mapping) else None
             code = error.get("code") if isinstance(error, Mapping) else "unknown_error"
             if not isinstance(code, str):
-                return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+                return invalid()
             return {"status": map_response_error_code(code), "completed": False}
-        elif event_type == "response.incomplete":
+
+        if event_type == "response.incomplete":
+            response = event.get("response")
+            if response is not None and not isinstance(response, Mapping):
+                return invalid()
             return {"status": BLOCKED_INFRASTRUCTURE_ERROR, "completed": False}
-        else:
-            return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
 
-    if not completed:
-        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+        return invalid()
 
-    streamed_text = "".join(text_parts)
-    if final_text is not None:
-        if streamed_text and final_text != streamed_text:
-            return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
-        streamed_text = final_text
-    if not streamed_text:
-        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
-    return {"status": "COMPLETED", "completed": True, "text": streamed_text}
+    if not terminal or final_text is None or not final_text:
+        return invalid()
+    return {"status": "COMPLETED", "completed": True, "text": final_text}
 
 
 
