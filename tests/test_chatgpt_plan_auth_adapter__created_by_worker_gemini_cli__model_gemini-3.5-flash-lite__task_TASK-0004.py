@@ -1180,5 +1180,38 @@ class TestTask0004(unittest.TestCase):
         self.assertEqual(adapter.map_transport_error("subscription_sharing_usage_unavailable"),adapter.BLOCKED_INFRASTRUCTURE_ERROR)
 
 
+    def test_101_duplicate_or_late_response_lifecycle_blocks(self):
+        events=valid_stream_events('{"status":"APPROVED"}')
+        duplicate_created=[events[0],dict(events[0],sequence_number=2)] + [dict(e,sequence_number=e["sequence_number"]+1) for e in events[1:]]
+        self.assertEqual(adapter.assemble_stream(duplicate_created)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+        events=valid_stream_events('{"status":"APPROVED"}')
+        late=deepcopy(events)
+        late_event={"type":"response.in_progress","response":{"id":"resp_test","status":"in_progress","model":adapter.EXACT_REVIEWER_MODEL,"output":[]},"sequence_number":late[3]["sequence_number"]+0.5}
+        late.insert(4,late_event)
+        self.assertEqual(adapter.assemble_stream(late)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_102_output_index_cannot_be_reused_after_reasoning_completion(self):
+        events=valid_stream_events('{"status":"APPROVED"}',include_reasoning=True)
+        msg_added=next(i for i,e in enumerate(events) if e["type"]=="response.output_item.added" and e["item"].get("type")=="message")
+        mutated=deepcopy(events)
+        mutated[msg_added]["output_index"]=0
+        self.assertEqual(adapter.assemble_stream(mutated)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_103_terminal_reasoning_identity_must_match_stream(self):
+        events=valid_stream_events('{"status":"APPROVED"}',include_reasoning=True)
+        terminal=deepcopy(events[-1])
+        terminal["response"]["output"][0]["id"]="rs_other"
+        events[-1]=terminal
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_104_lifecycle_created_is_required_before_output(self):
+        events=valid_stream_events('{"status":"APPROVED"}')
+        no_created=[e for e in events if e["type"]!="response.created"]
+        for i,e in enumerate(no_created,1):
+            e["sequence_number"]=i
+        self.assertEqual(adapter.assemble_stream(no_created)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+
 if __name__ == "__main__":
     unittest.main()
