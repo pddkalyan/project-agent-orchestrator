@@ -257,6 +257,9 @@ def parse_loopback_callback(
     parsed = urllib.parse.urlparse(callback_url_or_query)
     query = parsed.query if parsed.query else callback_url_or_query.lstrip("?")
     qs = urllib.parse.parse_qs(query, keep_blank_values=True)
+    for key in ("state", "error", "code", "client_id", "scope"):
+        if len(qs.get(key, [])) > 1:
+            raise ValueError("OAuth callback contains duplicate parameters")
     state = (qs.get("state") or [""])[0]
     if not secrets.compare_digest(state, expected_state):
         raise ValueError("OAuth state mismatch")
@@ -512,23 +515,32 @@ class FileLock:
             raise
 
     def __exit__(self, exc_type, exc, tb):
+        unlock_error = None
         try:
             if self.handle is not None:
-                if self._os_acquired:
-                    if os.name == "nt":
-                        import msvcrt
-                        self.handle.seek(0)
-                        msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
-                    else:
-                        import fcntl
-                        fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
-                self.handle.close()
-                self.handle = None
+                try:
+                    if self._os_acquired:
+                        if os.name == "nt":
+                            import msvcrt
+                            self.handle.seek(0)
+                            msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+                        else:
+                            import fcntl
+                            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+                except Exception as err:
+                    unlock_error = err
+                finally:
+                    try:
+                        self.handle.close()
+                    finally:
+                        self.handle = None
         finally:
             self._os_acquired = False
             if self._process_acquired:
                 self._process_acquired = False
                 self._process_lock.release()
+        if unlock_error is not None and exc_type is None:
+            raise unlock_error
 
 
 class HostCredentialStorage:
@@ -602,6 +614,8 @@ class HostCredentialStorage:
                 tmp.flush()
                 os.fsync(tmp.fileno())
             os.replace(temp_name, self.registration_path)
+            if os.name != "nt":
+                os.chmod(self.registration_path, 0o600)
         finally:
             if os.path.exists(temp_name):
                 os.unlink(temp_name)
