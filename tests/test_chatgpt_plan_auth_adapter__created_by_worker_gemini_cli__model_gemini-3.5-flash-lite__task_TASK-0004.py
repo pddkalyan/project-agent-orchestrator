@@ -1125,5 +1125,60 @@ class TestTask0004(unittest.TestCase):
         self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
 
 
+    def test_94_refresh_missing_token_type_blocks(self):
+        class T:
+            def post_form(self,*args,**kwargs):
+                return {"access_token":"a2","refresh_token":"r2","expires_in":3600,"scope":" ".join(adapter.REQUIRED_SCOPES)}
+        with tempfile.TemporaryDirectory() as tmp:
+            storage=adapter.HostCredentialStorage(Path(tmp)/"profile.json",FakeProtector())
+            storage.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+            result=adapter.refresh_profile(storage,T())
+            self.assertEqual(result["status"],adapter.BLOCKED_AUTH_REQUIRED)
+            self.assertNotEqual(storage.load_profile().get("session_state"),"ACTIVE")
+
+    def test_95_allowance_requires_bounded_freshness_window(self):
+        now=time.time()
+        profile={"profile_label":"default","subject":"sub-1","client_id":"oaiapp_x"}
+        base={"billing_mode":"ZERO_SPEND_PLAN","separately_billed":False,"credits_enabled":False,"remaining_requests":1,"profile_id":"default","subject":"sub-1","client_id":"oaiapp_x","observed_at":now-1,"expires_at":now+60}
+        self.assertTrue(adapter._validate_allowance_evidence(base,profile,now=now)[0])
+        stale=dict(base); stale["observed_at"]=now-adapter.ALLOWANCE_MAX_AGE_SECONDS-1; stale["expires_at"]=now+30
+        self.assertFalse(adapter._validate_allowance_evidence(stale,profile,now=now)[0])
+        too_long=dict(base); too_long["expires_at"]=too_long["observed_at"]+adapter.ALLOWANCE_MAX_VALIDITY_SECONDS+1
+        self.assertFalse(adapter._validate_allowance_evidence(too_long,profile,now=now)[0])
+
+    def test_96_non_mapping_activation_policy_blocks_without_transport(self):
+        class Never:
+            def stream_sse(self,*args,**kwargs): raise AssertionError("must not infer")
+        result=adapter.run_streamed_review(
+            storage=None,plan_allowance_evidence=None,activation_policy=None,
+            transport=Never(),review_prompt="Review.",expected_snapshot=None,review_request=None)
+        self.assertEqual(result["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_97_duplicate_oauth_callback_parameters_are_rejected(self):
+        with self.assertRaisesRegex(ValueError,"duplicate parameters"):
+            adapter.parse_loopback_callback(
+                "?code=a&code=b&state=s&client_id=oaiapp_x",
+                expected_state="s",expected_client_id=None,is_new_registration=True)
+        with self.assertRaisesRegex(ValueError,"duplicate parameters"):
+            adapter.parse_loopback_callback(
+                "?code=a&state=s&state=s&client_id=oaiapp_x",
+                expected_state="s",expected_client_id=None,is_new_registration=True)
+
+    def test_98_cli_filters_registration_sidecars_from_profiles(self):
+        cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
+        self.assertIn('path.name.endswith(".registration.json")',cli)
+
+    def test_99_cli_serializes_host_id_creation(self):
+        cli=(ROOT / "scripts" / "chatgpt_plan_auth_cli__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0004.py").read_text(encoding="utf-8")
+        self.assertIn("with FileLock(lock_file):",cli)
+        self.assertIn("host_file.suffix + \".lock\"",cli)
+
+    def test_100_current_siwc_error_classification_is_fail_closed(self):
+        self.assertEqual(adapter.map_response_error_code("subscription_sharing_user_not_eligible"),adapter.BLOCKED_PLAN_ALLOWANCE)
+        self.assertEqual(adapter.map_response_error_code("subscription_sharing_usage_unavailable"),adapter.BLOCKED_INFRASTRUCTURE_ERROR)
+        self.assertEqual(adapter.map_transport_error("subscription_sharing_user_not_eligible"),adapter.BLOCKED_PLAN_ALLOWANCE)
+        self.assertEqual(adapter.map_transport_error("subscription_sharing_usage_unavailable"),adapter.BLOCKED_INFRASTRUCTURE_ERROR)
+
+
 if __name__ == "__main__":
     unittest.main()
