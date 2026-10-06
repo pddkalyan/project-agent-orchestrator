@@ -847,7 +847,27 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
             try:
                 payload = transport.post_form(req["url"], req["data"])
             except Exception as exc:
-                return {"status": _public_transport_status(exc)}
+                status = _public_transport_status(exc)
+                terminal_refresh_codes = {
+                    "invalid_grant",
+                    "invalid_refresh_token",
+                    "token_expired",
+                    "refresh_token_expired",
+                    "refresh_token_invalidated",
+                    "refresh_token_reused",
+                    "invalid_client",
+                }
+                if isinstance(exc, SafeTransportError) and exc.code in terminal_refresh_codes:
+                    terminal = dict(in_progress)
+                    terminal["session_state"] = "BLOCKED_REFRESH_TERMINAL"
+                    terminal["saved_at"] = int(time.time())
+                    terminal.pop("access_token", None)
+                    terminal.pop("refresh_token", None)
+                    try:
+                        storage.save_profile_atomic(terminal)
+                    except Exception:
+                        return {"status": BLOCKED_INFRASTRUCTURE_ERROR}
+                return {"status": status}
 
             if not isinstance(payload, Mapping):
                 return {"status": BLOCKED_INVALID_RESPONSE}
@@ -1109,8 +1129,7 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             response_id = rid
         elif rid != response_id:
             return False
-        model = response.get("model")
-        if model is not None and model != EXACT_REVIEWER_MODEL:
+        if response.get("model") != EXACT_REVIEWER_MODEL:
             return False
         return True
 
