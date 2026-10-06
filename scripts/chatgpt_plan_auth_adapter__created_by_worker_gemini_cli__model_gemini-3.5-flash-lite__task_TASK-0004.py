@@ -50,6 +50,8 @@ RESOURCE = "https://api.openai.com/v1"
 DYNAMIC_CLIENT_ID = "dynamic_agent_client"
 EXACT_REVIEWER_MODEL = "gpt-6-astra"
 AGENT_NAME = "Project Agent Orchestrator"
+ALLOWANCE_MAX_AGE_SECONDS = 300
+ALLOWANCE_MAX_VALIDITY_SECONDS = 300
 
 REQUIRED_SCOPES = (
     "openid",
@@ -847,7 +849,7 @@ def refresh_profile(storage: HostCredentialStorage, transport: Any) -> dict[str,
 
             try:
                 access = payload.get("access_token")
-                token_type = payload.get("token_type", current.get("token_type", "Bearer"))
+                token_type = payload.get("token_type")
                 if not isinstance(access, str) or not access:
                     raise ValueError("invalid access token")
                 if not isinstance(new_refresh, str) or not new_refresh:
@@ -999,6 +1001,14 @@ UNSUPPORTED_RESPONSE_FIELDS = {
     "temperature",
     "top_p",
     "max_output_tokens",
+    "max_tool_calls",
+    "moderation",
+    "multi_agent",
+    "prompt",
+    "prompt_cache_retention",
+    "safety_identifier",
+    "top_logprobs",
+    "truncation",
     "service_tier",
     "tool_search",
 }
@@ -1375,7 +1385,13 @@ def _validate_allowance_evidence(evidence: Mapping[str, Any] | None, profile: Ma
         return False, BLOCKED_PLAN_ALLOWANCE, None
     observed_value = float(observed)
     expires_value = float(expires)
-    if observed_value > current or expires_value <= observed_value or current >= expires_value:
+    if (
+        observed_value > current
+        or current - observed_value > ALLOWANCE_MAX_AGE_SECONDS
+        or expires_value <= observed_value
+        or expires_value - observed_value > ALLOWANCE_MAX_VALIDITY_SECONDS
+        or current >= expires_value
+    ):
         return False, BLOCKED_PLAN_ALLOWANCE, None
     plan = {
         "billing_mode": evidence.get("billing_mode"),
@@ -1422,6 +1438,8 @@ def run_streamed_review(
     review_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Single production live-review path; every trust boundary is enforced here."""
+    if not isinstance(activation_policy, Mapping):
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
     if activation_policy.get("reviewer_enabled") is not True:
         return {"status": BLOCKED_PLAN_ALLOWANCE, "completed": False}
     if activation_policy.get("zero_extra_spend_confirmed") is not True:
@@ -1522,9 +1540,11 @@ def run_streamed_review(
 def map_response_error_code(code: str) -> str:
     if code in {
         "subscription_sharing_usage_limit_exceeded",
-        "subscription_sharing_usage_unavailable",
+        "subscription_sharing_user_not_eligible",
     }:
         return BLOCKED_PLAN_ALLOWANCE
+    if code == "subscription_sharing_usage_unavailable":
+        return BLOCKED_INFRASTRUCTURE_ERROR
     if code in {
         "subscription_sharing_invalid_user",
         "chatpass_v2_scope_not_authorized",
@@ -1556,9 +1576,11 @@ def map_transport_error(message: str) -> str:
 
     if any(code in lower for code in (
         "subscription_sharing_usage_limit_exceeded",
-        "subscription_sharing_usage_unavailable",
+        "subscription_sharing_user_not_eligible",
     )):
         return BLOCKED_PLAN_ALLOWANCE
+    if "subscription_sharing_usage_unavailable" in lower:
+        return BLOCKED_INFRASTRUCTURE_ERROR
 
     if any(code in lower for code in (
         "invalid_grant",
