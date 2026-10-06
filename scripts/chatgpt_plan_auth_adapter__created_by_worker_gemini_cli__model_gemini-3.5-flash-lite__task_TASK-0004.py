@@ -1028,14 +1028,23 @@ def build_responses_plan_request(*, review_prompt: str, review_context: Mapping[
 
 
 def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Validate a single-message Responses stream and assemble its verdict text."""
+    """Validate a stateless Responses stream and extract exactly one verdict message.
+
+    Reasoning items may precede the assistant message. Tool/refusal/unknown output
+    remains fail-closed because TASK-0004 requests no tools and requires a JSON
+    verdict in the assistant text.
+    """
     text_parts: list[str] = []
     final_text: str | None = None
+    response_id: str | None = None
     terminal = False
     response_started = False
-    active_output: int | None = None
-    active_content: tuple[int, int] | None = None
+    message_item: tuple[int, str] | None = None
+    message_item_done = False
+    active_content: tuple[int, int, str] | None = None
     text_done_seen = False
+    reasoning_items: dict[int, str] = {}
+    last_sequence: int | None = None
 
     def invalid() -> dict[str, Any]:
         return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
@@ -1043,60 +1052,179 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     def valid_index(value: Any) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
+    def valid_id(value: Any) -> bool:
+        return isinstance(value, str) and bool(value)
+
+    def validate_sequence(event: Mapping[str, Any]) -> bool:
+        nonlocal last_sequence
+        if "sequence_number" not in event:
+            return True
+        seq = event.get("sequence_number")
+        if not valid_index(seq):
+            return False
+        if last_sequence is not None and seq <= last_sequence:
+            return False
+        last_sequence = seq
+        return True
+
+    def bind_response(response: Any, allowed_statuses: set[str]) -> bool:
+        nonlocal response_id
+        if not isinstance(response, Mapping):
+            return False
+        rid = response.get("id")
+        status = response.get("status")
+        if not valid_id(rid) or status not in allowed_statuses:
+            return False
+        if response_id is None:
+            response_id = rid
+        elif rid != response_id:
+            return False
+        model = response.get("model")
+        if model is not None and model != EXACT_REVIEWER_MODEL:
+            return False
+        return True
+
+    def validate_reasoning_event(event: Mapping[str, Any], event_type: str) -> bool:
+        output_index = event.get("output_index")
+        item_id = event.get("item_id")
+        if not valid_index(output_index) or reasoning_items.get(output_index) != item_id:
+            return False
+        if event_type.startswith("response.reasoning_summary_"):
+            summary_index = event.get("summary_index")
+            if not valid_index(summary_index):
+                return False
+            if event_type.endswith("_part.added") or event_type.endswith("_part.done"):
+                part = event.get("part")
+                return (
+                    isinstance(part, Mapping)
+                    and part.get("type") == "summary_text"
+                    and isinstance(part.get("text"), str)
+                )
+            if event_type.endswith("_text.delta"):
+                return isinstance(event.get("delta"), str)
+            if event_type.endswith("_text.done"):
+                return isinstance(event.get("text"), str)
+            return False
+        if event_type == "response.reasoning_text.delta":
+            return valid_index(event.get("content_index")) and isinstance(event.get("delta"), str)
+        if event_type == "response.reasoning_text.done":
+            return valid_index(event.get("content_index")) and isinstance(event.get("text"), str)
+        return False
+
+    def terminal_message_text(response: Mapping[str, Any]) -> str | None:
+        output = response.get("output")
+        if not isinstance(output, list):
+            return None
+        messages = []
+        for item in output:
+            if not isinstance(item, Mapping):
+                return None
+            item_type = item.get("type")
+            if item_type == "reasoning":
+                if not valid_id(item.get("id")):
+                    return None
+                continue
+            if item_type != "message":
+                return None
+            if item.get("role") != "assistant" or item.get("status") != "completed":
+                return None
+            content = item.get("content")
+            if not isinstance(content, list) or len(content) != 1:
+                return None
+            part = content[0]
+            if not isinstance(part, Mapping) or part.get("type") != "output_text" or not isinstance(part.get("text"), str):
+                return None
+            messages.append((item.get("id"), part.get("text")))
+        if len(messages) != 1:
+            return None
+        if message_item is not None and messages[0][0] != message_item[1]:
+            return None
+        return messages[0][1]
+
     for event in events:
         if terminal:
             return invalid()
-        if not isinstance(event, Mapping):
+        if not isinstance(event, Mapping) or not validate_sequence(event):
             return invalid()
         event_type = event.get("type")
         if not isinstance(event_type, str):
             return invalid()
 
-        if event_type in {"response.queued", "response.created", "response.in_progress"}:
-            response = event.get("response")
-            if not isinstance(response, Mapping):
+        if event_type == "response.queued":
+            if response_started or not bind_response(event.get("response"), {"queued", "in_progress"}):
                 return invalid()
-            status = response.get("status")
-            if event_type == "response.queued":
-                if status not in ("queued", "in_progress"):
-                    return invalid()
-            else:
-                if status not in ("in_progress",):
-                    return invalid()
+            continue
+
+        if event_type in {"response.created", "response.in_progress"}:
+            if not bind_response(event.get("response"), {"in_progress"}):
+                return invalid()
             response_started = True
             continue
 
         if event_type == "response.output_item.added":
-            if not response_started or active_output is not None:
+            if not response_started:
                 return invalid()
             output_index = event.get("output_index")
             item = event.get("item")
             if not valid_index(output_index) or not isinstance(item, Mapping):
                 return invalid()
-            active_output = output_index
+            item_id = item.get("id")
+            item_type = item.get("type")
+            if not valid_id(item_id):
+                return invalid()
+            if item_type == "reasoning":
+                if output_index in reasoning_items or (message_item and output_index == message_item[0]):
+                    return invalid()
+                reasoning_items[output_index] = item_id
+                continue
+            if item_type == "message":
+                if message_item is not None or output_index in reasoning_items:
+                    return invalid()
+                if item.get("role") != "assistant" or item.get("status") not in ("in_progress", "completed"):
+                    return invalid()
+                message_item = (output_index, item_id)
+                continue
+            return invalid()
+
+        if event_type in {
+            "response.reasoning_summary_part.added",
+            "response.reasoning_summary_part.done",
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+            "response.reasoning_text.delta",
+            "response.reasoning_text.done",
+        }:
+            if not validate_reasoning_event(event, event_type):
+                return invalid()
             continue
 
         if event_type == "response.content_part.added":
+            if message_item is None or active_content is not None or text_done_seen:
+                return invalid()
             output_index = event.get("output_index")
             content_index = event.get("content_index")
+            item_id = event.get("item_id")
             part = event.get("part")
             if (
-                active_output is None
-                or output_index != active_output
+                output_index != message_item[0]
+                or item_id != message_item[1]
                 or not valid_index(content_index)
                 or not isinstance(part, Mapping)
-                or active_content is not None
+                or part.get("type") != "output_text"
+                or not isinstance(part.get("text"), str)
             ):
                 return invalid()
-            if part.get("type") != "output_text":
-                return invalid()
-            active_content = (output_index, content_index)
+            active_content = (output_index, content_index, item_id)
             continue
 
         if event_type == "response.output_text.delta":
             if active_content is None or text_done_seen:
                 return invalid()
-            if event.get("output_index") != active_content[0] or event.get("content_index") != active_content[1]:
+            if (
+                event.get("output_index") != active_content[0]
+                or event.get("content_index") != active_content[1]
+                or event.get("item_id") != active_content[2]
+            ):
                 return invalid()
             delta = event.get("delta")
             if not isinstance(delta, str):
@@ -1107,13 +1235,14 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if event_type == "response.output_text.done":
             if active_content is None or text_done_seen:
                 return invalid()
-            if event.get("output_index") != active_content[0] or event.get("content_index") != active_content[1]:
+            if (
+                event.get("output_index") != active_content[0]
+                or event.get("content_index") != active_content[1]
+                or event.get("item_id") != active_content[2]
+            ):
                 return invalid()
             text = event.get("text")
-            if not isinstance(text, str):
-                return invalid()
-            streamed_text = "".join(text_parts)
-            if text != streamed_text:
+            if not isinstance(text, str) or text != "".join(text_parts):
                 return invalid()
             final_text = text
             text_done_seen = True
@@ -1122,48 +1251,100 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if event_type == "response.content_part.done":
             if active_content is None or not text_done_seen:
                 return invalid()
-            if event.get("output_index") != active_content[0] or event.get("content_index") != active_content[1]:
+            if (
+                event.get("output_index") != active_content[0]
+                or event.get("content_index") != active_content[1]
+                or event.get("item_id") != active_content[2]
+            ):
                 return invalid()
             part = event.get("part")
-            if not isinstance(part, Mapping) or part.get("type") != "output_text":
-                return invalid()
-            part_text = part.get("text")
-            if not isinstance(part_text, str) or part_text != final_text:
+            if (
+                not isinstance(part, Mapping)
+                or part.get("type") != "output_text"
+                or part.get("text") != final_text
+            ):
                 return invalid()
             active_content = None
             continue
 
         if event_type == "response.output_item.done":
-            if active_output is None or active_content is not None or not text_done_seen:
+            output_index = event.get("output_index")
+            item = event.get("item")
+            if not valid_index(output_index) or not isinstance(item, Mapping):
                 return invalid()
-            if event.get("output_index") != active_output or not isinstance(event.get("item"), Mapping):
-                return invalid()
-            active_output = None
-            continue
+            item_id = item.get("id")
+            item_type = item.get("type")
+            if item_type == "reasoning":
+                if reasoning_items.get(output_index) != item_id:
+                    return invalid()
+                reasoning_items.pop(output_index, None)
+                continue
+            if item_type == "message":
+                if (
+                    message_item is None
+                    or output_index != message_item[0]
+                    or item_id != message_item[1]
+                    or active_content is not None
+                    or not text_done_seen
+                    or message_item_done
+                    or item.get("role") != "assistant"
+                    or item.get("status") != "completed"
+                ):
+                    return invalid()
+                content = item.get("content")
+                if not isinstance(content, list) or len(content) != 1:
+                    return invalid()
+                part = content[0]
+                if not isinstance(part, Mapping) or part.get("type") != "output_text" or part.get("text") != final_text:
+                    return invalid()
+                message_item_done = True
+                continue
+            return invalid()
 
         if event_type == "response.completed":
-            if not response_started or active_output is not None or active_content is not None or not text_done_seen:
+            if (
+                not response_started
+                or message_item is None
+                or not message_item_done
+                or active_content is not None
+                or not text_done_seen
+                or reasoning_items
+                or not bind_response(event.get("response"), {"completed"})
+            ):
                 return invalid()
             response = event.get("response")
-            if not isinstance(response, Mapping) or response.get("status") != "completed":
+            terminal_text = terminal_message_text(response)
+            if terminal_text is None or terminal_text != final_text:
                 return invalid()
             terminal = True
             continue
 
         if event_type == "response.failed":
             response = event.get("response")
-            error = response.get("error") if isinstance(response, Mapping) else None
+            if not bind_response(response, {"failed"}):
+                return invalid()
+            error = response.get("error")
             code = error.get("code") if isinstance(error, Mapping) else "unknown_error"
             if not isinstance(code, str):
                 return invalid()
             return {"status": map_response_error_code(code), "completed": False}
 
         if event_type == "response.incomplete":
-            response = event.get("response")
-            if response is not None and not isinstance(response, Mapping):
+            if not bind_response(event.get("response"), {"incomplete"}):
                 return invalid()
             return {"status": BLOCKED_INFRASTRUCTURE_ERROR, "completed": False}
 
+        if event_type == "error":
+            code = event.get("code")
+            if code is not None and not isinstance(code, str):
+                return invalid()
+            return {
+                "status": map_response_error_code(code) if isinstance(code, str) else BLOCKED_INFRASTRUCTURE_ERROR,
+                "completed": False,
+            }
+
+        # Refusals, tool calls, annotations, audio and unknown event families are
+        # not part of this no-tools JSON-verdict contract.
         return invalid()
 
     if not terminal or final_text is None or not final_text:
