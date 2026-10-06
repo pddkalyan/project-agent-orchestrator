@@ -333,10 +333,17 @@ class TestTask0004(unittest.TestCase):
                     adapter.build_responses_plan_request(review_prompt="x", review_context={field:"bad"})
 
     def test_28_stream_requires_completed_event(self):
-        incomplete = [{"type":"response.output_text.delta","delta":"hello"}]
-        self.assertEqual(adapter.assemble_stream(incomplete)["status"], adapter.BLOCKED_INVALID_RESPONSE)
-        complete = incomplete + [{"type":"response.completed"}]
-        result = adapter.assemble_stream(complete)
+        prefix = [
+            {"type":"response.created","response":{"status":"in_progress"}},
+            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
+            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
+            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"hello"},
+            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"hello"},
+            {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"hello"}},
+            {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}},
+        ]
+        self.assertEqual(adapter.assemble_stream(prefix)["status"], adapter.BLOCKED_INVALID_RESPONSE)
+        result = adapter.assemble_stream(prefix + [{"type":"response.completed","response":{"status":"completed"}}])
         self.assertEqual(result["status"], "COMPLETED")
         self.assertEqual(result["text"], "hello")
 
@@ -501,8 +508,15 @@ class TestTask0004(unittest.TestCase):
             def stream_sse(self, url, payload, headers):
                 self.stream_calls += 1
                 verdict = {"status":"APPROVED","reviewed_sha":"b"*40,"review_snapshot_digest":digest,"findings":[]}
-                yield {"type":"response.output_text.delta","delta":json.dumps(verdict)}
-                yield {"type":"response.completed"}
+                text=json.dumps(verdict)
+                yield {"type":"response.created","response":{"status":"in_progress"}}
+                yield {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}}
+                yield {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}
+                yield {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":text}
+                yield {"type":"response.output_text.done","output_index":0,"content_index":0,"text":text}
+                yield {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":text}}
+                yield {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}
+                yield {"type":"response.completed","response":{"status":"completed"}}
         with tempfile.TemporaryDirectory() as tmp:
             storage = self._live_storage(tmp)
             t = LiveTransport()
@@ -571,8 +585,15 @@ class TestTask0004(unittest.TestCase):
                 super().__init__(); self.models_payload={"models":[{"slug":"gpt-6-astra","visibility":"list"}]}
             def stream_sse(self,*args,**kwargs):
                 verdict={"status":"APPROVED","reviewed_sha":"e"*40,"review_snapshot_digest":adapter.bridge.sha256_json(snapshot),"findings":[]}
-                yield {"type":"response.output_text.delta","delta":json.dumps(verdict)}
-                yield {"type":"response.completed"}
+                text=json.dumps(verdict)
+                yield {"type":"response.created","response":{"status":"in_progress"}}
+                yield {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}}
+                yield {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}
+                yield {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":text}
+                yield {"type":"response.output_text.done","output_index":0,"content_index":0,"text":text}
+                yield {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":text}}
+                yield {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}
+                yield {"type":"response.completed","response":{"status":"completed"}}
         with tempfile.TemporaryDirectory() as tmp:
             result=adapter.run_streamed_review(
                 storage=self._live_storage(tmp),plan_allowance_evidence=self._allowance(),
@@ -966,8 +987,8 @@ class TestTask0004(unittest.TestCase):
             {"type":"response.in_progress","response":{"status":"in_progress"}},
             {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
             {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
-            {"type":"response.output_text.delta","delta":verdict},
-            {"type":"response.output_text.done","text":verdict},
+            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":verdict},
+            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":verdict},
             {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":verdict}},
             {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}},
             {"type":"response.completed","response":{"status":"completed"}},
@@ -1010,8 +1031,8 @@ class TestTask0004(unittest.TestCase):
                 yield {"type":"response.in_progress","response":{"status":"in_progress"}}
                 yield {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}}
                 yield {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}
-                yield {"type":"response.output_text.delta","delta":text}
-                yield {"type":"response.output_text.done","text":text}
+                yield {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":text}
+                yield {"type":"response.output_text.done","output_index":0,"content_index":0,"text":text}
                 yield {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":text}}
                 yield {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}
                 yield {"type":"response.completed","response":{"status":"completed"}}
@@ -1022,6 +1043,80 @@ class TestTask0004(unittest.TestCase):
                 activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
                 transport=T(),review_prompt="Review.",expected_snapshot=snapshot,review_request=deepcopy(snapshot))
             self.assertEqual(result["status"],adapter.bridge.BLOCKED_INVALID_VERDICT)
+
+
+    def test_82_conflicting_text_done_cannot_be_overwritten(self):
+        verdict='{"status":"APPROVED"}'
+        events=[
+            {"type":"response.created","response":{"status":"in_progress"}},
+            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
+            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
+            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":verdict},
+            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"CONFLICT"},
+            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":verdict},
+            {"type":"response.completed","response":{"status":"completed"}},
+        ]
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_83_empty_deltas_nonempty_done_blocks(self):
+        events=[
+            {"type":"response.created","response":{"status":"in_progress"}},
+            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
+            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
+            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":""},
+            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"nonempty"},
+        ]
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_84_malformed_lifecycle_and_completion_payloads_block(self):
+        verdict='{"status":"APPROVED"}'
+        malformed_created=[
+            {"type":"response.created","response":42},
+            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
+        ]
+        self.assertEqual(adapter.assemble_stream(malformed_created)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+        bad_completion=[
+            {"type":"response.created","response":{"status":"in_progress"}},
+            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
+            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
+            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":verdict},
+            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":verdict},
+            {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":verdict}},
+            {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}},
+            {"type":"response.completed","response":None},
+        ]
+        self.assertEqual(adapter.assemble_stream(bad_completion)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_85_completion_before_text_or_duplicate_completion_blocks(self):
+        early=[
+            {"type":"response.created","response":{"status":"in_progress"}},
+            {"type":"response.completed","response":{"status":"completed"}},
+            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"later"},
+        ]
+        self.assertEqual(adapter.assemble_stream(early)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+        verdict='{"status":"APPROVED"}'
+        valid=[
+            {"type":"response.created","response":{"status":"in_progress"}},
+            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
+            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
+            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":verdict},
+            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":verdict},
+            {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":verdict}},
+            {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}},
+            {"type":"response.completed","response":{"status":"completed"}},
+        ]
+        self.assertEqual(adapter.assemble_stream(valid + [{"type":"response.completed","response":{"status":"completed"}}])["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_86_content_part_identity_mismatch_blocks(self):
+        verdict='{"status":"APPROVED"}'
+        events=[
+            {"type":"response.created","response":{"status":"in_progress"}},
+            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
+            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
+            {"type":"response.output_text.delta","output_index":0,"content_index":1,"delta":verdict},
+        ]
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
 
 
 if __name__ == "__main__":
