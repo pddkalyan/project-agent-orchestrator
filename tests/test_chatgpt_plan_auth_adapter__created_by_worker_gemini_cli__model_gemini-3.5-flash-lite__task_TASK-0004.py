@@ -859,7 +859,7 @@ class TestTask0004(unittest.TestCase):
             self.assertEqual(adapter.ensure_fresh_profile(storage,t)[1], adapter.BLOCKED_AUTH_REQUIRED)
             self.assertEqual(t.calls,1)
 
-    def test_71_failed_replacement_write_leaves_pre_dispatch_block_on_disk(self):
+    def test_71_failed_replacement_write_stays_blocked_and_never_reuses_old_refresh(self):
         class FailSecond(adapter.HostCredentialStorage):
             def __init__(self,*args,**kwargs):
                 super().__init__(*args,**kwargs); self.writes=0
@@ -869,18 +869,25 @@ class TestTask0004(unittest.TestCase):
                     raise OSError("synthetic")
                 return super().save_profile_atomic(profile)
         class T:
-            def post_form(self,*args,**kwargs):
+            def __init__(self): self.calls=[]
+            def post_form(self,url,data,headers=None):
+                self.calls.append(data["refresh_token"])
                 return {"access_token":"a2","refresh_token":"r2","expires_in":3600,"scope":" ".join(adapter.REQUIRED_SCOPES)}
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/"profile.json"
             base=adapter.HostCredentialStorage(path,FakeProtector())
             base.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+            t=T()
             storage=FailSecond(path,FakeProtector())
-            result=adapter.refresh_profile(storage,T())
+            result=adapter.refresh_profile(storage,t)
             self.assertIn(result["status"],(adapter.BLOCKED_INFRASTRUCTURE_ERROR,adapter.BLOCKED_AUTH_REQUIRED))
             saved=base.load_profile()
             self.assertNotEqual(saved.get("session_state"),"ACTIVE")
-            self.assertNotEqual(saved.get("refresh_token"),"r0")
+            restarted=adapter.HostCredentialStorage(path,FakeProtector())
+            profile,status=adapter.ensure_fresh_profile(restarted,t)
+            self.assertIsNone(profile)
+            self.assertEqual(status,adapter.BLOCKED_AUTH_REQUIRED)
+            self.assertEqual(t.calls,["r0"])
 
     def test_72_explicit_invalid_refresh_scopes_never_inherit_old_grant(self):
         values=["","   ",None,[],{}, "offline_access chatgpt.tokens.use.direct"]
@@ -950,6 +957,71 @@ class TestTask0004(unittest.TestCase):
         result=adapter._transport_review(profile={"access_token":"x"},transport=T(),review_prompt="Review.",review_context={"task_id":"TASK-0004"})
         self.assertEqual(result["status"],adapter.BLOCKED_INVALID_RESPONSE)
         self.assertFalse(result["completed"])
+
+
+    def test_79_realistic_responses_lifecycle_stream_reaches_completed_text(self):
+        verdict='{"status":"APPROVED"}'
+        events=[
+            {"type":"response.created","response":{"status":"in_progress"}},
+            {"type":"response.in_progress","response":{"status":"in_progress"}},
+            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
+            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
+            {"type":"response.output_text.delta","delta":verdict},
+            {"type":"response.output_text.done","text":verdict},
+            {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":verdict}},
+            {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}},
+            {"type":"response.completed","response":{"status":"completed"}},
+        ]
+        result=adapter.assemble_stream(events)
+        self.assertEqual(result["status"],"COMPLETED")
+        self.assertEqual(result["text"],verdict)
+
+    def test_80_initial_refresh_fence_write_failure_sends_zero_requests(self):
+        class FailFirst(adapter.HostCredentialStorage):
+            def save_profile_atomic(self,profile):
+                if profile.get("session_state")=="REFRESH_IN_PROGRESS":
+                    raise OSError("synthetic")
+                return super().save_profile_atomic(profile)
+        class T:
+            def __init__(self): self.calls=0
+            def post_form(self,*args,**kwargs):
+                self.calls+=1
+                raise AssertionError("refresh request must not be sent")
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"profile.json"
+            base=adapter.HostCredentialStorage(path,FakeProtector())
+            base.save_profile_atomic({"client_id":"oaiapp_x","refresh_token":"r0","access_token":"a0","id_token":"i0","token_type":"Bearer","scopes":list(adapter.REQUIRED_SCOPES),"expires_at":0,"session_state":"ACTIVE"})
+            t=T()
+            storage=FailFirst(path,FakeProtector())
+            result=adapter.refresh_profile(storage,t)
+            self.assertEqual(result["status"],adapter.BLOCKED_INFRASTRUCTURE_ERROR)
+            self.assertEqual(t.calls,0)
+            self.assertEqual(base.load_profile()["session_state"],"ACTIVE")
+
+    def test_81_realistic_stream_through_transport_and_stale_verdict_still_blocks(self):
+        snapshot=self._snapshot()
+        stale={"status":"APPROVED","reviewed_sha":"d"*40,"review_snapshot_digest":adapter.bridge.sha256_json(snapshot),"findings":[]}
+        class T(FakeTransport):
+            def __init__(self):
+                super().__init__(); self.models_payload={"models":[{"slug":"gpt-6-astra","visibility":"list"}]}
+            def stream_sse(self,*args,**kwargs):
+                text=json.dumps(stale)
+                yield {"type":"response.created","response":{"status":"in_progress"}}
+                yield {"type":"response.in_progress","response":{"status":"in_progress"}}
+                yield {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}}
+                yield {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}
+                yield {"type":"response.output_text.delta","delta":text}
+                yield {"type":"response.output_text.done","text":text}
+                yield {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":text}}
+                yield {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}
+                yield {"type":"response.completed","response":{"status":"completed"}}
+        with tempfile.TemporaryDirectory() as tmp:
+            result=adapter.run_streamed_review(
+                storage=self._live_storage(tmp),
+                plan_allowance_evidence=self._allowance(),
+                activation_policy={"reviewer_enabled":True,"zero_extra_spend_confirmed":True},
+                transport=T(),review_prompt="Review.",expected_snapshot=snapshot,review_request=deepcopy(snapshot))
+            self.assertEqual(result["status"],adapter.bridge.BLOCKED_INVALID_VERDICT)
 
 
 if __name__ == "__main__":
