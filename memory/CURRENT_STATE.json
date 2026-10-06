@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "run_id": "20261006_0001_TASK_0004_ASTRA_R3_CORRECTIONS",
+  "run_id": "20261006_0002_TASK_0004_ASTRA_R4_CORRECTIONS",
   "phase": "CHATGPT_PLAN_LIVE_ADAPTER",
-  "status": "TASK_0004_R3_CORRECTED_PENDING_ASTRA_R4",
+  "status": "TASK_0004_R4_CORRECTED_PENDING_ASTRA_R5",
   "spend_limit_usd": 0,
   "local_video_inference": false,
   "astra_role": "reviewer",
@@ -50,7 +50,7 @@
   },
   "task_0004": {
     "objective": "live Sign in with ChatGPT adapter and one-time Windows authorization CLI",
-    "status": "R3_CORRECTED_PENDING_ASTRA_R4",
+    "status": "R4_CORRECTED_PENDING_ASTRA_R5",
     "issue_number": 5,
     "source_worker_run_id": 37209531438,
     "source_worker_bundle_artifact_id": 11306450927,
@@ -66,7 +66,7 @@
     "user_initiated_sign_in_only": true,
     "local_inference": false,
     "conversation_access": false,
-    "deterministic_tests_expected": 81,
+    "deterministic_tests_expected": 86,
     "automatic_reviewer_activation": false,
     "zero_extra_spend_activation_gate_required": true,
     "astra_r1_reviewed_head": "ca0426c45eec6b73db9fb94be6a75f45b33f4acf",
@@ -94,6 +94,12 @@
     "astra_r3_findings_fixed": [
       "R3-01",
       "R3-02"
+    ],
+    "astra_r4_reviewed_head": "79536b611229a45f18633a1db4aa142f5bbe5e7f",
+    "astra_r4_status": "REJECTED",
+    "astra_r4_findings_fixed": [
+      "R4-01",
+      "R4-02"
     ]
   }
 }
