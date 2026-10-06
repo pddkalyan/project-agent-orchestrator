@@ -51,6 +51,47 @@ class FakeTransport:
         return deepcopy(self.models_payload)
 
 
+def valid_stream_events(text: str, *, include_reasoning: bool = False, response_id: str = "resp_test", message_id: str = "msg_test"):
+    seq = 1
+    def ev(payload):
+        nonlocal seq
+        payload = dict(payload)
+        payload["sequence_number"] = seq
+        seq += 1
+        return payload
+
+    events = [
+        ev({"type":"response.created","response":{"id":response_id,"status":"in_progress","model":adapter.EXACT_REVIEWER_MODEL,"output":[]}}),
+        ev({"type":"response.in_progress","response":{"id":response_id,"status":"in_progress","model":adapter.EXACT_REVIEWER_MODEL,"output":[]}}),
+    ]
+    terminal_output = []
+    output_index = 0
+    if include_reasoning:
+        reasoning_id = "rs_test"
+        events.extend([
+            ev({"type":"response.output_item.added","output_index":0,"item":{"id":reasoning_id,"type":"reasoning","status":"in_progress","summary":[]}}),
+            ev({"type":"response.reasoning_summary_part.added","item_id":reasoning_id,"output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}),
+            ev({"type":"response.reasoning_summary_text.delta","item_id":reasoning_id,"output_index":0,"summary_index":0,"delta":"checked"}),
+            ev({"type":"response.reasoning_summary_text.done","item_id":reasoning_id,"output_index":0,"summary_index":0,"text":"checked"}),
+            ev({"type":"response.reasoning_summary_part.done","item_id":reasoning_id,"output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"checked"}}),
+            ev({"type":"response.output_item.done","output_index":0,"item":{"id":reasoning_id,"type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"checked"}]}}),
+        ])
+        terminal_output.append({"id":reasoning_id,"type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"checked"}]})
+        output_index = 1
+
+    events.extend([
+        ev({"type":"response.output_item.added","output_index":output_index,"item":{"id":message_id,"type":"message","role":"assistant","status":"in_progress","content":[]}}),
+        ev({"type":"response.content_part.added","item_id":message_id,"output_index":output_index,"content_index":0,"part":{"type":"output_text","text":""}}),
+        ev({"type":"response.output_text.delta","item_id":message_id,"output_index":output_index,"content_index":0,"delta":text}),
+        ev({"type":"response.output_text.done","item_id":message_id,"output_index":output_index,"content_index":0,"text":text}),
+        ev({"type":"response.content_part.done","item_id":message_id,"output_index":output_index,"content_index":0,"part":{"type":"output_text","text":text}}),
+        ev({"type":"response.output_item.done","output_index":output_index,"item":{"id":message_id,"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":text}]}}),
+    ])
+    terminal_output.append({"id":message_id,"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":text}]})
+    events.append(ev({"type":"response.completed","response":{"id":response_id,"status":"completed","model":adapter.EXACT_REVIEWER_MODEL,"output":terminal_output}}))
+    return events
+
+
 class TestTask0004(unittest.TestCase):
     def setUp(self):
         self.host_id = "urn:uuid:12345678-1234-4abc-8def-1234567890ab"
@@ -333,22 +374,14 @@ class TestTask0004(unittest.TestCase):
                     adapter.build_responses_plan_request(review_prompt="x", review_context={field:"bad"})
 
     def test_28_stream_requires_completed_event(self):
-        prefix = [
-            {"type":"response.created","response":{"status":"in_progress"}},
-            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
-            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
-            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"hello"},
-            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"hello"},
-            {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"hello"}},
-            {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}},
-        ]
-        self.assertEqual(adapter.assemble_stream(prefix)["status"], adapter.BLOCKED_INVALID_RESPONSE)
-        result = adapter.assemble_stream(prefix + [{"type":"response.completed","response":{"status":"completed"}}])
+        complete = valid_stream_events("hello")
+        self.assertEqual(adapter.assemble_stream(complete[:-1])["status"], adapter.BLOCKED_INVALID_RESPONSE)
+        result = adapter.assemble_stream(complete)
         self.assertEqual(result["status"], "COMPLETED")
         self.assertEqual(result["text"], "hello")
 
     def test_29_stream_usage_limit_maps_to_plan_block(self):
-        events=[{"type":"response.failed","response":{"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}]
+        events=[{"type":"response.failed","response":{"id":"resp_test","status":"failed","model":adapter.EXACT_REVIEWER_MODEL,"error":{"code":"subscription_sharing_usage_limit_exceeded"}}}]
         self.assertEqual(adapter.assemble_stream(events)["status"], adapter.BLOCKED_PLAN_ALLOWANCE)
 
     def test_30_error_mapping_never_becomes_review_verdict(self):
@@ -508,15 +541,7 @@ class TestTask0004(unittest.TestCase):
             def stream_sse(self, url, payload, headers):
                 self.stream_calls += 1
                 verdict = {"status":"APPROVED","reviewed_sha":"b"*40,"review_snapshot_digest":digest,"findings":[]}
-                text=json.dumps(verdict)
-                yield {"type":"response.created","response":{"status":"in_progress"}}
-                yield {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}}
-                yield {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}
-                yield {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":text}
-                yield {"type":"response.output_text.done","output_index":0,"content_index":0,"text":text}
-                yield {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":text}}
-                yield {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}
-                yield {"type":"response.completed","response":{"status":"completed"}}
+                yield from valid_stream_events(json.dumps(verdict), include_reasoning=True)
         with tempfile.TemporaryDirectory() as tmp:
             storage = self._live_storage(tmp)
             t = LiveTransport()
@@ -585,15 +610,7 @@ class TestTask0004(unittest.TestCase):
                 super().__init__(); self.models_payload={"models":[{"slug":"gpt-6-astra","visibility":"list"}]}
             def stream_sse(self,*args,**kwargs):
                 verdict={"status":"APPROVED","reviewed_sha":"e"*40,"review_snapshot_digest":adapter.bridge.sha256_json(snapshot),"findings":[]}
-                text=json.dumps(verdict)
-                yield {"type":"response.created","response":{"status":"in_progress"}}
-                yield {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}}
-                yield {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}
-                yield {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":text}
-                yield {"type":"response.output_text.done","output_index":0,"content_index":0,"text":text}
-                yield {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":text}}
-                yield {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}
-                yield {"type":"response.completed","response":{"status":"completed"}}
+                yield from valid_stream_events(json.dumps(verdict), include_reasoning=True)
         with tempfile.TemporaryDirectory() as tmp:
             result=adapter.run_streamed_review(
                 storage=self._live_storage(tmp),plan_allowance_evidence=self._allowance(),
@@ -982,18 +999,7 @@ class TestTask0004(unittest.TestCase):
 
     def test_79_realistic_responses_lifecycle_stream_reaches_completed_text(self):
         verdict='{"status":"APPROVED"}'
-        events=[
-            {"type":"response.created","response":{"status":"in_progress"}},
-            {"type":"response.in_progress","response":{"status":"in_progress"}},
-            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
-            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
-            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":verdict},
-            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":verdict},
-            {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":verdict}},
-            {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}},
-            {"type":"response.completed","response":{"status":"completed"}},
-        ]
-        result=adapter.assemble_stream(events)
+        result=adapter.assemble_stream(valid_stream_events(verdict, include_reasoning=True))
         self.assertEqual(result["status"],"COMPLETED")
         self.assertEqual(result["text"],verdict)
 
@@ -1026,16 +1032,7 @@ class TestTask0004(unittest.TestCase):
             def __init__(self):
                 super().__init__(); self.models_payload={"models":[{"slug":"gpt-6-astra","visibility":"list"}]}
             def stream_sse(self,*args,**kwargs):
-                text=json.dumps(stale)
-                yield {"type":"response.created","response":{"status":"in_progress"}}
-                yield {"type":"response.in_progress","response":{"status":"in_progress"}}
-                yield {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}}
-                yield {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}
-                yield {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":text}
-                yield {"type":"response.output_text.done","output_index":0,"content_index":0,"text":text}
-                yield {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":text}}
-                yield {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}
-                yield {"type":"response.completed","response":{"status":"completed"}}
+                yield from valid_stream_events(json.dumps(stale), include_reasoning=True)
         with tempfile.TemporaryDirectory() as tmp:
             result=adapter.run_streamed_review(
                 storage=self._live_storage(tmp),
@@ -1044,78 +1041,87 @@ class TestTask0004(unittest.TestCase):
                 transport=T(),review_prompt="Review.",expected_snapshot=snapshot,review_request=deepcopy(snapshot))
             self.assertEqual(result["status"],adapter.bridge.BLOCKED_INVALID_VERDICT)
 
-
     def test_82_conflicting_text_done_cannot_be_overwritten(self):
         verdict='{"status":"APPROVED"}'
-        events=[
-            {"type":"response.created","response":{"status":"in_progress"}},
-            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
-            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
-            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":verdict},
-            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"CONFLICT"},
-            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":verdict},
-            {"type":"response.completed","response":{"status":"completed"}},
-        ]
+        events=valid_stream_events(verdict)
+        done_index=next(i for i,e in enumerate(events) if e["type"]=="response.output_text.done")
+        events[done_index]=dict(events[done_index], text="CONFLICT")
+        events.insert(done_index+1, dict(events[done_index], text=verdict, sequence_number=events[done_index]["sequence_number"]+0.5))
         self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
 
     def test_83_empty_deltas_nonempty_done_blocks(self):
-        events=[
-            {"type":"response.created","response":{"status":"in_progress"}},
-            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
-            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
-            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":""},
-            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"nonempty"},
-        ]
+        events=valid_stream_events("")
+        done_index=next(i for i,e in enumerate(events) if e["type"]=="response.output_text.done")
+        events[done_index]=dict(events[done_index], text="nonempty")
         self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
 
     def test_84_malformed_lifecycle_and_completion_payloads_block(self):
         verdict='{"status":"APPROVED"}'
-        malformed_created=[
-            {"type":"response.created","response":42},
-            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
-        ]
-        self.assertEqual(adapter.assemble_stream(malformed_created)["status"],adapter.BLOCKED_INVALID_RESPONSE)
-        bad_completion=[
-            {"type":"response.created","response":{"status":"in_progress"}},
-            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
-            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
-            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":verdict},
-            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":verdict},
-            {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":verdict}},
-            {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}},
-            {"type":"response.completed","response":None},
-        ]
+        malformed=valid_stream_events(verdict)
+        malformed[0]=dict(malformed[0],response=42)
+        self.assertEqual(adapter.assemble_stream(malformed)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+        bad_completion=valid_stream_events(verdict)
+        bad_completion[-1]=dict(bad_completion[-1],response=None)
         self.assertEqual(adapter.assemble_stream(bad_completion)["status"],adapter.BLOCKED_INVALID_RESPONSE)
 
     def test_85_completion_before_text_or_duplicate_completion_blocks(self):
-        early=[
-            {"type":"response.created","response":{"status":"in_progress"}},
-            {"type":"response.completed","response":{"status":"completed"}},
-            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"later"},
-        ]
-        self.assertEqual(adapter.assemble_stream(early)["status"],adapter.BLOCKED_INVALID_RESPONSE)
-
         verdict='{"status":"APPROVED"}'
-        valid=[
-            {"type":"response.created","response":{"status":"in_progress"}},
-            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
-            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
-            {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":verdict},
-            {"type":"response.output_text.done","output_index":0,"content_index":0,"text":verdict},
-            {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":verdict}},
-            {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}},
-            {"type":"response.completed","response":{"status":"completed"}},
-        ]
-        self.assertEqual(adapter.assemble_stream(valid + [{"type":"response.completed","response":{"status":"completed"}}])["status"],adapter.BLOCKED_INVALID_RESPONSE)
+        valid=valid_stream_events(verdict)
+        completed=valid[-1]
+        early=[valid[0],completed] + valid[1:-1]
+        self.assertEqual(adapter.assemble_stream(early)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+        duplicate=valid + [dict(completed,sequence_number=completed["sequence_number"]+1)]
+        self.assertEqual(adapter.assemble_stream(duplicate)["status"],adapter.BLOCKED_INVALID_RESPONSE)
 
     def test_86_content_part_identity_mismatch_blocks(self):
         verdict='{"status":"APPROVED"}'
-        events=[
-            {"type":"response.created","response":{"status":"in_progress"}},
-            {"type":"response.output_item.added","output_index":0,"item":{"type":"message"}},
-            {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}},
-            {"type":"response.output_text.delta","output_index":0,"content_index":1,"delta":verdict},
-        ]
+        events=valid_stream_events(verdict)
+        delta_index=next(i for i,e in enumerate(events) if e["type"]=="response.output_text.delta")
+        events[delta_index]=dict(events[delta_index],content_index=1)
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+
+    def test_87_reasoning_item_before_message_is_supported(self):
+        verdict='{"status":"APPROVED"}'
+        result=adapter.assemble_stream(valid_stream_events(verdict, include_reasoning=True))
+        self.assertEqual(result,{"status":"COMPLETED","completed":True,"text":verdict})
+
+    def test_88_reasoning_identity_mismatch_blocks(self):
+        events=valid_stream_events('{"status":"APPROVED"}', include_reasoning=True)
+        idx=next(i for i,e in enumerate(events) if e["type"]=="response.reasoning_summary_text.delta")
+        events[idx]=dict(events[idx],item_id="rs_other")
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_89_terminal_response_text_must_match_streamed_text(self):
+        events=valid_stream_events('{"status":"APPROVED"}')
+        terminal=deepcopy(events[-1])
+        terminal["response"]["output"][0]["content"][0]["text"]="DIFFERENT"
+        events[-1]=terminal
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_90_terminal_response_model_must_be_exact_astra(self):
+        events=valid_stream_events('{"status":"APPROVED"}')
+        terminal=deepcopy(events[-1])
+        terminal["response"]["model"]="alternate-model"
+        events[-1]=terminal
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_91_item_id_mismatch_blocks(self):
+        events=valid_stream_events('{"status":"APPROVED"}')
+        idx=next(i for i,e in enumerate(events) if e["type"]=="response.output_text.delta")
+        events[idx]=dict(events[idx],item_id="msg_other")
+        self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
+
+    def test_92_top_level_error_is_safely_blocked(self):
+        event={"type":"error","code":"server_error","message":"secret-like diagnostic must not be surfaced"}
+        result=adapter.assemble_stream([event])
+        self.assertTrue(result["status"].startswith("BLOCKED_"))
+        self.assertNotIn("message",result)
+
+    def test_93_out_of_order_sequence_number_blocks(self):
+        events=valid_stream_events('{"status":"APPROVED"}')
+        events[2]=dict(events[2],sequence_number=events[1]["sequence_number"])
         self.assertEqual(adapter.assemble_stream(events)["status"],adapter.BLOCKED_INVALID_RESPONSE)
 
 
