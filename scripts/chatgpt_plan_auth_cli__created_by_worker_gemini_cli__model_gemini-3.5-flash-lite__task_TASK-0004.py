@@ -31,6 +31,7 @@ AGENT_NAME = adapter.AGENT_NAME
 BLOCKED_AUTH_REQUIRED = adapter.BLOCKED_AUTH_REQUIRED
 HttpTransport = adapter.HttpTransport
 HostCredentialStorage = adapter.HostCredentialStorage
+FileLock = adapter.FileLock
 PyJWTSignatureVerifier = adapter.PyJWTSignatureVerifier
 WindowsDPAPIProtector = adapter.WindowsDPAPIProtector
 build_authorization_url = adapter.build_authorization_url
@@ -73,18 +74,22 @@ def _storage_path(args: argparse.Namespace) -> Path:
 
 
 def _load_or_create_host_id(host_file: Path) -> str:
-    if host_file.exists():
-        payload = json.loads(host_file.read_text(encoding="utf-8"))
-        host_id = payload.get("ext_agent_host_id")
-        if not validate_host_id(host_id):
-            raise RuntimeError("saved ext_agent_host_id is invalid")
+    lock_file = host_file.with_suffix(host_file.suffix + ".lock")
+    with FileLock(lock_file):
+        if host_file.exists():
+            payload = json.loads(host_file.read_text(encoding="utf-8"))
+            host_id = payload.get("ext_agent_host_id")
+            if not validate_host_id(host_id):
+                raise RuntimeError("saved ext_agent_host_id is invalid")
+            return host_id
+        host_file.parent.mkdir(parents=True, exist_ok=True)
+        host_id = generate_host_id()
+        temp = host_file.with_suffix(host_file.suffix + ".tmp")
+        temp.write_text(json.dumps({"ext_agent_host_id": host_id}, indent=2), encoding="utf-8")
+        os.replace(temp, host_file)
+        if os.name != "nt":
+            os.chmod(host_file, 0o600)
         return host_id
-    host_file.parent.mkdir(parents=True, exist_ok=True)
-    host_id = generate_host_id()
-    temp = host_file.with_suffix(".tmp")
-    temp.write_text(json.dumps({"ext_agent_host_id": host_id}, indent=2), encoding="utf-8")
-    os.replace(temp, host_file)
-    return host_id
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -321,6 +326,8 @@ def cmd_profiles(args: argparse.Namespace) -> int:
     DEFAULT_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
     profiles = []
     for path in sorted(DEFAULT_PROFILES_DIR.glob("*.json")):
+        if path.name.endswith(".registration.json"):
+            continue
         try:
             storage = _require_windows_storage(path)
             status = storage.safe_status()
