@@ -1063,6 +1063,12 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     response_id: str | None = None
     terminal = False
     response_started = False
+    queued_seen = False
+    created_seen = False
+    in_progress_seen = False
+    output_started = False
+    seen_output_indices: set[int] = set()
+    completed_reasoning_ids: set[str] = set()
     message_item: tuple[int, str] | None = None
     message_item_done = False
     active_content: tuple[int, int, str] | None = None
@@ -1140,6 +1146,7 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         if not isinstance(output, list):
             return None
         messages = []
+        terminal_reasoning_ids: set[str] = set()
         for item in output:
             if not isinstance(item, Mapping):
                 return None
@@ -1147,6 +1154,7 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             if item_type == "reasoning":
                 if not valid_id(item.get("id")):
                     return None
+                terminal_reasoning_ids.add(item.get("id"))
                 continue
             if item_type != "message":
                 return None
@@ -1159,7 +1167,7 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             if not isinstance(part, Mapping) or part.get("type") != "output_text" or not isinstance(part.get("text"), str):
                 return None
             messages.append((item.get("id"), part.get("text")))
-        if len(messages) != 1:
+        if len(messages) != 1 or terminal_reasoning_ids != completed_reasoning_ids:
             return None
         if message_item is not None and messages[0][0] != message_item[1]:
             return None
@@ -1175,27 +1183,38 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             return invalid()
 
         if event_type == "response.queued":
-            if response_started or not bind_response(event.get("response"), {"queued", "in_progress"}):
+            if queued_seen or response_started or output_started or not bind_response(event.get("response"), {"queued", "in_progress"}):
                 return invalid()
+            queued_seen = True
             continue
 
-        if event_type in {"response.created", "response.in_progress"}:
-            if not bind_response(event.get("response"), {"in_progress"}):
+        if event_type == "response.created":
+            if created_seen or output_started or not bind_response(event.get("response"), {"in_progress"}):
                 return invalid()
+            created_seen = True
+            response_started = True
+            continue
+
+        if event_type == "response.in_progress":
+            if in_progress_seen or not created_seen or output_started or not bind_response(event.get("response"), {"in_progress"}):
+                return invalid()
+            in_progress_seen = True
             response_started = True
             continue
 
         if event_type == "response.output_item.added":
-            if not response_started:
+            if not response_started or not created_seen:
                 return invalid()
+            output_started = True
             output_index = event.get("output_index")
             item = event.get("item")
             if not valid_index(output_index) or not isinstance(item, Mapping):
                 return invalid()
             item_id = item.get("id")
             item_type = item.get("type")
-            if not valid_id(item_id):
+            if not valid_id(item_id) or output_index in seen_output_indices:
                 return invalid()
+            seen_output_indices.add(output_index)
             if item_type == "reasoning":
                 if output_index in reasoning_items or (message_item and output_index == message_item[0]):
                     return invalid()
@@ -1302,6 +1321,7 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
                 if reasoning_items.get(output_index) != item_id:
                     return invalid()
                 reasoning_items.pop(output_index, None)
+                completed_reasoning_ids.add(item_id)
                 continue
             if item_type == "message":
                 if (
