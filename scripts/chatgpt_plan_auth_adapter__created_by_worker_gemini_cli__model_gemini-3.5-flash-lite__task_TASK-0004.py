@@ -1028,19 +1028,38 @@ def build_responses_plan_request(*, review_prompt: str, review_context: Mapping[
 
 
 def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Assemble verdict text while validating normal Responses lifecycle events."""
     text_parts: list[str] = []
     completed = False
+    final_text: str | None = None
+    ignorable_lifecycle = {
+        "response.queued",
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.content_part.added",
+        "response.content_part.done",
+    }
     for event in events:
         if not isinstance(event, Mapping):
             return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
         event_type = event.get("type")
         if not isinstance(event_type, str):
             return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+
+        if event_type in ignorable_lifecycle:
+            continue
         if event_type == "response.output_text.delta":
             delta = event.get("delta")
             if not isinstance(delta, str):
                 return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
             text_parts.append(delta)
+        elif event_type == "response.output_text.done":
+            text = event.get("text")
+            if not isinstance(text, str):
+                return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+            final_text = text
         elif event_type == "response.completed":
             completed = True
         elif event_type == "response.failed":
@@ -1054,9 +1073,18 @@ def assemble_stream(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
             return {"status": BLOCKED_INFRASTRUCTURE_ERROR, "completed": False}
         else:
             return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+
     if not completed:
         return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
-    return {"status": "COMPLETED", "completed": True, "text": "".join(text_parts)}
+
+    streamed_text = "".join(text_parts)
+    if final_text is not None:
+        if streamed_text and final_text != streamed_text:
+            return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+        streamed_text = final_text
+    if not streamed_text:
+        return {"status": BLOCKED_INVALID_RESPONSE, "completed": False}
+    return {"status": "COMPLETED", "completed": True, "text": streamed_text}
 
 
 
