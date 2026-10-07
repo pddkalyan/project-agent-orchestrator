@@ -84,29 +84,6 @@ jobs:
       - name: Install Gemini CLI
         run: npm install --global @google/gemini-cli
 
-      - name: Select strongest available free Flash model
-        id: model
-        shell: bash
-        run: |
-          set -euo pipefail
-          models=("gemini-3.8-flash" "gemini-3.7-flash" "gemini-3.5-flash" "gemini-3.5-flash-lite")
-          chosen=""
-          : > "$RUNNER_TEMP/model-probe.log"
-          for model in "${models[@]}"; do
-            echo "Probing $model" | tee -a "$RUNNER_TEMP/model-probe.log"
-            if gemini --skip-trust --model "$model" --approval-mode=plan --output-format=json               --prompt "Return only READY. Do not call tools."               > "$RUNNER_TEMP/probe-$model.json" 2>> "$RUNNER_TEMP/model-probe.log"; then
-              chosen="$model"
-              break
-            fi
-          done
-          if [[ -z "$chosen" ]]; then
-            echo "BLOCKED_FREE_GEMINI_MODEL_OR_QUOTA_UNAVAILABLE" >&2
-            cat "$RUNNER_TEMP/model-probe.log" >&2
-            exit 77
-          fi
-          echo "model=$chosen" >> "$GITHUB_OUTPUT"
-          echo "Selected free worker model: $chosen" >> "$GITHUB_STEP_SUMMARY"
-
       - name: Snapshot candidate before worker
         id: before
         shell: bash
@@ -115,14 +92,48 @@ jobs:
           test -z "$(git status --porcelain)"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Run free cloud coding worker
-        id: worker
+      - name: Run free cloud coding worker with zero-cost quota fallback
+        id: model_and_worker
         shell: bash
-        env:
-          WORKER_MODEL: ${{ steps.model.outputs.model }}
         run: |
           set -euo pipefail
-          gemini --skip-trust --model "$WORKER_MODEL" --approval-mode=auto_edit --output-format=json             --prompt "You are the PRIMARY FREE CLOUD CODING WORKER for TASK-0005 Movie Studio. Read AGENTS.md and GEMINI.md first, then read $CONTRACT_FILE, the current TASK-0005 task JSON, architecture doc, production-state schema, core implementation, deterministic tests, current monitor status, existing TASK-0005 review files, and relevant memory. Continue the next highest-priority unfinished SAFE engineering increment on the current PR branch. Prefer concrete production architecture/code/tests over commentary. You may edit repository files only; do not run shell commands, install software, call external services, use paid resources, access user devices, or perform real media generation. Do not modify GitHub workflows, dispatch files, secrets, or unrelated TASKs. Preserve USD 0.00, cloud-only media inference, provider-neutral adapters, crash-safe/idempotent state, review/canonicalization gates, no merge, and no TASK-0004 work. Keep changes coherent and reviewable. Add or strengthen deterministic tests for every new invariant. Update provenance and the TASK-0005 review evidence for what you changed. Never claim GPT/Astra approval. Stop before any step requiring provider credentials, billing, private assets, or a user-only action."             > "worker_result_TASK-0005_${GITHUB_RUN_ID}.json"
+          models=("gemini-3.8-flash" "gemini-3.7-flash" "gemini-3.5-flash" "gemini-3.5-flash-lite")
+          chosen=""
+          base_sha="$(git rev-parse HEAD)"
+          : > "$RUNNER_TEMP/free-worker-attempts.log"
+
+          for model in "${models[@]}"; do
+            echo "Trying zero-cost worker model: $model" | tee -a "$RUNNER_TEMP/free-worker-attempts.log"
+            git reset --hard "$base_sha" >/dev/null
+            git clean -fd >/dev/null
+
+            set +e
+            gemini --skip-trust --model "$model" --approval-mode=auto_edit --output-format=json \
+              --prompt 'You are the PRIMARY FREE CLOUD CODING WORKER for TASK-0005 Movie Studio. Read AGENTS.md and GEMINI.md first, then read $CONTRACT_FILE, the current TASK-0005 task JSON, architecture doc, production-state schema, core implementation, deterministic tests, current monitor status, existing TASK-0005 review files, and relevant memory. Continue the next highest-priority unfinished SAFE engineering increment on the current PR branch. Prefer concrete production architecture/code/tests over commentary. You may edit repository files only; do not run shell commands, install software, call external services, use paid resources, access user devices, or perform real media generation. Do not modify GitHub workflows, dispatch files, secrets, or unrelated TASKs. Preserve USD 0.00, cloud-only media inference, provider-neutral adapters, crash-safe/idempotent state, review/canonicalization gates, no merge, and no TASK-0004 work. Keep changes coherent and reviewable. Add or strengthen deterministic tests for every new invariant. Update provenance and the TASK-0005 review evidence for what you changed. Never claim GPT/Astra approval. Stop before any step requiring provider credentials, billing, private assets, or a user-only action.' \
+              > "worker_result_TASK-0005_${GITHUB_RUN_ID}.json" \
+              2> "$RUNNER_TEMP/worker-$model.err"
+            rc=$?
+            set -e
+
+            if [[ "$rc" -eq 0 ]]; then
+              chosen="$model"
+              break
+            fi
+
+            echo "Model $model failed with exit code $rc" | tee -a "$RUNNER_TEMP/free-worker-attempts.log"
+            cat "$RUNNER_TEMP/worker-$model.err" >> "$RUNNER_TEMP/free-worker-attempts.log" || true
+            git reset --hard "$base_sha" >/dev/null
+            git clean -fd >/dev/null
+          done
+
+          if [[ -z "$chosen" ]]; then
+            echo "BLOCKED_ALL_FREE_GEMINI_MODELS_OR_QUOTAS_UNAVAILABLE" >&2
+            cat "$RUNNER_TEMP/free-worker-attempts.log" >&2
+            exit 77
+          fi
+
+          echo "model=$chosen" >> "$GITHUB_OUTPUT"
+          echo "Selected free worker model after zero-cost fallback: $chosen" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce worker file boundaries
         id: boundary
@@ -179,7 +190,7 @@ jobs:
         id: chain
         shell: bash
         env:
-          WORKER_MODEL: ${{ steps.model.outputs.model }}
+          WORKER_MODEL: ${{ steps.model_and_worker.outputs.model }}
         run: |
           set -euo pipefail
           python - <<'PY' >> "$GITHUB_OUTPUT"
@@ -236,7 +247,7 @@ jobs:
         if: steps.boundary.outputs.changed == 'true'
         shell: bash
         env:
-          WORKER_MODEL: ${{ steps.model.outputs.model }}
+          WORKER_MODEL: ${{ steps.model_and_worker.outputs.model }}
         run: |
           set -euo pipefail
           git config user.name "Movie Studio Free Worker"
@@ -264,7 +275,7 @@ jobs:
         if: always()
         shell: bash
         env:
-          WORKER_MODEL: ${{ steps.model.outputs.model }}
+          WORKER_MODEL: ${{ steps.model_and_worker.outputs.model }}
         run: |
           {
             echo "## TASK-0005 Free Worker"
