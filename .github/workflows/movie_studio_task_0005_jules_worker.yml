@@ -96,31 +96,42 @@ jobs:
               raise SystemExit(f"BLOCKED_JULES_BRANCH_NOT_VISIBLE: {BRANCH}")
 
           contract=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
-          allowed="\n".join(f"- {p}" for p in contract["allowed_paths"])
-          priorities="\n".join(f"- {p}" for p in contract["next_work_priority"])
+          recovery_allowed = [
+              "scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py",
+              "tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py",
+              "schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json",
+          ]
+          allowed="\n".join(f"- {p}" for p in recovery_allowed)
           prompt = "\n".join([
               "You are the PRIMARY CODING AGENT for TASK-0005 Movie Studio.",
               "",
-              "Read AGENTS.md, GEMINI.md, the TASK-0005 architecture, schema, core implementation, tests, review evidence, and worker contract before changing anything.",
+              "This is a NARROW RECOVERY INCREMENT. Do not attempt the whole roadmap.",
+              "Implement ONLY clean episode -> scene -> shot referential integrity in the durable production state.",
               "",
-              "Implement the next highest-priority unfinished SAFE engineering increment:",
-              priorities,
+              "Required behavior:",
+              "- Add a Scene state type and a scenes mapping on ProductionLedger.",
+              "- Bind each persisted shot to a scene_id without corrupting the existing Shot constructor/API unnecessarily.",
+              "- add_scene must reject blank and duplicate scene IDs.",
+              "- add_shot must reject a non-empty scene_id that references an unknown scene; choose a migration-safe rule for existing unassigned shots and test it explicitly.",
+              "- Checkpoint to_dict/from_dict must round-trip episode_id, scenes and shot scene_id consistently.",
+              "- _from_dict root_fields MUST include every newly serialized root field, including scenes.",
+              "- validate() must reject corrupted scene-map keys and dangling scene references.",
+              "- Update the JSON schema to match the exact persisted representation.",
+              "- Add focused deterministic positive/negative tests. Do not rewrite the existing test suite wholesale.",
               "",
-              "Hard boundaries:",
-              "- Incremental spend must remain USD 0.00. Do not enable paid APIs, provider billing, or paid fallbacks.",
-              "- Do not perform real media generation and do not use local video inference.",
-              "- Do not modify TASK-0004.",
-              "- Do not merge anything.",
-              "- Preserve provider-neutral architecture, durable/idempotent state, semantic QA gates, provenance, and crash-safe recovery.",
-              "- Add or strengthen deterministic tests for every new invariant.",
-              "- Never weaken an existing test merely to make CI green.",
-              "- If CI on your pull request fails, diagnose the actual failure and repair your PR; keep iterating until CI is green or a genuine external blocker is reached.",
+              "Important lessons from the failed Jules session:",
+              "- Do NOT create helper scripts such as fix_all_tests.py, patch_*.py, plan*.md, reqs_analysis.md or any temporary repository files.",
+              "- Do NOT introduce test wrappers/hacks such as _Shot or mass regex rewrites.",
+              "- Do NOT modify MovieBible, provider reconciliation, timeline, Google Drive, workflows, dispatch files, memory, monitor state, docs, reviews or provenance in this increment.",
+              "- Preserve all existing zero-spend, idempotency, generation and QA behavior.",
+              "- Run the existing deterministic test suite and your new tests; repair your own changes until green.",
+              "- Do not ask for confirmation on ordinary implementation choices. Choose the smallest safe reversible design and continue.",
               "",
-              "You may modify ONLY these files:",
+              "You may modify ONLY these three files:",
               allowed,
               "",
-              "Do not modify workflows, dispatch files, memory/*, secrets, monitor control files, or any other path.",
-              "Create a focused pull request against the starting branch. Do not target main directly.",
+              "Incremental spend must remain USD 0.00. Do not use paid APIs, provider billing, private assets or local video inference.",
+              "Create a focused pull request against feature/TASK-0005-movie-studio-core only after the increment is coherent. Never merge it yourself.",
           ])
 
           payload={
@@ -138,8 +149,8 @@ jobs:
           if not sid:
               raise SystemExit("JULES_SESSION_CREATE_RETURNED_NO_ID")
           with open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf-8") as fh:
-              fh.write(f"session_id={sid}\\n")
-              fh.write(f"session_url={session.get('url','')}\\n")
+              fh.write(f"session_id={sid}\n")
+              fh.write(f"session_url={session.get('url','')}\n")
 
           Path("jules-session.json").write_text(json.dumps({
               "id":sid,
