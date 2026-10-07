@@ -121,6 +121,12 @@
       "additionalProperties": {
         "$ref": "#/$defs/shot_plan"
       }
+    },
+    "shot_continuity_bindings": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/shot_continuity_binding"
+      }
     }
   },
   "$defs": {
@@ -168,6 +174,8 @@
         "characters",
         "voices",
         "locations",
+        "costumes",
+        "props",
         "continuity_facts"
       ],
       "properties": {
@@ -185,6 +193,12 @@
           "$ref": "#/$defs/entity_map"
         },
         "locations": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "costumes": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "props": {
           "$ref": "#/$defs/entity_map"
         },
         "continuity_facts": {
@@ -557,6 +571,73 @@
         },
         "maximum_cost_usd_micros": {
           "const": 0
+        }
+      }
+    },
+    "shot_continuity_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shot_id",
+        "bible_revision",
+        "character_ids",
+        "voice_ids",
+        "location_id",
+        "costume_ids",
+        "prop_ids",
+        "reference_asset_versions"
+      ],
+      "properties": {
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bible_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "character_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "voice_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "location_id": {
+          "type": "string"
+        },
+        "costume_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "prop_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "reference_asset_versions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
         }
       }
     },
