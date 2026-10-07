@@ -22,6 +22,8 @@ from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK
     canonicalize,
     choose_zero_cost_provider,
     episode_can_complete,
+    Episode,
+    Scene,
 )
 
 
@@ -269,6 +271,61 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertEqual(2, bible.revision)
         self.assertEqual("worn on left wrist", bible.continuity_facts["amulet"])
 
+    def test_movie_bible_entity_updates_and_digest(self):
+        bible = MovieBible()
+        bible.update_entity("characters", "hero", "name", "Alice")
+        self.assertEqual(2, bible.revision)
+        self.assertEqual("Alice", bible.characters["hero"]["name"])
+        digest1 = bible.digest
+
+        bible.update_entity("characters", "hero", "role", "lead")
+        self.assertEqual(3, bible.revision)
+        digest2 = bible.digest
+        self.assertNotEqual(digest1, digest2)
+
+        with self.assertRaises(ProductionPolicyError):
+            bible.update_entity("wrong", "hero", "name", "Bob")
+
+    def test_episode_timeline_qc_and_verification(self):
+        ep = Episode("E1")
+        ep.submit_timeline_qc("digest-1", 1200, "16:9")
+        self.assertEqual("digest-1", ep.timeline_digest)
+        self.assertEqual(1200, ep.duration_seconds)
+        self.assertEqual("16:9", ep.aspect_ratio)
+
+        with self.assertRaises(ProductionPolicyError):
+            ep.submit_timeline_qc("digest-2", 1200, "4:3")
+
+        with self.assertRaises(ProductionPolicyError):
+            ep.submit_timeline_qc("", 1200, "16:9")
+
+        ep.verify_drive_master("digest-1", True, True)
+        self.assertTrue(ep.cleanup_authorized)
+
+        ep2 = Episode("E2")
+        with self.assertRaises(ProductionPolicyError):
+            ep2.verify_drive_master("digest-1", True, True)
+
+        with self.assertRaises(ProductionPolicyError):
+            ep.verify_drive_master("wrong-digest", True, True)
+
+        with self.assertRaises(ProductionPolicyError):
+            ep.verify_drive_master("digest-1", False, True)
+
+    def test_ledger_rejects_missing_scene_or_shot(self):
+        ledger = ProductionLedger("movie")
+        ledger.shots["S1"] = Shot("S1")
+        ledger.scenes["SC1"] = Scene("SC1", shot_ids=("S2",))
+        with self.assertRaises(ProductionPolicyError):
+            ledger.to_dict()
+
+        ledger2 = ProductionLedger("movie")
+        ledger2.scenes["SC1"] = Scene("SC1", shot_ids=("S1",))
+        ledger2.shots["S1"] = Shot("S1")
+        ledger2.episodes["E1"] = Episode("E1", scene_ids=("SC2",))
+        with self.assertRaises(ProductionPolicyError):
+            ledger2.to_dict()
+
     def test_ledger_round_trip_preserves_resume_state(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(self.generated_shot(True))
@@ -344,6 +401,18 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertEqual(
             set(schema["$defs"]["attempt_authorization"]["properties"]),
             set(attempt["authorization"]),
+        )
+
+        ledger.scenes["SC1"] = Scene("SC1", shot_ids=("S1",))
+        ledger.episodes["E1"] = Episode("E1", scene_ids=("SC1",))
+        ep_payload = ledger.to_dict()
+        self.assertEqual(
+            set(schema["$defs"]["scene"]["properties"]),
+            set(ep_payload["scenes"]["SC1"])
+        )
+        self.assertEqual(
+            set(schema["$defs"]["episode"]["properties"]),
+            set(ep_payload["episodes"]["E1"])
         )
 
     def test_future_schema_version_fails_closed(self):

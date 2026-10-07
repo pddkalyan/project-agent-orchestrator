@@ -23,7 +23,11 @@ The Executive Producer is the deterministic authority. Specialist agents propose
 
 ## Durable Movie Bible
 
-The Movie Bible persists revisioned story rules, character identity, voice identity, locations, and continuity facts outside conversational memory. Episode, scene, and shot ledgers refer to this durable baseline. A later increment will add reference-asset digests and explicit council evidence without weakening these bindings.
+The Movie Bible persists revisioned story rules, character identity, voice identity, locations, and continuity facts outside conversational memory. Episode, scene, and shot ledgers refer to this durable baseline. The Movie Bible now produces deterministic reference-asset digests capturing the entire state to support explicit council evidence.
+
+## Scene and Episode Contracts
+
+The orchestration ledger natively enforces referential integrity for sequences: episodes require known scenes, and scenes require known shots. The final Episode contract explicitly controls timeline QC. It enforces the target aspect ratio, stores timeline digests and durations, and authorizes irreversible Google Drive archival cleanup only when the verified Drive master explicitly matches the QC'd timeline digest, all component shots are canonical, and final semantic QC has passed.
 
 ## Resumable generation jobs
 
