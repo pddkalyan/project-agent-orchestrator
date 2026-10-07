@@ -125,6 +125,26 @@ def plan_digest(plan: ShotPlan) -> str:
     return sha256(json.dumps(asdict(plan), sort_keys=True).encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True)
+class ShotContinuityBinding:
+    shot_id: str
+    bible_revision: int
+    character_ids: FrozenSet[str]
+    voice_ids: FrozenSet[str]
+    location_id: str
+    costume_ids: FrozenSet[str]
+    prop_ids: FrozenSet[str]
+    reference_asset_versions: FrozenSet[str]
+
+
+def continuity_binding_digest(binding: ShotContinuityBinding) -> str:
+    data = asdict(binding)
+    for key, value in data.items():
+        if isinstance(value, frozenset):
+            data[key] = sorted(list(value))
+    return sha256(json.dumps(data, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 @dataclass
 class Shot:
     shot_id: str
@@ -401,6 +421,8 @@ class MovieBible:
     characters: Dict[str, Dict[str, str]] = field(default_factory=dict)
     voices: Dict[str, Dict[str, str]] = field(default_factory=dict)
     locations: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    costumes: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    props: Dict[str, Dict[str, str]] = field(default_factory=dict)
     continuity_facts: Dict[str, str] = field(default_factory=dict)
 
     def update_fact(self, namespace: str, key: str, value: str) -> None:
@@ -425,6 +447,7 @@ class ProductionLedger:
     scenes: Dict[str, Scene] = field(default_factory=dict)
     shots: Dict[str, Shot] = field(default_factory=dict)
     shot_plans: Dict[str, ShotPlan] = field(default_factory=dict)
+    shot_continuity_bindings: Dict[str, ShotContinuityBinding] = field(default_factory=dict)
     jobs: Dict[str, GenerationJob] = field(default_factory=dict)
     idempotency_index: Dict[str, str] = field(default_factory=dict)
     authorization_index: Dict[str, str] = field(default_factory=dict)
@@ -509,6 +532,53 @@ class ProductionLedger:
             return
 
         self.shot_plans[plan.shot_id] = plan
+
+    def add_shot_continuity_binding(self, binding: ShotContinuityBinding) -> None:
+        if type(binding) is not ShotContinuityBinding:
+            raise ProductionPolicyError("invalid continuity binding type")
+        if not isinstance(binding.shot_id, str) or not binding.shot_id:
+            raise ProductionPolicyError("binding shot_id must be a non-empty string")
+        if binding.shot_id not in self.shots:
+            raise ProductionPolicyError("binding must reference an existing shot")
+        if type(binding.bible_revision) is not int or binding.bible_revision != self.bible.revision:
+            raise ProductionPolicyError("binding bible_revision must match current movie-bible revision exactly")
+
+        for char_id in binding.character_ids:
+            if not isinstance(char_id, str) or not char_id:
+                raise ProductionPolicyError("character_ids must contain non-empty strings")
+            if char_id not in self.bible.characters:
+                raise ProductionPolicyError("binding references unknown character")
+        for voice_id in binding.voice_ids:
+            if not isinstance(voice_id, str) or not voice_id:
+                raise ProductionPolicyError("voice_ids must contain non-empty strings")
+            if voice_id not in self.bible.voices:
+                raise ProductionPolicyError("binding references unknown voice")
+        if binding.voice_ids and not binding.character_ids:
+            raise ProductionPolicyError("voice continuity requires at least one character in the binding")
+        if not isinstance(binding.location_id, str):
+            raise ProductionPolicyError("location_id must be a string")
+        if binding.location_id and binding.location_id not in self.bible.locations:
+            raise ProductionPolicyError("binding references unknown location")
+        for costume_id in binding.costume_ids:
+            if not isinstance(costume_id, str) or not costume_id:
+                raise ProductionPolicyError("costume_ids must contain non-empty strings")
+            if costume_id not in self.bible.costumes:
+                raise ProductionPolicyError("binding references unknown costume")
+        for prop_id in binding.prop_ids:
+            if not isinstance(prop_id, str) or not prop_id:
+                raise ProductionPolicyError("prop_ids must contain non-empty strings")
+            if prop_id not in self.bible.props:
+                raise ProductionPolicyError("binding references unknown prop")
+        for asset_version in binding.reference_asset_versions:
+            if not isinstance(asset_version, str) or not asset_version:
+                raise ProductionPolicyError("reference_asset_versions must contain non-empty strings")
+
+        if binding.shot_id in self.shot_continuity_bindings:
+            if self.shot_continuity_bindings[binding.shot_id] != binding:
+                raise ProductionPolicyError("conflicting continuity binding replacement is not allowed")
+            return
+
+        self.shot_continuity_bindings[binding.shot_id] = binding
 
     def submit_generation(
         self,
@@ -838,16 +908,18 @@ class ProductionLedger:
     def to_dict(self) -> dict:
         self.validate()
 
-        def enum_value(value):
+        def to_json_types(value):
             if isinstance(value, Enum):
                 return value.value
             if isinstance(value, dict):
-                return {enum_value(k): enum_value(v) for k, v in value.items()}
+                return {to_json_types(k): to_json_types(v) for k, v in value.items()}
+            if isinstance(value, frozenset):
+                return sorted(list(value))
             if isinstance(value, (list, tuple)):
-                return [enum_value(v) for v in value]
+                return [to_json_types(v) for v in value]
             return value
 
-        raw = enum_value(asdict(self))
+        raw = to_json_types(asdict(self))
         return {
             "schema_version": SCHEMA_VERSION,
             "project_id": raw["project_id"],
@@ -859,6 +931,7 @@ class ProductionLedger:
             "scenes": raw["scenes"],
             "shots": raw["shots"],
             "shot_plans": raw["shot_plans"],
+            "shot_continuity_bindings": raw["shot_continuity_bindings"],
             "generation_jobs": raw["jobs"],
             "idempotency_index": raw["idempotency_index"],
             "authorization_index": raw["authorization_index"],
@@ -882,6 +955,7 @@ class ProductionLedger:
         data.setdefault("episode_status", EpisodeStatus.PLANNED.value)
         data.setdefault("scenes", {})
         data.setdefault("shot_plans", {})
+        data.setdefault("shot_continuity_bindings", {})
 
         root_fields = {
             "schema_version",
@@ -894,6 +968,7 @@ class ProductionLedger:
             "scenes",
             "shots",
             "shot_plans",
+            "shot_continuity_bindings",
             "generation_jobs",
             "idempotency_index",
             "authorization_index",
@@ -944,9 +1019,18 @@ class ProductionLedger:
             "characters",
             "voices",
             "locations",
+            "costumes",
+            "props",
             "continuity_facts",
         }
-        if not isinstance(bible_raw, Mapping) or set(bible_raw) != bible_fields:
+        if not isinstance(bible_raw, Mapping):
+            raise ProductionPolicyError("movie-bible must be a mapping")
+        if not set(bible_fields).issuperset(set(bible_raw)):
+            raise ProductionPolicyError("movie-bible fields mismatch")
+        # Ensure older checkpoints without costumes and props will work
+        bible_raw.setdefault("costumes", {})
+        bible_raw.setdefault("props", {})
+        if set(bible_raw) != bible_fields:
             raise ProductionPolicyError("movie-bible fields mismatch")
         if not isinstance(data["scenes"], Mapping):
             raise ProductionPolicyError("scenes must be a mapping")
@@ -954,6 +1038,8 @@ class ProductionLedger:
             raise ProductionPolicyError("shots must be a mapping")
         if not isinstance(data["shot_plans"], Mapping):
             raise ProductionPolicyError("shot plans must be a mapping")
+        if not isinstance(data["shot_continuity_bindings"], Mapping):
+            raise ProductionPolicyError("shot continuity bindings must be a mapping")
         if not isinstance(data["generation_jobs"], Mapping):
             raise ProductionPolicyError("generation jobs must be a mapping")
         if not isinstance(data["idempotency_index"], Mapping):
@@ -979,6 +1065,32 @@ class ProductionLedger:
             except ValueError as exc:
                 raise ProductionPolicyError("invalid scene status") from exc
             ledger.scenes[scene_id] = Scene(scene_id=raw["scene_id"], status=scene_status)
+        for shot_id, raw in data.get("shot_continuity_bindings", {}).items():
+            raw = dict(raw)
+            binding_fields = {
+                "shot_id",
+                "bible_revision",
+                "character_ids",
+                "voice_ids",
+                "location_id",
+                "costume_ids",
+                "prop_ids",
+                "reference_asset_versions",
+            }
+            if not isinstance(raw, Mapping) or set(raw) != binding_fields:
+                raise ProductionPolicyError("shot continuity binding fields mismatch")
+            for field_name in ["character_ids", "voice_ids", "costume_ids", "prop_ids", "reference_asset_versions"]:
+                field_list = raw[field_name]
+                if not isinstance(field_list, list):
+                    raise ProductionPolicyError(f"shot continuity binding {field_name} must be a list")
+                if len(field_list) != len(set(field_list)):
+                    raise ProductionPolicyError(f"shot continuity binding {field_name} contains duplicates")
+                raw[field_name] = frozenset(field_list)
+            try:
+                ledger.shot_continuity_bindings[shot_id] = ShotContinuityBinding(**raw)
+            except (TypeError, ValueError) as exc:
+                raise ProductionPolicyError("malformed shot continuity binding") from exc
+
         for shot_id, raw in data.get("shots", {}).items():
             raw = dict(raw)
             raw.setdefault("scene_id", "")
@@ -1164,6 +1276,37 @@ class ProductionLedger:
                 raise ProductionPolicyError("shot references unknown scene")
             if type(shot.status) is not ShotStatus:
                 raise ProductionPolicyError("invalid shot status")
+
+        for binding_key, binding in self.shot_continuity_bindings.items():
+            if type(binding) is not ShotContinuityBinding:
+                raise ProductionPolicyError("shot continuity binding must be a ShotContinuityBinding instance")
+            if binding_key != binding.shot_id:
+                raise ProductionPolicyError("shot continuity binding key must match binding.shot_id")
+            if not binding.shot_id or binding.shot_id not in self.shots:
+                raise ProductionPolicyError("shot continuity binding has dangling shot reference")
+            if type(binding.bible_revision) is not int or binding.bible_revision < 1:
+                raise ProductionPolicyError("binding bible_revision must be positive integer")
+            for char_id in binding.character_ids:
+                if not isinstance(char_id, str) or not char_id or char_id not in self.bible.characters:
+                    raise ProductionPolicyError("dangling character reference in binding")
+            for voice_id in binding.voice_ids:
+                if not isinstance(voice_id, str) or not voice_id or voice_id not in self.bible.voices:
+                    raise ProductionPolicyError("dangling voice reference in binding")
+            if binding.voice_ids and not binding.character_ids:
+                raise ProductionPolicyError("voice continuity binding requires a character")
+            if not isinstance(binding.location_id, str):
+                raise ProductionPolicyError("binding location_id must be string")
+            if binding.location_id and binding.location_id not in self.bible.locations:
+                raise ProductionPolicyError("dangling location reference in binding")
+            for costume_id in binding.costume_ids:
+                if not isinstance(costume_id, str) or not costume_id or costume_id not in self.bible.costumes:
+                    raise ProductionPolicyError("dangling costume reference in binding")
+            for prop_id in binding.prop_ids:
+                if not isinstance(prop_id, str) or not prop_id or prop_id not in self.bible.props:
+                    raise ProductionPolicyError("dangling prop reference in binding")
+            for asset_version in binding.reference_asset_versions:
+                if not isinstance(asset_version, str) or not asset_version:
+                    raise ProductionPolicyError("invalid reference asset version in binding")
 
         sequence_indices_by_scene = {}
         for plan_key, plan in self.shot_plans.items():
@@ -1534,6 +1677,8 @@ class ProductionLedger:
             self.bible.characters,
             self.bible.voices,
             self.bible.locations,
+            self.bible.costumes,
+            self.bible.props,
         )
         if any(
             not isinstance(mapping, dict)
