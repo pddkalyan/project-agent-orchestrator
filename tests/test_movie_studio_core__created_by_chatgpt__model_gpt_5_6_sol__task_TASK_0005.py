@@ -1182,6 +1182,23 @@ class MovieStudioCoreTests(unittest.TestCase):
             ledger.register_provider_adapter(ProviderAdapterRegistration(
                 "", "ad", "v1", frozenset([ProviderCapability.VIDEO])
             ))
+        # capability collection must be an enum-only frozenset
+        with self.assertRaises(ProductionPolicyError):
+            ledger.register_provider_adapter(ProviderAdapterRegistration(
+                "prov", "ad", "v1", frozenset(["VIDEO"])
+            ))
+        with self.assertRaises(ProductionPolicyError):
+            ledger.register_provider_adapter(ProviderAdapterRegistration(
+                "prov", "ad", "v1", [ProviderCapability.VIDEO]
+            ))
+
+    def test_provider_registry_validation_rejects_corrupted_capabilities(self):
+        ledger = ProductionLedger("movie")
+        ledger.provider_adapters["prov:ad:v1"] = ProviderAdapterRegistration(
+            "prov", "ad", "v1", frozenset(["VIDEO"])
+        )
+        with self.assertRaises(ProductionPolicyError):
+            ledger.validate()
 
     def test_provider_registry_migration_safe_restore(self):
         ledger = ProductionLedger("movie")
