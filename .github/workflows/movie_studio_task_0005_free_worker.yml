@@ -174,21 +174,28 @@ jobs:
             exit 78
           fi
 
-      - name: Record free-worker observable status
+      - name: Record free-worker observable status and chain decision
         if: steps.boundary.outputs.changed == 'true'
+        id: chain
         shell: bash
         env:
           WORKER_MODEL: ${{ steps.model.outputs.model }}
-          BEFORE_SHA: ${{ steps.before.outputs.sha }}
         run: |
           set -euo pipefail
-          python - <<'PY'
+          python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
-          from datetime import datetime, timezone
           from pathlib import Path
-          p=Path("monitor/task_0005_agent_status.json")
-          data=json.loads(p.read_text(encoding="utf-8"))
+
+          status_path=Path("monitor/task_0005_agent_status.json")
+          trigger_path=Path("tasks/dispatch/task_0005_free_worker_trigger.json")
+          data=json.loads(status_path.read_text(encoding="utf-8"))
+          trigger=json.loads(trigger_path.read_text(encoding="utf-8"))
           model=os.environ["WORKER_MODEL"]
+          cycle=int(trigger.get("batch_cycle",1))
+          size=int(trigger.get("batch_size",1))
+          if cycle < 1 or size < 1 or cycle > size or size > 12:
+              raise SystemExit("invalid free-worker batch counters")
+
           data["primary_agent"]={
             "name":"Gemini Free Cloud Worker",
             "model":model,
@@ -199,18 +206,30 @@ jobs:
             "model":"gpt-5.6-sol",
             "role":"review, orchestration, blocker handling; not routine coding"
           }
-          data["execution_state"]="AWAITING_SUPERVISOR_REVIEW"
-          data["current_phase"]="FREE_WORKER_COMPLETE"
-          data["current_work_item"]="Free-worker increment completed and deterministic verification passed; awaiting supervisor review"
-          data["note"]="Routine implementation was performed by the free Gemini worker. GPT is reserved for supervision/review. Private chain-of-thought is not exposed."
+          more = cycle < size
+          if more:
+              data["execution_state"]="ACTIVE"
+              data["current_phase"]="FREE_WORKER_CHAIN"
+              data["current_work_item"]=f"Free worker batch cycle {cycle}/{size} passed verification; continuing immediately to cycle {cycle+1}/{size}"
+              trigger["sequence"]=int(trigger.get("sequence",0))+1
+              trigger["batch_cycle"]=cycle+1
+              trigger["reason"]="Automatic zero-cost continuation after verified free-worker increment"
+              trigger_path.write_text(json.dumps(trigger,indent=2)+"\\n",encoding="utf-8")
+          else:
+              data["execution_state"]="AWAITING_SUPERVISOR_REVIEW"
+              data["current_phase"]="FREE_WORKER_BATCH_COMPLETE"
+              data["current_work_item"]=f"Free-worker batch {cycle}/{size} completed; awaiting GPT supervisor review before next batch"
+
+          data["note"]="Routine implementation is assigned to the free Gemini worker. GPT is reserved for supervision/review. Private chain-of-thought is not exposed."
           log=data.get("work_log",[])
           log.append({
-            "phase":"FREE_WORKER_COMPLETE",
-            "action":f"Gemini free cloud worker ({model}) completed a bounded TASK-0005 implementation increment.",
-            "evidence":f"GitHub Actions run {os.environ.get('GITHUB_RUN_ID')} verified deterministic tests before commit."
+            "phase":"FREE_WORKER_CHAIN" if more else "FREE_WORKER_BATCH_COMPLETE",
+            "action":f"Gemini free cloud worker ({model}) completed verified batch cycle {cycle}/{size}.",
+            "evidence":f"GitHub Actions run {os.environ.get('GITHUB_RUN_ID')} passed deterministic verification before commit."
           })
           data["work_log"]=log[-12:]
-          p.write_text(json.dumps(data,indent=2)+"\n",encoding="utf-8")
+          status_path.write_text(json.dumps(data,indent=2)+"\\n",encoding="utf-8")
+          print("continue_chain="+("true" if more else "false"))
           PY
 
       - name: Commit verified free-worker increment
@@ -222,7 +241,20 @@ jobs:
           set -euo pipefail
           git config user.name "Movie Studio Free Worker"
           git config user.email "movie-studio-free-worker@users.noreply.github.com"
-          git add --             scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py             tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py             schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json             docs/movie_studio_core_architecture__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.md             reviews/task_0005_state_contract_review__created_by_chatgpt__model_gpt-5.6-sol__run_20261007.md             review_packets/task_0005_free_worker_review.json             PROVENANCE_REGISTRY.jsonl             monitor/task_0005_agent_status.json
+          mapfile -t stage_paths < <(python - <<'PY'
+          import json
+          from pathlib import Path
+          contract=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
+          for path in contract["allowed_paths"]:
+              if Path(path).exists():
+                  print(path)
+          print("monitor/task_0005_agent_status.json")
+          trigger=Path("tasks/dispatch/task_0005_free_worker_trigger.json")
+          if trigger.exists():
+              print(str(trigger))
+          PY
+          )
+          git add -- "${stage_paths[@]}"
           git diff --cached --quiet && { echo "No staged change after validation"; exit 0; }
           git commit -m "TASK-0005: free worker increment [$WORKER_MODEL]"
           git push origin "HEAD:$BRANCH"
