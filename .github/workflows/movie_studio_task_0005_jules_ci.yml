@@ -1,0 +1,114 @@
+name: Movie Studio Jules Candidate CI
+
+on:
+  pull_request:
+    branches:
+      - feature/TASK-0005-movie-studio-core
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+concurrency:
+  group: task-0005-jules-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verified_candidate:
+    name: "JULES CI · boundaries + deterministic tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout Jules candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Enforce TASK-0005 change boundaries
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/jules-changed.txt"
+          cat "$RUNNER_TEMP/jules-changed.txt"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          changed=[x.strip() for x in Path(os.environ["RUNNER_TEMP"]).joinpath("jules-changed.txt").read_text().splitlines() if x.strip()]
+          contract=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
+          allowed=set(contract["allowed_paths"])
+          bad=[p for p in changed if p not in allowed]
+          if bad:
+              raise SystemExit("JULES_CHANGED_DISALLOWED_PATHS: "+", ".join(bad))
+          if not changed:
+              raise SystemExit("JULES_PR_HAS_NO_TASK_0005_CHANGES")
+          print("Jules path boundary verified:", ", ".join(changed))
+          PY
+
+      - name: Compile Movie Studio core
+        run: python -m py_compile scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py
+
+      - name: Run TASK-0005 deterministic regression suite
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py -v
+
+      - name: Validate JSON contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for p in [
+              Path("schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json"),
+              Path("tasks/worker/task_0005_free_worker_contract.json"),
+              Path("review_packets/task_0005_free_worker_review.json"),
+          ]:
+              json.loads(p.read_text(encoding="utf-8"))
+              print("valid JSON:", p)
+          PY
+
+      - name: Verify zero-spend and safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          c=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
+          assert c["task_id"] == "TASK-0005"
+          assert c["spend_limit_usd"] == 0
+          assert c["provider_billing_allowed"] is False
+          assert c["openai_routine_worker_allowed"] is False
+          assert "merge or auto-merge" in c["forbidden"]
+          assert "local video inference" in c["forbidden"]
+          print("Zero-spend and safety contract verified.")
+          PY
+          if git grep -nE 'OPENAI_API_KEY|JULES_API_KEY|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}' -- scripts tests schemas docs reviews review_packets PROVENANCE_REGISTRY.jsonl; then
+            echo "Potential secret pattern found in Jules candidate" >&2
+            exit 78
+          fi
+
+      - name: Publish Jules CI summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## TASK-0005 Jules candidate gate"
+            echo
+            echo "This PR targets the isolated TASK-0005 branch, not main."
+            echo "It must stay inside the worker allowlist and pass deterministic Movie Studio tests."
+            echo "If this check fails on a Jules-created PR, Jules CI Fixer can use the failure to repair and resubmit the PR."
+          } >> "$GITHUB_STEP_SUMMARY"
