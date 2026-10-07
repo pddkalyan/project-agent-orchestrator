@@ -1,13 +1,10 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "purpose": "Use a zero-cost cloud coding worker for routine Movie Studio implementation while reserving OpenAI models for supervision and milestone review.",
-  "primary_worker_family": "Gemini API free-tier Flash",
+  "purpose": "Use Jules as the primary cloud coding agent for routine Movie Studio implementation, with deterministic GitHub CI and Jules CI auto-fix, while reserving OpenAI models for supervision and milestone review.",
+  "primary_worker_family": "Google Jules coding agent",
   "preferred_worker_models": [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite"
+    "Jules account-included coding model"
   ],
   "spend_limit_usd": 0,
   "provider_billing_allowed": false,
@@ -51,7 +48,9 @@
     "local video inference",
     "TASK-0004 changes",
     "merge or auto-merge",
-    "secrets in repository/logs"
+    "secrets in repository/logs",
+    "per-use Jules billing or paid API fallback",
+    "automatic merge of Jules pull requests"
   ],
   "next_work_priority": [
     "finish durable Movie Bible and episode/scene/shot state contracts",
@@ -60,5 +59,12 @@
     "audio/subtitle/final-QC contracts",
     "Google Drive archival verification contract",
     "monitoring, handover, exhaustive deterministic tests"
+  ],
+  "fallback_worker_family": "Gemini API free-tier Flash",
+  "fallback_worker_models": [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite"
   ]
 }
