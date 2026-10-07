@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 5,
+  "sequence": 6,
   "batch_cycle": 1,
   "batch_size": 4,
-  "mode": "continuous_free_worker_batch",
+  "mode": "jules_primary_worker",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "Automatic retry after prior free-worker failure; use bounded self-repair for test failures and auto-revert disallowed edits before continuing.",
+  "reason": "Start Jules as the primary TASK-0005 coding agent; Jules-created PR gets deterministic CI and Jules CI auto-fix, with no auto-merge.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false
 }
