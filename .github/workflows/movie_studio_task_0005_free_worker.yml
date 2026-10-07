@@ -18,10 +18,10 @@ concurrency:
 
 jobs:
   free_worker:
-    name: "FREE WORKER · Gemini 3.8 Flash"
+    name: "FREE WORKER · Gemini free-tier fallback"
     if: ${{ github.event.pull_request.head.ref == 'feature/TASK-0005-movie-studio-core' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       BRANCH: feature/TASK-0005-movie-studio-core
@@ -104,11 +104,12 @@ jobs:
 
           for model in "${models[@]}"; do
             echo "Trying zero-cost worker model: $model" | tee -a "$RUNNER_TEMP/free-worker-attempts.log"
+            echo "WORKER_MODEL=$model" >> "$GITHUB_ENV"
             git reset --hard "$base_sha" >/dev/null
             git clean -fd >/dev/null
 
             set +e
-            gemini --skip-trust --model "$model" --approval-mode=auto_edit --output-format=json \
+            timeout --signal=TERM 40m gemini --skip-trust --model "$model" --approval-mode=auto_edit --output-format=json \
               --prompt 'You are the PRIMARY FREE CLOUD CODING WORKER for TASK-0005 Movie Studio. Read AGENTS.md and GEMINI.md first, then read $CONTRACT_FILE, the current TASK-0005 task JSON, architecture doc, production-state schema, core implementation, deterministic tests, current monitor status, existing TASK-0005 review files, and relevant memory. Continue the next highest-priority unfinished SAFE engineering increment on the current PR branch. Prefer concrete production architecture/code/tests over commentary. You may edit repository files only; do not run shell commands, install software, call external services, use paid resources, access user devices, or perform real media generation. Do not modify GitHub workflows, dispatch files, secrets, or unrelated TASKs. Preserve USD 0.00, cloud-only media inference, provider-neutral adapters, crash-safe/idempotent state, review/canonicalization gates, no merge, and no TASK-0004 work. Keep changes coherent and reviewable. Add or strengthen deterministic tests for every new invariant. Update provenance and the TASK-0005 review evidence for what you changed. Never claim GPT/Astra approval. Stop before any step requiring provider credentials, billing, private assets, or a user-only action.' \
               > "worker_result_TASK-0005_${GITHUB_RUN_ID}.json" \
               2> "$RUNNER_TEMP/worker-$model.err"
@@ -159,6 +160,22 @@ jobs:
           print("worker file boundaries verified:", ", ".join(changed))
           PY
           echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Preserve candidate patch before verification
+        if: steps.boundary.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary > "$RUNNER_TEMP/task0005-free-worker-candidate.patch"
+          cp "$RUNNER_TEMP/task0005-free-worker-candidate.patch" ./task0005-free-worker-candidate.patch
+
+      - name: Upload candidate patch evidence
+        if: steps.boundary.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-0005-free-worker-candidate-${{ github.run_id }}
+          path: task0005-free-worker-candidate.patch
+          retention-days: 7
 
       - name: Run TASK-0005 deterministic verification
         if: steps.boundary.outputs.changed == 'true'
