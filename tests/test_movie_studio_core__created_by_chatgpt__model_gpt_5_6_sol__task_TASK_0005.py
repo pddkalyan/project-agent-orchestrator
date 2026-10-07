@@ -12,6 +12,7 @@ from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK
     MovieBible,
     ProductionLedger,
     ProductionPolicyError,
+    Scene,
     ProviderQuote,
     ProviderSubmissionReceipt,
     Review,
@@ -30,7 +31,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         return Review(gate, version, verdict)
 
     def generated_shot(self, dialogue=False):
-        return Shot("S1", "v1", dialogue, ShotStatus.GENERATED)
+        return Shot("S1", asset_version="v1", has_dialogue_or_audio=dialogue, status=ShotStatus.GENERATED)
 
     def quote(
         self,
@@ -104,7 +105,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertIs(shot.status, ShotStatus.CANONICAL)
 
     def test_stale_review_is_rejected(self):
-        shot = Shot("S1", "v2", status=ShotStatus.GENERATED)
+        shot = Shot("S1", asset_version="v2", status=ShotStatus.GENERATED)
         shot.reviews = {Gate.VISUAL_QA: self.review(Gate.VISUAL_QA, "v1")}
         with self.assertRaises(ProductionPolicyError):
             authorize_upscale(shot)
@@ -296,8 +297,10 @@ class MovieStudioCoreTests(unittest.TestCase):
             ProductionLedger.from_dict(data)
 
     def test_checkpoint_root_matches_published_schema_contract(self):
-        ledger = ProductionLedger("movie")
+        ledger = ProductionLedger("movie", episode_id="ep1")
+        ledger.add_scene(Scene("Sc1"))
         shot = self.generated_shot()
+        shot.scene_id = "Sc1"
         shot.reviews = {Gate.VISUAL_QA: self.review(Gate.VISUAL_QA)}
         ledger.add_shot(shot)
         ledger.submit_generation(
@@ -318,6 +321,10 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertEqual(
             set(schema["$defs"]["movie_bible"]["properties"]),
             set(payload["movie_bible"]),
+        )
+        self.assertEqual(
+            set(schema["$defs"]["scene"]["properties"]),
+            set(payload["scenes"]["Sc1"]),
         )
         self.assertEqual(
             set(schema["$defs"]["shot"]["properties"]),
@@ -345,6 +352,55 @@ class MovieStudioCoreTests(unittest.TestCase):
             set(schema["$defs"]["attempt_authorization"]["properties"]),
             set(attempt["authorization"]),
         )
+
+    def test_add_scene_rejects_empty_and_duplicate_ids(self):
+        ledger = ProductionLedger("movie")
+        with self.assertRaises(ProductionPolicyError):
+            ledger.add_scene(Scene(""))
+        ledger.add_scene(Scene("Sc1"))
+        with self.assertRaises(ProductionPolicyError):
+            ledger.add_scene(Scene("Sc1"))
+
+    def test_add_shot_rejects_unknown_scene(self):
+        ledger = ProductionLedger("movie")
+        with self.assertRaises(ProductionPolicyError):
+            ledger.add_shot(Shot("S1", scene_id="unknown"))
+
+    def test_add_shot_accepts_empty_scene_id(self):
+        ledger = ProductionLedger("movie")
+        shot = Shot("S1", scene_id="")
+        ledger.add_shot(shot)
+        self.assertIn("S1", ledger.shots)
+        self.assertEqual(ledger.shots["S1"].scene_id, "")
+
+    def test_validate_rejects_corrupted_scene_map_keys_and_dangling_refs(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("Sc1"))
+        ledger.add_shot(Shot("S1", scene_id="Sc1"))
+        data = ledger.to_dict()
+
+        # Corrupt scene map key
+        corrupt_key_data = copy.deepcopy(data)
+        corrupt_key_data["scenes"]["Sc2"] = corrupt_key_data["scenes"].pop("Sc1")
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(corrupt_key_data)
+
+        # Dangling ref in shot
+        dangling_ref_data = copy.deepcopy(data)
+        dangling_ref_data["shots"]["S1"]["scene_id"] = "Sc2"
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(dangling_ref_data)
+
+    def test_to_dict_and_from_dict_roundtrip_with_scenes(self):
+        ledger = ProductionLedger("movie", episode_id="ep1")
+        ledger.add_scene(Scene("Sc1"))
+        ledger.add_shot(Shot("S1", scene_id="Sc1"))
+        data = ledger.to_dict()
+        ledger2 = ProductionLedger.from_dict(data)
+        self.assertEqual(ledger.episode_id, ledger2.episode_id)
+        self.assertEqual(list(ledger.scenes.keys()), list(ledger2.scenes.keys()))
+        self.assertEqual(ledger.shots["S1"].scene_id, ledger2.shots["S1"].scene_id)
+        self.assertEqual(ledger.to_dict(), ledger2.to_dict())
 
     def test_future_schema_version_fails_closed(self):
         data = ProductionLedger("movie").to_dict()
