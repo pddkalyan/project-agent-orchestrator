@@ -157,6 +157,8 @@ jobs:
           python-version: "3.12"
 
       - name: Run TASK-0005 tests with visible logs
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: python tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py -v
 
   integration_gate:
