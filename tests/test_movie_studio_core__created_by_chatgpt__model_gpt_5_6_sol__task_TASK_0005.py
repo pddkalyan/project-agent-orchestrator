@@ -1068,6 +1068,62 @@ class MovieStudioCoreTests(unittest.TestCase):
             ledger.finish_generation("J1", 1, "P1", "stale")
         self.assertEqual(before, ledger.to_dict())
 
+    def test_lifecycle_status_defaults(self):
+        ledger = ProductionLedger("movie")
+        self.assertEqual(ledger.episode_status, "PLANNED")
+        scene = Scene("SC1")
+        ledger.add_scene(scene)
+        self.assertEqual(ledger.scenes["SC1"].status, "PLANNED")
+
+    def test_lifecycle_status_roundtrip_default(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        payload = ledger.to_dict()
+        restored = ProductionLedger.from_dict(payload)
+        self.assertEqual(restored.episode_status, "PLANNED")
+        self.assertEqual(restored.scenes["SC1"].status, "PLANNED")
+
+    def test_lifecycle_status_roundtrip_non_default(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("movie")
+        ledger.episode_status = EpisodeStatus.IN_PRODUCTION
+        scene = Scene("SC1")
+        scene.status = SceneStatus.GENERATING
+        ledger.add_scene(scene)
+        payload = ledger.to_dict()
+        restored = ProductionLedger.from_dict(payload)
+        self.assertEqual(restored.episode_status, EpisodeStatus.IN_PRODUCTION)
+        self.assertEqual(restored.scenes["SC1"].status, SceneStatus.GENERATING)
+
+    def test_unknown_lifecycle_status_fails_closed(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        payload = ledger.to_dict()
+
+        payload_malformed_ep = dict(payload)
+        payload_malformed_ep["episode_status"] = "FAKE_STATUS"
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(payload_malformed_ep)
+
+        payload_malformed_scene = dict(payload)
+        payload_malformed_scene["scenes"] = {"SC1": {"scene_id": "SC1", "status": "FAKE_STATUS"}}
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(payload_malformed_scene)
+
+    def test_corrupted_in_memory_enum_values_fail_validation(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        ledger.episode_status = "NOT_AN_ENUM"
+        with self.assertRaises(ProductionPolicyError):
+            ledger.validate()
+
+        ledger2 = ProductionLedger("movie")
+        scene = Scene("SC1")
+        scene.status = "NOT_AN_ENUM"
+        ledger2.add_scene(scene)
+        with self.assertRaises(ProductionPolicyError):
+            ledger2.validate()
+
 
 if __name__ == "__main__":
     unittest.main()
