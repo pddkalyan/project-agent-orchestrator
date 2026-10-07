@@ -15,6 +15,7 @@ from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK
     ProviderQuote,
     ProviderSubmissionReceipt,
     Review,
+    Scene,
     Shot,
     ShotStatus,
     Verdict,
@@ -30,7 +31,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         return Review(gate, version, verdict)
 
     def generated_shot(self, dialogue=False):
-        return Shot("S1", "v1", dialogue, ShotStatus.GENERATED)
+        return Shot("S1", asset_version="v1", has_dialogue_or_audio=dialogue, status=ShotStatus.GENERATED)
 
     def quote(
         self,
@@ -77,6 +78,39 @@ class MovieStudioCoreTests(unittest.TestCase):
             ),
         )
         return attempt
+
+    def test_add_scene_rejects_blank_and_duplicate_ids(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        with self.assertRaises(ProductionPolicyError):
+            ledger.add_scene(Scene(""))
+        with self.assertRaises(ProductionPolicyError):
+            ledger.add_scene(Scene("SC1"))
+
+    def test_add_shot_rejects_unknown_scene_allows_empty(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        ledger.add_shot(Shot("S2", scene_id=""))
+        with self.assertRaises(ProductionPolicyError):
+            ledger.add_shot(Shot("S3", scene_id="SC-UNKNOWN"))
+
+    def test_validate_rejects_corrupted_scene_maps_and_dangling_scene_references(self):
+        ledger = ProductionLedger("movie", episode_id="ep1")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+
+        # Corrupted scene map key
+        corrupt_key = copy.deepcopy(ledger)
+        corrupt_key.scenes["bad_key"] = corrupt_key.scenes.pop("SC1")
+        with self.assertRaises(ProductionPolicyError):
+            corrupt_key.validate()
+
+        # Dangling scene reference
+        dangling_ref = copy.deepcopy(ledger)
+        dangling_ref.shots["S1"].scene_id = "SC2"
+        with self.assertRaises(ProductionPolicyError):
+            dangling_ref.validate()
 
     def test_canonical_requires_visual_continuity_and_technical(self):
         shot = self.generated_shot()
