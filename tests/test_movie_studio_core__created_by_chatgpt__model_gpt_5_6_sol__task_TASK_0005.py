@@ -6,6 +6,8 @@ from pathlib import Path
 from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
     ShotPlan,
     plan_digest,
+    ShotContinuityBinding,
+    continuity_binding_digest,
     AttemptStatus,
     ProviderAdapterRegistration,
     ProviderCapability,
@@ -1440,6 +1442,221 @@ class MovieStudioCoreTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ProductionPolicyError, "key must match plan.shot_id"):
             ProductionLedger.from_dict(data)
+
+    def test_continuity_binding_rejections(self):
+        ledger = ProductionLedger(project_id="test-rejections")
+        ledger.add_shot(Shot(shot_id="shot-1"))
+        ledger.bible.characters["char-1"] = {}
+        ledger.bible.voices["voice-1"] = {}
+
+        binding_no_shot = ShotContinuityBinding(
+            shot_id="unknown-shot", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "binding must reference an existing shot"):
+            ledger.add_shot_continuity_binding(binding_no_shot)
+
+        binding_dangling = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["unknown-char"]), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "binding references unknown character"):
+            ledger.add_shot_continuity_binding(binding_dangling)
+
+        binding_voice_no_char = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(), voice_ids=frozenset(["voice-1"]), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "voice continuity requires at least one character in the binding"):
+            ledger.add_shot_continuity_binding(binding_voice_no_char)
+
+        binding_wrong_rev = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=999,
+            character_ids=frozenset(), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision must match current"):
+            ledger.add_shot_continuity_binding(binding_wrong_rev)
+
+        binding_ok = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        ledger.add_shot_continuity_binding(binding_ok)
+        ledger.add_shot_continuity_binding(binding_ok) # Idempotent
+
+        binding_conflict = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement is not allowed"):
+            ledger.add_shot_continuity_binding(binding_conflict)
+
+        # Digest stability test
+        digest1 = continuity_binding_digest(binding_ok)
+        digest2 = continuity_binding_digest(binding_ok)
+        self.assertEqual(digest1, digest2)
+        digest3 = continuity_binding_digest(binding_conflict)
+        self.assertNotEqual(digest1, digest3)
+
+    def test_continuity_binding_stale_and_future_mismatches(self):
+        ledger = ProductionLedger(project_id="test-mismatches")
+        ledger.add_shot(Shot(shot_id="shot-1"))
+        ledger.bible.characters["char-1"] = {}
+
+        # Correct binding
+        binding_ok = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        ledger.add_shot_continuity_binding(binding_ok)
+
+        data = ledger.to_dict()
+
+        # Modify movie bible to bump revision
+        ledger.bible.update_fact("story_rules", "rule1", "value1")
+        self.assertEqual(ledger.bible.revision, 2)
+
+        # Try to restore with stale revision (1 instead of 2)
+        data["movie_bible"]["revision"] = 2
+        data["movie_bible"]["story_rules"]["rule1"] = "value1"
+        data["shot_continuity_bindings"]["shot-1"]["bible_revision"] = 1
+        with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision must match current movie-bible revision exactly"):
+            ProductionLedger.from_dict(data)
+
+        # Try to restore with future revision (3 instead of 2)
+        data["shot_continuity_bindings"]["shot-1"]["bible_revision"] = 3
+        with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision must match current movie-bible revision exactly"):
+            ProductionLedger.from_dict(data)
+
+    def test_continuity_binding_rejects_mutable_collections(self):
+        ledger = ProductionLedger(project_id="test-mutable")
+        ledger.add_shot(Shot(shot_id="shot-1"))
+        ledger.bible.characters["char-1"] = {}
+
+        # Test character_ids
+        binding_mutable_chars = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=set(["char-1"]), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "character_ids must be a frozenset"):
+            ledger.add_shot_continuity_binding(binding_mutable_chars)
+
+        # Test voice_ids
+        binding_mutable_voices = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]), voice_ids=set(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "voice_ids must be a frozenset"):
+            ledger.add_shot_continuity_binding(binding_mutable_voices)
+
+        # Test costume_ids
+        binding_mutable_costumes = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+            costume_ids=set(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "costume_ids must be a frozenset"):
+            ledger.add_shot_continuity_binding(binding_mutable_costumes)
+
+        # Test prop_ids
+        binding_mutable_props = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=set(), reference_asset_versions=frozenset()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "prop_ids must be a frozenset"):
+            ledger.add_shot_continuity_binding(binding_mutable_props)
+
+        # Test reference_asset_versions
+        binding_mutable_assets = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=list()
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "reference_asset_versions must be a frozenset"):
+            ledger.add_shot_continuity_binding(binding_mutable_assets)
+
+    def test_continuity_binding_duplicate_schema_list(self):
+        ledger = ProductionLedger(project_id="test-dup-list")
+        ledger.add_shot(Shot(shot_id="shot-1"))
+        ledger.bible.characters["char-1"] = {}
+        binding = ShotContinuityBinding(
+            shot_id="shot-1", bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+        )
+        ledger.add_shot_continuity_binding(binding)
+        data = ledger.to_dict()
+        data["shot_continuity_bindings"]["shot-1"]["character_ids"].append("char-1")
+        with self.assertRaisesRegex(ProductionPolicyError, "contains duplicates"):
+            ProductionLedger.from_dict(data)
+
+    def test_continuity_binding_happy_path(self):
+        ledger = ProductionLedger(project_id="test-happy")
+        ledger.add_shot(Shot(shot_id="shot-1"))
+        ledger.bible.characters["char-1"] = {"name": "Alice"}
+        ledger.bible.voices["voice-1"] = {"style": "soft"}
+        ledger.bible.locations["loc-1"] = {"setting": "park"}
+        ledger.bible.costumes["costume-1"] = {"desc": "red jacket"}
+        ledger.bible.props["prop-1"] = {"desc": "watch"}
+        binding = ShotContinuityBinding(
+            shot_id="shot-1",
+            bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]),
+            voice_ids=frozenset(["voice-1"]),
+            location_id="loc-1",
+            costume_ids=frozenset(["costume-1"]),
+            prop_ids=frozenset(["prop-1"]),
+            reference_asset_versions=frozenset(["asset-v1"])
+        )
+        ledger.add_shot_continuity_binding(binding)
+        self.assertEqual(len(ledger.shot_continuity_bindings), 1)
+
+    def test_continuity_binding_migration_safe_restore(self):
+        ledger = ProductionLedger(project_id="test-migration")
+        ledger_dict = ledger.to_dict()
+        del ledger_dict["movie_bible"]["costumes"]
+        del ledger_dict["movie_bible"]["props"]
+        del ledger_dict["shot_continuity_bindings"]
+        restored = ProductionLedger.from_dict(ledger_dict)
+        self.assertEqual(restored.bible.costumes, {})
+        self.assertEqual(restored.bible.props, {})
+        self.assertEqual(restored.shot_continuity_bindings, {})
+
+    def test_continuity_binding_roundtrip(self):
+        ledger = ProductionLedger(project_id="test-roundtrip")
+        ledger.add_shot(Shot(shot_id="shot-1"))
+        ledger.bible.characters["char-1"] = {"name": "Alice"}
+        ledger.bible.voices["voice-1"] = {"style": "soft"}
+        ledger.bible.locations["loc-1"] = {"setting": "park"}
+        ledger.bible.costumes["costume-1"] = {"desc": "red jacket"}
+        ledger.bible.props["prop-1"] = {"desc": "watch"}
+        binding = ShotContinuityBinding(
+            shot_id="shot-1",
+            bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]),
+            voice_ids=frozenset(["voice-1"]),
+            location_id="loc-1",
+            costume_ids=frozenset(["costume-1"]),
+            prop_ids=frozenset(["prop-1"]),
+            reference_asset_versions=frozenset(["asset-v1"])
+        )
+        ledger.add_shot_continuity_binding(binding)
+        ledger_dict = ledger.to_dict()
+        restored = ProductionLedger.from_dict(ledger_dict)
+        self.assertIn("shot-1", restored.shot_continuity_bindings)
+        restored_binding = restored.shot_continuity_bindings["shot-1"]
+        self.assertEqual(restored_binding, binding)
+        self.assertEqual(restored_binding.character_ids, frozenset(["char-1"]))
 
 if __name__ == "__main__":
     unittest.main()
