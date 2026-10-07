@@ -7,6 +7,7 @@
     "schema_version",
     "project_id",
     "episode_id",
+    "episode_status",
     "spend_limit_usd_micros",
     "production",
     "movie_bible",
@@ -21,6 +22,17 @@
     "schema_version": {"const": 2},
     "project_id": {"type": "string", "minLength": 1},
     "episode_id": {"type": "string"},
+    "episode_status": {
+      "enum": [
+        "PLANNED",
+        "IN_PRODUCTION",
+        "ASSEMBLING",
+        "FINAL_QC",
+        "ARCHIVING",
+        "COMPLETED",
+        "BLOCKED"
+      ]
+    },
     "spend_limit_usd_micros": {"type": "integer", "const": 0},
     "production": {
       "type": "object",
@@ -76,9 +88,18 @@
     "scene": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["scene_id"],
+      "required": ["scene_id", "status"],
       "properties": {
-        "scene_id": {"type": "string", "minLength": 1}
+        "scene_id": {"type": "string", "minLength": 1},
+        "status": {
+          "enum": [
+            "PLANNED",
+            "GENERATING",
+            "REVIEW",
+            "APPROVED",
+            "BLOCKED"
+          ]
+        }
       }
     },
     "movie_bible": {

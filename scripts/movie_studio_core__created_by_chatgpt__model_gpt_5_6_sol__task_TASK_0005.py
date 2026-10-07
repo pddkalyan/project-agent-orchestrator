@@ -44,6 +44,24 @@ class ShotStatus(str, Enum):
     BLOCKED = "BLOCKED"
 
 
+class EpisodeStatus(str, Enum):
+    PLANNED = "PLANNED"
+    IN_PRODUCTION = "IN_PRODUCTION"
+    ASSEMBLING = "ASSEMBLING"
+    FINAL_QC = "FINAL_QC"
+    ARCHIVING = "ARCHIVING"
+    COMPLETED = "COMPLETED"
+    BLOCKED = "BLOCKED"
+
+
+class SceneStatus(str, Enum):
+    PLANNED = "PLANNED"
+    GENERATING = "GENERATING"
+    REVIEW = "REVIEW"
+    APPROVED = "APPROVED"
+    BLOCKED = "BLOCKED"
+
+
 class JobStatus(str, Enum):
     QUEUED = "QUEUED"
     AUTHORIZED = "AUTHORIZED"
@@ -81,6 +99,7 @@ class Review:
 @dataclass
 class Scene:
     scene_id: str
+    status: SceneStatus = SceneStatus.PLANNED
 
 
 @dataclass
@@ -367,6 +386,7 @@ class MovieBible:
 class ProductionLedger:
     project_id: str
     episode_id: str = ""
+    episode_status: EpisodeStatus = EpisodeStatus.PLANNED
     bible: MovieBible = field(default_factory=MovieBible)
     scenes: Dict[str, Scene] = field(default_factory=dict)
     shots: Dict[str, Shot] = field(default_factory=dict)
@@ -719,6 +739,7 @@ class ProductionLedger:
             "schema_version": SCHEMA_VERSION,
             "project_id": raw["project_id"],
             "episode_id": raw["episode_id"],
+            "episode_status": raw["episode_status"],
             "spend_limit_usd_micros": 0,
             "production": dict(PRODUCTION_CONTRACT),
             "movie_bible": raw["bible"],
@@ -743,12 +764,14 @@ class ProductionLedger:
     def _from_dict(cls, data: Mapping) -> "ProductionLedger":
         data = dict(data)
         data.setdefault("episode_id", "")
+        data.setdefault("episode_status", EpisodeStatus.PLANNED.value)
         data.setdefault("scenes", {})
 
         root_fields = {
             "schema_version",
             "project_id",
             "episode_id",
+            "episode_status",
             "spend_limit_usd_micros",
             "production",
             "movie_bible",
@@ -811,12 +834,18 @@ class ProductionLedger:
         ledger = cls(
             project_id=data["project_id"],
             episode_id=data["episode_id"],
+            episode_status=EpisodeStatus(data["episode_status"]),
             bible=MovieBible(**bible_raw),
         )
         for scene_id, raw in data.get("scenes", {}).items():
-            if not isinstance(raw, Mapping) or set(raw) != {"scene_id"}:
+            raw = dict(raw)
+            raw.setdefault("status", SceneStatus.PLANNED.value)
+            if not isinstance(raw, Mapping) or set(raw) != {"scene_id", "status"}:
                 raise ProductionPolicyError("scene fields mismatch")
-            ledger.scenes[scene_id] = Scene(scene_id=raw["scene_id"])
+            ledger.scenes[scene_id] = Scene(
+                scene_id=raw["scene_id"],
+                status=SceneStatus(raw["status"])
+            )
         for shot_id, raw in data.get("shots", {}).items():
             raw = dict(raw)
             raw.setdefault("scene_id", "")
@@ -938,6 +967,8 @@ class ProductionLedger:
             raise ProductionPolicyError("project id must not be empty")
         if not isinstance(self.episode_id, str):
             raise ProductionPolicyError("episode id must be a string")
+        if type(self.episode_status) is not EpisodeStatus:
+            raise ProductionPolicyError("invalid episode status")
         if type(self.bible.revision) is not int or self.bible.revision < 1:
             raise ProductionPolicyError("invalid movie-bible revision")
         self._validate_bible_maps()
@@ -946,6 +977,8 @@ class ProductionLedger:
                 raise ProductionPolicyError("scene id must not be empty")
             if scene_key != scene.scene_id:
                 raise ProductionPolicyError("scene key/id mismatch")
+            if type(scene.status) is not SceneStatus:
+                raise ProductionPolicyError("invalid scene status")
         for shot_key, shot in self.shots.items():
             if not isinstance(shot_key, str) or not shot_key:
                 raise ProductionPolicyError("shot id must not be empty")

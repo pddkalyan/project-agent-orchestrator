@@ -11,11 +11,13 @@ from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK
     JobStatus,
     MovieBible,
     ProductionLedger,
+    EpisodeStatus,
     ProductionPolicyError,
     ProviderQuote,
     ProviderSubmissionReceipt,
     Review,
     Scene,
+    SceneStatus,
     Shot,
     ShotStatus,
     Verdict,
@@ -111,6 +113,47 @@ class MovieStudioCoreTests(unittest.TestCase):
         dangling_ref.shots["S1"].scene_id = "SC2"
         with self.assertRaises(ProductionPolicyError):
             dangling_ref.validate()
+
+    def test_statuses_default_to_planned_and_round_trip(self):
+        ledger = ProductionLedger("movie")
+        self.assertEqual(ledger.episode_status, EpisodeStatus.PLANNED)
+
+        scene = Scene("SC1")
+        self.assertEqual(scene.status, SceneStatus.PLANNED)
+
+        ledger.episode_status = EpisodeStatus.IN_PRODUCTION
+        scene.status = SceneStatus.REVIEW
+        ledger.add_scene(scene)
+
+        data = ledger.to_dict()
+        self.assertEqual(data["episode_status"], "IN_PRODUCTION")
+        self.assertEqual(data["scenes"]["SC1"]["status"], "REVIEW")
+
+        restored = ProductionLedger.from_dict(data)
+        self.assertEqual(restored.episode_status, EpisodeStatus.IN_PRODUCTION)
+        self.assertEqual(restored.scenes["SC1"].status, SceneStatus.REVIEW)
+
+    def test_validate_rejects_unknown_enum_status_values(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+
+        # Corrupt episode status
+        corrupt_ep = copy.deepcopy(ledger)
+        corrupt_ep.episode_status = "BOGUS_STATUS"
+        with self.assertRaises(ProductionPolicyError):
+            corrupt_ep.validate()
+
+        # Corrupt scene status
+        corrupt_scene = copy.deepcopy(ledger)
+        corrupt_scene.scenes["SC1"].status = "BOGUS_STATUS"
+        with self.assertRaises(ProductionPolicyError):
+            corrupt_scene.validate()
+
+        # Corrupt load via dict
+        data = ledger.to_dict()
+        data["episode_status"] = "BOGUS_STATUS"
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(data)
 
     def test_canonical_requires_visual_continuity_and_technical(self):
         shot = self.generated_shot()
