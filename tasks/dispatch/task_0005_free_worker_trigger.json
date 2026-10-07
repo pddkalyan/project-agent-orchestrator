@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 4,
+  "sequence": 5,
   "batch_cycle": 1,
   "batch_size": 4,
   "mode": "continuous_free_worker_batch",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "Enable bounded automatic self-repair on deterministic verification failures; keep zero-cost free-worker continuation.",
+  "reason": "Automatic retry after prior free-worker failure; use bounded self-repair for test failures and auto-revert disallowed edits before continuing.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false
 }
