@@ -110,7 +110,7 @@ jobs:
 
             set +e
             timeout --signal=TERM 40m gemini --skip-trust --model "$model" --approval-mode=auto_edit --output-format=json \
-              --prompt 'You are the PRIMARY FREE CLOUD CODING WORKER for TASK-0005 Movie Studio. Read AGENTS.md and GEMINI.md first, then read $CONTRACT_FILE, the current TASK-0005 task JSON, architecture doc, production-state schema, core implementation, deterministic tests, current monitor status, existing TASK-0005 review files, and relevant memory. Continue the next highest-priority unfinished SAFE engineering increment on the current PR branch. Prefer concrete production architecture/code/tests over commentary. You may edit repository files only; do not run shell commands, install software, call external services, use paid resources, access user devices, or perform real media generation. Do not modify GitHub workflows, dispatch files, secrets, or unrelated TASKs. Preserve USD 0.00, cloud-only media inference, provider-neutral adapters, crash-safe/idempotent state, review/canonicalization gates, no merge, and no TASK-0004 work. Keep changes coherent and reviewable. Add or strengthen deterministic tests for every new invariant. Update provenance and the TASK-0005 review evidence for what you changed. Never claim GPT/Astra approval. Stop before any step requiring provider credentials, billing, private assets, or a user-only action.' \
+              --prompt 'You are the PRIMARY FREE CLOUD CODING WORKER for TASK-0005 Movie Studio. Read AGENTS.md and GEMINI.md first, then read $CONTRACT_FILE, the current TASK-0005 task JSON, architecture doc, production-state schema, core implementation, deterministic tests, current monitor status, existing TASK-0005 review files, and relevant memory. Continue the next highest-priority unfinished SAFE engineering increment on the current PR branch. Prefer concrete production architecture/code/tests over commentary. You may edit repository files only; do not run shell commands, install software, call external services, use paid resources, access user devices, or perform real media generation. EDIT ONLY paths explicitly listed in tasks/worker/task_0005_free_worker_contract.json allowed_paths. Do NOT edit memory/*, GitHub workflows, dispatch files, secrets, monitor status, or unrelated TASKs. Preserve USD 0.00, cloud-only media inference, provider-neutral adapters, crash-safe/idempotent state, review/canonicalization gates, no merge, and no TASK-0004 work. Keep changes coherent and reviewable. Add or strengthen deterministic tests for every new invariant. Update provenance and the TASK-0005 review evidence for what you changed. Never claim GPT/Astra approval. Stop before any step requiring provider credentials, billing, private assets, or a user-only action.' \
               > "worker_result_TASK-0005_${GITHUB_RUN_ID}.json" \
               2> "$RUNNER_TEMP/worker-$model.err"
             rc=$?
@@ -147,17 +147,50 @@ jobs:
             echo "Worker produced no repository changes." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+
           printf '%s\n' "${changed[@]}" > "$RUNNER_TEMP/changed-files.txt"
-          python - <<'PY'
-          import json
+          python - <<'PY' > "$RUNNER_TEMP/disallowed-files.txt"
+          import json, os
           from pathlib import Path
-          changed=[x.strip() for x in Path(__import__("os").environ["RUNNER_TEMP"]).joinpath("changed-files.txt").read_text().splitlines() if x.strip()]
+          changed=[x.strip() for x in Path(os.environ["RUNNER_TEMP"]).joinpath("changed-files.txt").read_text().splitlines() if x.strip()]
+          c=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
+          allowed=set(c["allowed_paths"])
+          for p in changed:
+              if p not in allowed:
+                  print(p)
+          PY
+
+          if [[ -s "$RUNNER_TEMP/disallowed-files.txt" ]]; then
+            echo "Free worker touched disallowed paths; reverting them fail-closed:" >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r file; do
+              [[ -n "$file" ]] || continue
+              echo "- $file" >> "$GITHUB_STEP_SUMMARY"
+              if git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+                git restore --source=HEAD --staged --worktree -- "$file"
+              else
+                rm -rf -- "$file"
+              fi
+            done < "$RUNNER_TEMP/disallowed-files.txt"
+          fi
+
+          mapfile -t safe_changed < <(git diff --name-only)
+          if [[ "${#safe_changed[@]}" -eq 0 ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Only disallowed edits were produced; all were reverted safely." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          printf '%s\n' "${safe_changed[@]}" > "$RUNNER_TEMP/changed-files-safe.txt"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          changed=[x.strip() for x in Path(os.environ["RUNNER_TEMP"]).joinpath("changed-files-safe.txt").read_text().splitlines() if x.strip()]
           c=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
           allowed=set(c["allowed_paths"])
           bad=[p for p in changed if p not in allowed]
           if bad:
-              raise SystemExit("FREE_WORKER_CHANGED_DISALLOWED_PATHS: "+", ".join(bad))
-          print("worker file boundaries verified:", ", ".join(changed))
+              raise SystemExit("BOUNDARY_REVERT_FAILED: "+", ".join(bad))
+          print("worker file boundaries verified after safe revert:", ", ".join(changed))
           PY
           echo "changed=true" >> "$GITHUB_OUTPUT"
 
