@@ -95,6 +95,15 @@ class MovieStudioCoreTests(unittest.TestCase):
         with self.assertRaises(ProductionPolicyError):
             ledger.add_shot(Shot("S3", scene_id="SC-UNKNOWN"))
 
+    def test_from_dict_applies_migration_safe_scene_rule(self):
+        ledger = ProductionLedger("movie", episode_id="ep1")
+        ledger.add_shot(Shot("S1", scene_id=""))
+        data = ledger.to_dict()
+        # Simulate legacy data by removing scene_id entirely from S1
+        del data["shots"]["S1"]["scene_id"]
+        restored = ProductionLedger.from_dict(data)
+        self.assertEqual(restored.shots["S1"].scene_id, "")
+
     def test_validate_rejects_corrupted_scene_maps_and_dangling_scene_references(self):
         ledger = ProductionLedger("movie", episode_id="ep1")
         ledger.add_scene(Scene("SC1"))
