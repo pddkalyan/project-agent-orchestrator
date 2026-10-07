@@ -84,6 +84,41 @@ jobs:
             echo "Observable execution state only; private model chain-of-thought is not exposed."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Show observable agent work log
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("monitor/task_0005_agent_status.json").read_text(encoding="utf-8"))
+          cycle = data.get("last_cycle") or {}
+          print()
+          print("## Observable agent work log")
+          print()
+          print(f"**Last cycle outcome:** {cycle.get('outcome', 'not recorded')}  ")
+          duration = cycle.get("duration_seconds")
+          if isinstance(duration, int) and duration >= 0:
+              mins, secs = divmod(duration, 60)
+              print(f"**Last cycle duration:** {mins}m {secs}s  ")
+          else:
+              print(f"**Last cycle duration:** {cycle.get('duration_note', 'not recorded')}  ")
+          tests = cycle.get("tests") or {}
+          print(f"**Tests:** {tests.get('passed', '?')} passed / {tests.get('failed', '?')} failed  ")
+          print(f"**Reviews:** {cycle.get('review_summary', 'not recorded')}")
+          print()
+          print("| Phase | Observable action | Evidence |")
+          print("| --- | --- | --- |")
+          for item in data.get("work_log", []):
+              phase = str(item.get("phase", "")).replace("|", "\\|")
+              action = str(item.get("action", "")).replace("|", "\\|")
+              evidence = str(item.get("evidence", "")).replace("|", "\\|")
+              print(f"| {phase} | {action} | {evidence} |")
+          print()
+          print("This is an evidence-backed work/decision summary, not private chain-of-thought.")
+          PY
+
   preflight:
     name: 1 · Verify TASK-0005 scope
     needs: agent_identity
