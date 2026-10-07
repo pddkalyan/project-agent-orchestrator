@@ -1,0 +1,217 @@
+name: Movie Studio Jules Worker
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - synchronize
+    paths:
+      - "tasks/dispatch/task_0005_free_worker_trigger.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: task-0005-jules-dispatch
+  cancel-in-progress: false
+
+jobs:
+  jules_worker:
+    name: "PRIMARY WORKER · Jules"
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'feature/TASK-0005-movie-studio-core' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+      REPO_OWNER: pddkalyan
+      REPO_NAME: project-agent-orchestrator
+      STARTING_BRANCH: feature/TASK-0005-movie-studio-core
+      CONTRACT_FILE: tasks/worker/task_0005_free_worker_contract.json
+    steps:
+      - name: Checkout TASK-0005 control branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/TASK-0005-movie-studio-core
+          fetch-depth: 0
+
+      - name: Validate Jules zero-incremental-spend contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${JULES_API_KEY:-}" || { echo "BLOCKED_JULES_API_KEY_MISSING" >&2; exit 76; }
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          c=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
+          assert c["task_id"] == "TASK-0005"
+          assert c["spend_limit_usd"] == 0
+          assert c["provider_billing_allowed"] is False
+          assert c["openai_routine_worker_allowed"] is False
+          assert c["primary_worker_family"] == "Google Jules coding agent"
+          assert "merge or auto-merge" in c["forbidden"]
+          print("Jules worker contract verified.")
+          PY
+
+      - name: Create and monitor Jules coding session
+        id: jules
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, sys, time, urllib.request, urllib.error
+          from pathlib import Path
+
+          API="https://jules.googleapis.com/v1alpha"
+          KEY=os.environ["JULES_API_KEY"]
+          OWNER=os.environ["REPO_OWNER"]
+          REPO=os.environ["REPO_NAME"]
+          BRANCH=os.environ["STARTING_BRANCH"]
+          headers={"X-Goog-Api-Key":KEY,"Content-Type":"application/json"}
+
+          def request(method, url, body=None):
+              data=None if body is None else json.dumps(body).encode()
+              req=urllib.request.Request(url, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as r:
+                      raw=r.read()
+                      return {} if not raw else json.loads(raw)
+              except urllib.error.HTTPError as e:
+                  detail=e.read().decode("utf-8","replace")
+                  raise SystemExit(f"JULES_API_HTTP_{e.code}: {detail[:1200]}")
+
+          sources=request("GET", f"{API}/sources?pageSize=100").get("sources",[])
+          source=None
+          for s in sources:
+              gh=s.get("githubRepo") or {}
+              if gh.get("owner")==OWNER and gh.get("repo")==REPO:
+                  source=s
+                  break
+          if not source:
+              raise SystemExit("BLOCKED_JULES_SOURCE_NOT_CONNECTED")
+
+          branch_names={b.get("displayName") for b in (source.get("githubRepo") or {}).get("branches",[])}
+          if branch_names and BRANCH not in branch_names:
+              raise SystemExit(f"BLOCKED_JULES_BRANCH_NOT_VISIBLE: {BRANCH}")
+
+          contract=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
+          allowed="\n".join(f"- {p}" for p in contract["allowed_paths"])
+          priorities="\n".join(f"- {p}" for p in contract["next_work_priority"])
+          prompt=f"""You are the PRIMARY CODING AGENT for TASK-0005 Movie Studio.
+
+Read AGENTS.md, GEMINI.md, the TASK-0005 architecture, schema, core implementation, tests, review evidence, and worker contract before changing anything.
+
+Implement the next highest-priority unfinished SAFE engineering increment:
+{priorities}
+
+Hard boundaries:
+- Incremental spend must remain USD 0.00. Do not enable paid APIs, provider billing, or paid fallbacks.
+- Do not perform real media generation and do not use local video inference.
+- Do not modify TASK-0004.
+- Do not merge anything.
+- Preserve provider-neutral architecture, durable/idempotent state, semantic QA gates, provenance, and crash-safe recovery.
+- Add or strengthen deterministic tests for every new invariant.
+- Never weaken an existing test merely to make CI green.
+- If CI on your pull request fails, diagnose the actual failure and repair your PR; keep iterating until CI is green or a genuine external blocker is reached.
+
+You may modify ONLY these files:
+{allowed}
+
+Do not modify workflows, dispatch files, memory/*, secrets, monitor control files, or any other path.
+Create a focused pull request against the starting branch. Do not target main directly.
+"""
+
+          payload={
+              "prompt":prompt,
+              "title":"TASK-0005 Movie Studio verified implementation increment",
+              "sourceContext":{
+                  "source":source["name"],
+                  "githubRepoContext":{"startingBranch":BRANCH}
+              },
+              "requirePlanApproval":False,
+              "automationMode":"AUTO_CREATE_PR"
+          }
+          session=request("POST", f"{API}/sessions", payload)
+          sid=session.get("id") or (session.get("name","").split("/")[-1])
+          if not sid:
+              raise SystemExit("JULES_SESSION_CREATE_RETURNED_NO_ID")
+
+          Path("jules-session.json").write_text(json.dumps({
+              "id":sid,
+              "name":session.get("name"),
+              "url":session.get("url"),
+              "state":session.get("state"),
+              "source":source.get("name"),
+              "startingBranch":BRANCH
+          },indent=2)+"\n",encoding="utf-8")
+
+          print(f"Jules session: {session.get('url','(URL pending)')}")
+          terminal={"COMPLETED","FAILED"}
+          last=None
+          deadline=time.time()+55*60
+
+          while time.time()<deadline:
+              current=request("GET", f"{API}/sessions/{sid}")
+              state=current.get("state","STATE_UNSPECIFIED")
+              if state != last:
+                  print(f"Jules state: {state}")
+                  last=state
+              Path("jules-session.json").write_text(json.dumps({
+                  "id":sid,
+                  "name":current.get("name"),
+                  "url":current.get("url"),
+                  "state":state,
+                  "outputs":current.get("outputs",[]),
+                  "source":source.get("name"),
+                  "startingBranch":BRANCH
+              },indent=2)+"\n",encoding="utf-8")
+              if state in terminal:
+                  if state=="FAILED":
+                      acts=request("GET", f"{API}/sessions/{sid}/activities?pageSize=100").get("activities",[])
+                      reasons=[a.get("sessionFailed",{}).get("reason") for a in acts if a.get("sessionFailed")]
+                      raise SystemExit("JULES_SESSION_FAILED: "+(" | ".join(x for x in reasons if x) or "no reason supplied"))
+                  prs=[]
+                  for out in current.get("outputs",[]):
+                      pr=(out or {}).get("pullRequest") or {}
+                      if pr.get("url"):
+                          prs.append(pr["url"])
+                  with open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf-8") as fh:
+                      fh.write(f"session_id={sid}\n")
+                      fh.write(f"session_url={current.get('url','')}\n")
+                      fh.write(f"pr_url={(prs[-1] if prs else '')}\n")
+                  if not prs:
+                      print("Jules completed without creating a PR.")
+                  else:
+                      print("Jules PR:", prs[-1])
+                  sys.exit(0)
+              if state=="AWAITING_USER_FEEDBACK":
+                  raise SystemExit("JULES_AWAITING_USER_FEEDBACK")
+              time.sleep(30)
+
+          raise SystemExit("JULES_SESSION_MONITOR_TIMEOUT")
+          PY
+
+      - name: Upload Jules session evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task-0005-jules-session-${{ github.run_id }}
+          path: jules-session.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish Jules worker summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## TASK-0005 Jules primary worker"
+            echo
+            echo "**Session:** ${{ steps.jules.outputs.session_url }}"
+            echo "**Jules PR:** ${{ steps.jules.outputs.pr_url }}"
+            echo "**Starting branch:** feature/TASK-0005-movie-studio-core"
+            echo "**Spend guard:** USD 0 incremental / no paid API fallback"
+            echo
+            echo "Jules-created PRs are intentionally not auto-merged. Jules CI Fixer may repair CI failures on its own PR."
+          } >> "$GITHUB_STEP_SUMMARY"
