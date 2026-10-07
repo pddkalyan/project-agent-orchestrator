@@ -14,10 +14,10 @@
     "qa_regression_state_integrity_review",
     "zero_spend_security_continuity_review"
   ],
-  "current_phase": "IMPLEMENTING",
-  "current_work_item": "Implement schema-v3 controlled Movie Bible mutations with deterministic digests, idempotent CAS history, costumes/props, strict reference metadata, and dependent-shot invalidation",
-  "last_evidence_sha": "54346cc508cd583fd646a7c5a924b4be6b618d3e",
-  "note": "Observable phase metadata only. Prior 49-test provider increment passed fresh architecture, state, QA, and security pre-gates.",
+  "current_phase": "TESTING",
+  "current_work_item": "Verify schema-v3 controlled Movie Bible mutation, digest, history, reference metadata, relationship, and planning-freeze contracts",
+  "last_evidence_sha": "7b4fdc1174a7bf6edb146392a3bab236103c6652",
+  "note": "Observable phase metadata only. Candidate regression and corruption verification is in progress.",
   "last_cycle": {
     "outcome": "ACTIVE",
     "started_at_utc": "2026-10-07T03:41:50Z",
@@ -27,17 +27,12 @@
       "passed": 49,
       "failed": 0
     },
-    "review_summary": "Fresh pre-gate approvals from architecture, state integrity, QA, and zero-spend/security; controlled Movie Bible implementation authorized."
+    "review_summary": "Fresh pre-gate approvals from architecture, state integrity, QA, and zero-spend/security; candidate testing now in progress."
   },
   "work_log": [
     {
-      "phase": "IMPLEMENTING",
-      "action": "Published provider authorization, immutable attempt-history, retry/epoch integrity, and zero-cost dispatch contracts.",
-      "evidence": "Commit 89da44e7d14f0a49172d8b2fa6ded75d78b2ab03."
-    },
-    {
       "phase": "TESTING",
-      "action": "Ran deterministic TASK-0005 regression suite.",
+      "action": "Ran deterministic provider-authorization regression suite.",
       "evidence": "49 passed, 0 failed."
     },
     {
@@ -57,8 +52,13 @@
     },
     {
       "phase": "IMPLEMENTING",
-      "action": "Selected a provider-independent Movie Bible memory increment after the mandatory prior-evidence gate.",
-      "evidence": "Schema-v3 scope: controlled CAS mutations, canonical digests, strict opaque reference metadata, costumes/props, and stale-shot invalidation."
+      "action": "Implemented controlled construction-phase Movie Bible memory.",
+      "evidence": "Schema v3 candidate adds atomic CAS mutations, canonical SHA-256 digest/history, costumes/props, strict opaque references, relationship closure, and planning freeze."
+    },
+    {
+      "phase": "TESTING",
+      "action": "Started complete regression, compilation, schema, and corruption verification for the Movie Bible candidate.",
+      "evidence": "Candidate includes five new deterministic test groups and a dedicated review packet."
     }
   ]
 }
