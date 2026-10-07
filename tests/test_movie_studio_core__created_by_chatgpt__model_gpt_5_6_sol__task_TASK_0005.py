@@ -5,6 +5,8 @@ from pathlib import Path
 
 from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
     AttemptStatus,
+    ProviderAdapterRegistration,
+    ProviderCapability,
     FailureClass,
     Gate,
     GenerationJob,
@@ -56,13 +58,31 @@ class MovieStudioCoreTests(unittest.TestCase):
             charge_cap_enforced=cap,
         )
 
+    def register_provider(self, ledger, provider="afree"):
+        quote = self.quote(provider=provider)
+        adapter_key = f"{quote.provider_id}:{quote.adapter_id}:{quote.adapter_version}"
+        if adapter_key not in ledger.provider_adapters:
+            ledger.register_provider_adapter(
+                ProviderAdapterRegistration(
+                    provider_id=quote.provider_id,
+                    adapter_id=quote.adapter_id,
+                    adapter_version=quote.adapter_version,
+                    capabilities=frozenset([ProviderCapability.VIDEO]),
+                    cloud_execution=True,
+                    charge_cap_enforced=True,
+                    maximum_cost_usd_micros=0,
+                )
+            )
+        return quote
+
     def authorize_and_start(
         self, ledger, job_id="J1", provider_job_id="provider-1", provider="afree"
     ):
+        quote = self.register_provider(ledger, provider)
         attempt = len(ledger.jobs[job_id].attempt_history) + 1
         authorization = ledger.authorize_attempt(
             job_id,
-            self.quote(provider=provider),
+            quote,
         )
         ledger.start_generation(
             job_id,
@@ -367,7 +387,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         )
         ledger.authorize_attempt(
             "J1",
-            self.quote(),
+            self.register_provider(ledger),
         )
         authorized_payload = ledger.to_dict()
         attempt = authorized_payload["generation_jobs"]["J1"]["attempt_history"][0]
@@ -475,7 +495,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         )
         ledger.authorize_attempt(
             "J1",
-            self.quote(),
+            self.register_provider(ledger),
         )
         self.assertEqual({}, shot.reviews)
         self.assertFalse(shot.canonical)
@@ -636,18 +656,18 @@ class MovieStudioCoreTests(unittest.TestCase):
         )
         first = ledger.authorize_attempt(
             "J1",
-            self.quote(),
+            self.register_provider(ledger),
         )
         second = ledger.authorize_attempt(
             "J1",
-            self.quote(),
+            self.register_provider(ledger),
         )
         self.assertEqual(first, second)
         self.assertEqual(1, len(ledger.jobs["J1"].attempt_history))
         with self.assertRaises(ProductionPolicyError):
             ledger.authorize_attempt(
                 "J1",
-                self.quote(provider="changed"),
+                self.register_provider(ledger, provider="changed"),
             )
 
     def test_retry_preserves_first_attempt_and_rejects_late_callback(self):
@@ -731,7 +751,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         with self.assertRaises(ProductionPolicyError):
             ledger.authorize_attempt(
                 "J1",
-                self.quote(),
+                self.register_provider(ledger),
             )
 
     def test_authorized_and_running_checkpoints_round_trip(self):
@@ -745,7 +765,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         )
         ledger.authorize_attempt(
             "J1",
-            self.quote(),
+            self.register_provider(ledger),
         )
         restored = ProductionLedger.from_dict(copy.deepcopy(ledger.to_dict()))
         self.assertEqual(ledger.to_dict(), restored.to_dict())
@@ -768,7 +788,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         with self.assertRaises(ProductionPolicyError):
             running.authorize_attempt(
                 "J1",
-                self.quote(),
+                self.register_provider(running),
             )
 
     def test_corrupt_attempt_indexes_and_history_fail_closed(self):
@@ -782,7 +802,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         )
         ledger.authorize_attempt(
             "J1",
-            self.quote(),
+            self.register_provider(ledger),
         )
         baseline = ledger.to_dict()
         corruptions = []
@@ -815,7 +835,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         )
         authorization = ledger.authorize_attempt(
             "J1",
-            self.quote(),
+            self.register_provider(ledger),
         )
         before = ledger.to_dict()
         bad_receipt = ProviderSubmissionReceipt(
@@ -841,7 +861,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             idempotency_key="K1",
             input_fingerprint="F1",
         )
-        authorization = ledger.authorize_attempt("J1", self.quote())
+        authorization = ledger.authorize_attempt("J1", self.register_provider(ledger))
         blank = ProviderSubmissionReceipt(
             authorization.authorization_id,
             "J1",
@@ -879,7 +899,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             idempotency_key="K1",
             input_fingerprint="F1",
         )
-        ledger.authorize_attempt("J1", self.quote())
+        ledger.authorize_attempt("J1", self.register_provider(ledger))
         baseline = ledger.to_dict()
         for field, index_name, forged in (
             ("authorization_id", "authorization_index", "forged-auth"),
@@ -905,7 +925,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             idempotency_key="K1",
             input_fingerprint="F1",
         )
-        authorization = ledger.authorize_attempt("J1", self.quote())
+        authorization = ledger.authorize_attempt("J1", self.register_provider(ledger))
         ledger.jobs["J1"].attempt_history = (
             ledger.jobs["J1"].attempt_history[0].__class__(
                 attempt_number=1,
@@ -941,9 +961,10 @@ class MovieStudioCoreTests(unittest.TestCase):
             input_fingerprint="F1",
         )
         job.max_attempts = 0
+        self.register_provider(ledger)
         before = copy.deepcopy(ledger)
         with self.assertRaises(ProductionPolicyError):
-            ledger.authorize_attempt("J1", self.quote())
+            ledger.authorize_attempt("J1", self.register_provider(ledger))
         self.assertEqual(before, ledger)
 
     def test_generation_owner_lifecycle_is_verified_on_restore(self):
@@ -985,7 +1006,7 @@ class MovieStudioCoreTests(unittest.TestCase):
                 idempotency_key="K1",
                 input_fingerprint="F1",
             )
-            authorizations.append(ledger.authorize_attempt("J1", self.quote()))
+            authorizations.append(ledger.authorize_attempt("J1", self.register_provider(ledger)))
         self.assertNotEqual(
             authorizations[0].provider_request_key,
             authorizations[1].provider_request_key,
@@ -1019,7 +1040,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             idempotency_key="K3",
             input_fingerprint="F1",
         )
-        ledger.authorize_attempt("J3", self.quote())
+        ledger.authorize_attempt("J3", self.register_provider(ledger))
         baseline = ledger.to_dict()
         self.assertEqual(
             [1, 2, 3],
@@ -1109,6 +1130,120 @@ class MovieStudioCoreTests(unittest.TestCase):
         payload_malformed_scene["scenes"] = {"SC1": {"scene_id": "SC1", "status": "FAKE_STATUS"}}
         with self.assertRaises(ProductionPolicyError):
             ProductionLedger.from_dict(payload_malformed_scene)
+
+
+    def test_register_provider_adapter_success_and_duplicates(self):
+        ledger = ProductionLedger("movie")
+        adapter = ProviderAdapterRegistration(
+            provider_id="prov1",
+            adapter_id="ad1",
+            adapter_version="v1",
+            capabilities=frozenset([ProviderCapability.VIDEO])
+        )
+        ledger.register_provider_adapter(adapter)
+        # exact duplicate is fine
+        ledger.register_provider_adapter(adapter)
+
+        # conflicting duplicate fails
+        conflict = ProviderAdapterRegistration(
+            provider_id="prov1",
+            adapter_id="ad1",
+            adapter_version="v1",
+            capabilities=frozenset([ProviderCapability.TEXT])
+        )
+        with self.assertRaises(ProductionPolicyError) as cx:
+            ledger.register_provider_adapter(conflict)
+        self.assertIn("conflicting", str(cx.exception))
+
+    def test_register_provider_adapter_rejects_invalid_values(self):
+        ledger = ProductionLedger("movie")
+        # missing capability
+        with self.assertRaises(ProductionPolicyError):
+            ledger.register_provider_adapter(ProviderAdapterRegistration(
+                "prov", "ad", "v1", frozenset()
+            ))
+        # local execution
+        with self.assertRaises(ProductionPolicyError):
+            ledger.register_provider_adapter(ProviderAdapterRegistration(
+                "prov", "ad", "v1", frozenset([ProviderCapability.VIDEO]), cloud_execution=False
+            ))
+        # no charge cap
+        with self.assertRaises(ProductionPolicyError):
+            ledger.register_provider_adapter(ProviderAdapterRegistration(
+                "prov", "ad", "v1", frozenset([ProviderCapability.VIDEO]), charge_cap_enforced=False
+            ))
+        # non-zero cost ceiling
+        with self.assertRaises(ProductionPolicyError):
+            ledger.register_provider_adapter(ProviderAdapterRegistration(
+                "prov", "ad", "v1", frozenset([ProviderCapability.VIDEO]), maximum_cost_usd_micros=100
+            ))
+        # blank identifiers
+        with self.assertRaises(ProductionPolicyError):
+            ledger.register_provider_adapter(ProviderAdapterRegistration(
+                "", "ad", "v1", frozenset([ProviderCapability.VIDEO])
+            ))
+
+    def test_provider_registry_migration_safe_restore(self):
+        ledger = ProductionLedger("movie")
+        adapter = ProviderAdapterRegistration(
+            provider_id="prov1",
+            adapter_id="ad1",
+            adapter_version="v1",
+            capabilities=frozenset([ProviderCapability.VIDEO])
+        )
+        ledger.register_provider_adapter(adapter)
+        data = ledger.to_dict()
+
+        # remove it to simulate old checkpoint
+        del data["provider_adapters"]
+        restored = ProductionLedger.from_dict(data)
+        self.assertEqual(restored.provider_adapters, {})
+
+        # full restore
+        data2 = ledger.to_dict()
+        restored2 = ProductionLedger.from_dict(data2)
+        self.assertIn("prov1:ad1:v1", restored2.provider_adapters)
+        self.assertEqual(restored2.provider_adapters["prov1:ad1:v1"], adapter)
+
+    def test_authorize_attempt_blocked_without_registration(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        job = ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="ik1",
+            input_fingerprint="fp1"
+        )
+        quote = ProviderQuote(
+            quote_id="q1", provider_id="p1", adapter_id="a1", adapter_version="v1",
+            request_fingerprint="fp1", estimated_cost_usd_micros=0,
+            maximum_cost_usd_micros=0, available=True, cloud_execution=True, charge_cap_enforced=True
+        )
+        with self.assertRaises(ProductionPolicyError) as cx:
+            ledger.authorize_attempt("J1", quote)
+        self.assertIn("provider adapter not registered", str(cx.exception))
+
+        # Register and try again
+        ledger.register_provider_adapter(ProviderAdapterRegistration(
+            "p1", "a1", "v1", frozenset([ProviderCapability.VIDEO])
+        ))
+        auth = ledger.authorize_attempt("J1", quote)
+        self.assertEqual(auth.job_id, "J1")
+
+        # Test capability enforcement
+        ledger2 = ProductionLedger("movie")
+        ledger2.add_scene(Scene("SC1"))
+        ledger2.add_shot(Shot("S1", scene_id="SC1"))
+        job = ledger2.submit_generation(
+            job_id="J1", shot_id="S1", idempotency_key="ik1", input_fingerprint="fp1"
+        )
+        ledger2.register_provider_adapter(ProviderAdapterRegistration(
+            "p1", "a1", "v1", frozenset([ProviderCapability.TEXT])
+        ))
+        with self.assertRaises(ProductionPolicyError) as cx:
+            ledger2.authorize_attempt("J1", quote)
+        self.assertIn("does not support video generation", str(cx.exception))
 
     def test_corrupted_in_memory_enum_values_fail_validation(self):
         ledger = ProductionLedger("movie")
