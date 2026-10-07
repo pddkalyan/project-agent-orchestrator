@@ -10,6 +10,7 @@ on:
       - reopened
       - ready_for_review
     paths:
+      - "monitor/task_0005_agent_status.json"
       - "scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py"
       - "tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py"
       - "schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json"
@@ -28,8 +29,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  agent_identity:
+    name: "0 · Agent: ChatGPT · gpt-5.6-sol"
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'feature/TASK-0005-movie-studio-core' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      execution_state: ${{ steps.status.outputs.execution_state }}
+      current_phase: ${{ steps.status.outputs.current_phase }}
+      agent_name: ${{ steps.status.outputs.agent_name }}
+      agent_model: ${{ steps.status.outputs.agent_model }}
+      current_work_item: ${{ steps.status.outputs.current_work_item }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+
+      - name: Read observable agent status
+        id: status
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("monitor/task_0005_agent_status.json").read_text(encoding="utf-8"))
+          assert data["task_id"] == "TASK-0005"
+          assert data["active_pr"] == 8
+          assert data["primary_agent"]["model"] == "gpt-5.6-sol"
+          def out(key, value):
+              value = str(value).replace("\\n", " ").replace("\\r", " ")
+              print(f"{key}={value}")
+          out("execution_state", data["execution_state"])
+          out("current_phase", data["current_phase"])
+          out("agent_name", data["primary_agent"]["name"])
+          out("agent_model", data["primary_agent"]["model"])
+          out("current_work_item", data["current_work_item"])
+          PY
+
+      - name: Show who is working
+        shell: bash
+        run: |
+          {
+            echo "## Active Movie Studio agent"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Agent | ${{ steps.status.outputs.agent_name }} |"
+            echo "| Model | ${{ steps.status.outputs.agent_model }} |"
+            echo "| Execution state | ${{ steps.status.outputs.execution_state }} |"
+            echo "| Current phase | ${{ steps.status.outputs.current_phase }} |"
+            echo "| Work item | ${{ steps.status.outputs.current_work_item }} |"
+            echo
+            echo "Observable execution state only; private model chain-of-thought is not exposed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   preflight:
     name: 1 · Verify TASK-0005 scope
+    needs: agent_identity
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'feature/TASK-0005-movie-studio-core' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -165,6 +222,7 @@ jobs:
     name: 5 · Integration evidence gate
     if: ${{ always() }}
     needs:
+      - agent_identity
       - preflight
       - architecture_review
       - policy_review
@@ -175,6 +233,11 @@ jobs:
       - name: Publish monitor summary
         shell: bash
         env:
+          AGENT: ${{ needs.agent_identity.outputs.agent_name }}
+          MODEL: ${{ needs.agent_identity.outputs.agent_model }}
+          EXECUTION_STATE: ${{ needs.agent_identity.outputs.execution_state }}
+          PHASE: ${{ needs.agent_identity.outputs.current_phase }}
+          WORK_ITEM: ${{ needs.agent_identity.outputs.current_work_item }}
           PREFLIGHT: ${{ needs.preflight.result }}
           ARCHITECTURE: ${{ needs.architecture_review.result }}
           POLICY: ${{ needs.policy_review.result }}
@@ -183,6 +246,12 @@ jobs:
         run: |
           {
             echo "## TASK-0005 Movie Studio monitor"
+            echo
+            echo "**Agent:** ${AGENT}"
+            echo "**Model:** ${MODEL}"
+            echo "**Observable state:** ${EXECUTION_STATE}"
+            echo "**Current phase:** ${PHASE}"
+            echo "**Work item:** ${WORK_ITEM}"
             echo
             echo "| Gate | Result |"
             echo "| --- | --- |"
