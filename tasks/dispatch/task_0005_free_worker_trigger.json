@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 2,
+  "sequence": 3,
   "batch_cycle": 1,
   "batch_size": 4,
   "mode": "continuous_free_worker_batch",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "Retry free-worker batch immediately with per-model zero-cost quota fallback after gemini-3.8-flash daily quota exhaustion",
+  "reason": "Retry after hardening free-worker timeout, fallback visibility, and candidate-patch preservation; continue zero-cost TASK-0005 implementation.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false
 }
