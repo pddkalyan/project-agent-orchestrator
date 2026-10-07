@@ -183,8 +183,6 @@ jobs:
           last=None
           feedback_rounds=0
           max_feedback_rounds=3
-          failure_recovery_rounds=0
-          max_failure_recovery_rounds=2
           resume_waiting_for_reactivation=bool(resume_sid)
           resume_started=time.time()
           deadline=time.time()+55*60
@@ -215,42 +213,12 @@ jobs:
               if state in terminal:
                   if state=="FAILED":
                       acts=request("GET", f"{API}/sessions/{sid}/activities?pageSize=100").get("activities",[])
-                      reasons=[a.get("sessionFailed",{}).get("reason") for a in acts if a.get("sessionFailed")]
-                      reason_text=(" | ".join(x for x in reasons if x) or "no reason supplied")
-                      failure_recovery_rounds += 1
                       Path("jules-session-activities.json").write_text(
-                          json.dumps({
-                              "session_id":sid,
-                              "failure_recovery_round":failure_recovery_rounds,
-                              "reason":reason_text,
-                              "activities":acts
-                          },indent=2)+"\n",
+                          json.dumps({"session_id":sid,"activities":acts},indent=2)+"\\n",
                           encoding="utf-8"
                       )
-                      low=reason_text.lower()
-                      hard_blocker=any(token in low for token in (
-                          "quota","rate limit","billing","payment","permission",
-                          "unauthorized","forbidden","credential","authentication"
-                      ))
-                      if hard_blocker:
-                          raise SystemExit("JULES_EXTERNAL_BLOCKER: "+reason_text)
-                      if failure_recovery_rounds > max_failure_recovery_rounds:
-                          raise SystemExit("JULES_FAILURE_RECOVERY_EXHAUSTED: "+reason_text)
-                      recovery_prompt="\n".join([
-                          "Recover from your failed TASK-0005 attempt and continue autonomously.",
-                          f"Observed Jules failure: {reason_text}",
-                          "Inspect your own previous work and failure context. Preserve correct work, remove scratch/helper/junk files, and fix the actual root cause.",
-                          "Stay strictly inside the allowed files and current narrow task scope.",
-                          "Run the full deterministic Movie Studio tests before finishing.",
-                          "Do not weaken tests, spend money, enable billing, use local video inference, expose secrets, or merge anything.",
-                          "If an ordinary implementation choice is needed, choose the smallest safe reversible option and continue without asking the user."
-                      ])
-                      print(f"Attempting bounded Jules failure recovery {failure_recovery_rounds}/{max_failure_recovery_rounds}: {reason_text[:800]}")
-                      request("POST", f"{API}/sessions/{sid}:sendMessage", {"prompt":recovery_prompt})
-                      resume_waiting_for_reactivation=True
-                      resume_started=time.time()
-                      time.sleep(8)
-                      continue
+                      reasons=[a.get("sessionFailed",{}).get("reason") for a in acts if a.get("sessionFailed")]
+                      raise SystemExit("JULES_SESSION_FAILED: "+(" | ".join(x for x in reasons if x) or "no reason supplied"))
                   prs=[]
                   for out in current.get("outputs",[]):
                       pr=(out or {}).get("pullRequest") or {}
