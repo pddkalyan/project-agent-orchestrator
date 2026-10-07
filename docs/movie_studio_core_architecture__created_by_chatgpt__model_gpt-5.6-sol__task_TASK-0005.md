@@ -33,7 +33,15 @@ Retryable failures return a shot to planned state. Exhaustion blocks it. Restore
 
 The versioned checkpoint envelope and the checked-in JSON Schema are one contract. It includes the immutable zero-spend and production-policy constants, Movie Bible, shot map, generation-job map, and exact idempotency index. Unknown schema versions, changed production constants, key/embedded-ID mismatches, impossible job evidence, stale canonical evidence, and non-bijective indexes fail closed.
 
-Only one queued, running, or retryable generation job may own a shot. Starting that job invalidates prior reviews, canonical state, and upscale authorization before any new callback can be accepted. This prevents an older concurrent callback from overwriting a newer result. A future adapter increment will add immutable per-attempt provider authorization receipts and restart reconciliation for in-flight cloud jobs.
+Only one queued, authorized, running, or retryable generation job may own a shot. Authorization advances a monotonic shot generation epoch and invalidates prior candidate/review/canonical state before provider submission.
+
+Every provider attempt now requires a persisted, immutable authorization bound to the exact job, shot, epoch, attempt number, provider, adapter/version, quote, input fingerprint, stable provider request key, zero maximum cost, cloud execution, and an enforced charge cap. A matching provider submission receipt is the only path into RUNNING. Retry attempts append frozen history instead of overwriting earlier provider IDs, failures, or outputs. In this offline core, quotes, authorizations, and receipts are deterministic policy records—not external proof. A trusted adapter registry and issuer boundary are mandatory before live activation.
+
+Checkpoint schema version 2 intentionally replaces the unreleased version-1 prototype. Version-1 checkpoints fail closed rather than receiving fabricated authorization evidence; no live production was activated on version 1.
+
+Provider callbacks carry attempt number and provider job ID. Late events from an earlier retry or old generation epoch fail without changing state; identical terminal callbacks are idempotent and conflicting duplicates are rejected. Restored AUTHORIZED state retains its stable request key for provider-side lookup. Restored RUNNING state accepts only an exact idempotent replay of its recorded receipt and rejects conflicting submission evidence.
+
+This is still an offline contract. No provider adapter is registered or called, no credentials are persisted, and live activation remains blocked until a legitimate adapter implements idempotent submit/reconcile and passes counting-spy plus real account tests.
 
 ## Storage and completion
 

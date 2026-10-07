@@ -2,14 +2,16 @@
 
 Creator: ChatGPT
 Model: GPT-5.6 Sol
-Run: 20261006_TASK_0005_RESUMABLE_LEDGER
+Run: 20261007_TASK_0005_PROVIDER_AUTHORIZATION
 No provider/network calls belong in this module.
 """
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
-from typing import Dict, FrozenSet, Iterable, Mapping, Optional
+from hashlib import sha256
+import json
+from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Protocol, Tuple
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PRODUCTION_CONTRACT = {
     "aspect_ratio": "16:9",
     "target_episode_minutes": 20,
@@ -44,10 +46,25 @@ class ShotStatus(str, Enum):
 
 class JobStatus(str, Enum):
     QUEUED = "QUEUED"
+    AUTHORIZED = "AUTHORIZED"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     RETRYABLE = "RETRYABLE"
     EXHAUSTED = "EXHAUSTED"
+
+
+class AttemptStatus(str, Enum):
+    AUTHORIZED = "AUTHORIZED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
+class FailureClass(str, Enum):
+    RETRYABLE_PROVIDER = "RETRYABLE_PROVIDER"
+    NON_RETRYABLE_PROVIDER = "NON_RETRYABLE_PROVIDER"
+    POLICY = "POLICY"
+    INVALID_INPUT = "INVALID_INPUT"
 
 
 class ProductionPolicyError(ValueError):
@@ -70,6 +87,8 @@ class Shot:
     reviews: Dict[Gate, Review] = field(default_factory=dict)
     canonical: bool = False
     upscale_allowed: bool = False
+    generation_epoch: int = 0
+    generation_owner_job_id: Optional[str] = None
 
     def bind_generated_asset(self, asset_version: str) -> None:
         if not asset_version:
@@ -84,9 +103,71 @@ class Shot:
 
 @dataclass(frozen=True)
 class ProviderQuote:
-    provider: str
+    quote_id: str
+    provider_id: str
+    adapter_id: str
+    adapter_version: str
+    request_fingerprint: str
     estimated_cost_usd_micros: int
-    available: bool = True
+    maximum_cost_usd_micros: int
+    available: bool
+    cloud_execution: bool
+    charge_cap_enforced: bool
+
+
+@dataclass(frozen=True)
+class AttemptAuthorization:
+    authorization_id: str
+    job_id: str
+    shot_id: str
+    generation_epoch: int
+    attempt_number: int
+    provider_id: str
+    adapter_id: str
+    adapter_version: str
+    quote_id: str
+    input_fingerprint: str
+    provider_request_key: str
+    maximum_cost_usd_micros: int
+    cloud_execution: bool
+    charge_cap_enforced: bool
+
+
+@dataclass(frozen=True)
+class GenerationAttempt:
+    attempt_number: int
+    authorization: AttemptAuthorization
+    status: AttemptStatus
+    provider_job_id: Optional[str] = None
+    output_asset_version: Optional[str] = None
+    failure_class: Optional[FailureClass] = None
+    failure_reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ProviderSubmissionReceipt:
+    authorization_id: str
+    job_id: str
+    attempt_number: int
+    provider_id: str
+    adapter_id: str
+    adapter_version: str
+    provider_request_key: str
+    provider_job_id: str
+
+
+class GenerationProviderAdapter(Protocol):
+    """Provider-neutral boundary; implementations keep credentials outside state."""
+
+    provider_id: str
+    adapter_id: str
+    adapter_version: str
+
+    def submit(
+        self, authorization: AttemptAuthorization
+    ) -> ProviderSubmissionReceipt: ...
+
+    def reconcile(self, provider_request_key: str) -> ProviderSubmissionReceipt: ...
 
 
 @dataclass
@@ -101,44 +182,157 @@ class GenerationJob:
     provider_job_id: Optional[str] = None
     output_asset_version: Optional[str] = None
     last_error: Optional[str] = None
+    generation_epoch: Optional[int] = None
+    attempt_history: Tuple[GenerationAttempt, ...] = ()
 
-    def start(self, provider_job_id: str) -> None:
+    def _authorize(self, authorization: AttemptAuthorization) -> None:
         if type(self.max_attempts) is not int or self.max_attempts < 1:
             raise ProductionPolicyError("invalid generation retry ceiling")
-        if (
-            type(self.attempts) is not int
-            or self.attempts < 0
-            or self.attempts >= self.max_attempts
-        ):
-            raise ProductionPolicyError("invalid generation attempt count")
         if self.status not in {JobStatus.QUEUED, JobStatus.RETRYABLE}:
-            raise ProductionPolicyError("generation job cannot start from current status")
-        if not provider_job_id:
+            raise ProductionPolicyError("generation job cannot authorize from current status")
+        expected_attempt = len(self.attempt_history) + 1
+        if expected_attempt > self.max_attempts:
+            raise ProductionPolicyError("generation retry ceiling reached")
+        if (
+            authorization.job_id != self.job_id
+            or authorization.shot_id != self.shot_id
+            or authorization.input_fingerprint != self.input_fingerprint
+            or authorization.attempt_number != expected_attempt
+            or (
+                self.generation_epoch is not None
+                and authorization.generation_epoch != self.generation_epoch
+            )
+            or (
+                self.generation_epoch is None
+                and (
+                    expected_attempt != 1
+                    or type(authorization.generation_epoch) is not int
+                    or authorization.generation_epoch < 1
+                )
+            )
+        ):
+            raise ProductionPolicyError("authorization does not bind to generation job")
+        self.generation_epoch = authorization.generation_epoch
+        self.attempt_history = self.attempt_history + (
+            GenerationAttempt(
+                attempt_number=expected_attempt,
+                authorization=authorization,
+                status=AttemptStatus.AUTHORIZED,
+            ),
+        )
+        self.attempts = len(self.attempt_history)
+        self.status = JobStatus.AUTHORIZED
+        self.provider_job_id = None
+        self.output_asset_version = None
+        self.last_error = None
+
+    def _start(self, receipt: ProviderSubmissionReceipt) -> None:
+        if self.status is JobStatus.RUNNING and self.attempt_history:
+            current = self.attempt_history[-1]
+            auth = current.authorization
+            if (
+                current.status is AttemptStatus.RUNNING
+                and receipt.authorization_id == auth.authorization_id
+                and receipt.job_id == self.job_id
+                and receipt.attempt_number == current.attempt_number
+                and receipt.provider_id == auth.provider_id
+                and receipt.adapter_id == auth.adapter_id
+                and receipt.adapter_version == auth.adapter_version
+                and receipt.provider_request_key == auth.provider_request_key
+                and receipt.provider_job_id == current.provider_job_id
+            ):
+                return
+            raise ProductionPolicyError("conflicting duplicate provider receipt")
+        if self.status is not JobStatus.AUTHORIZED or not self.attempt_history:
+            raise ProductionPolicyError("generation job lacks current authorization")
+        current = self.attempt_history[-1]
+        auth = current.authorization
+        if (
+            current.status is not AttemptStatus.AUTHORIZED
+            or type(receipt) is not ProviderSubmissionReceipt
+            or receipt.authorization_id != auth.authorization_id
+            or receipt.job_id != self.job_id
+            or receipt.attempt_number != current.attempt_number
+            or receipt.provider_id != auth.provider_id
+            or receipt.adapter_id != auth.adapter_id
+            or receipt.adapter_version != auth.adapter_version
+            or receipt.provider_request_key != auth.provider_request_key
+        ):
+            raise ProductionPolicyError("provider receipt does not match authorization")
+        if (
+            not isinstance(receipt.provider_job_id, str)
+            or not receipt.provider_job_id.strip()
+        ):
             raise ProductionPolicyError("provider job id must not be empty")
-        self.attempts += 1
-        self.provider_job_id = provider_job_id
+        self.attempt_history = self.attempt_history[:-1] + (
+            replace(
+                current,
+                status=AttemptStatus.RUNNING,
+                provider_job_id=receipt.provider_job_id,
+            ),
+        )
+        self.provider_job_id = receipt.provider_job_id
         self.status = JobStatus.RUNNING
         self.last_error = None
 
-    def succeed(self, asset_version: str) -> None:
-        if self.status is not JobStatus.RUNNING:
-            raise ProductionPolicyError("only a running generation job can succeed")
-        if not asset_version:
+    def _succeed(
+        self, attempt_number: int, provider_job_id: str, asset_version: str
+    ) -> None:
+        current = self._matching_running_attempt(attempt_number, provider_job_id)
+        if not isinstance(asset_version, str) or not asset_version:
             raise ProductionPolicyError("asset version must not be empty")
+        self.attempt_history = self.attempt_history[:-1] + (
+            replace(
+                current,
+                status=AttemptStatus.SUCCEEDED,
+                output_asset_version=asset_version,
+            ),
+        )
         self.output_asset_version = asset_version
         self.status = JobStatus.SUCCEEDED
 
-    def fail(self, reason: str) -> None:
-        if self.status is not JobStatus.RUNNING:
-            raise ProductionPolicyError("only a running generation job can fail")
-        if not reason:
+    def _fail(
+        self,
+        attempt_number: int,
+        provider_job_id: str,
+        failure_class: FailureClass,
+        reason: str,
+    ) -> None:
+        current = self._matching_running_attempt(attempt_number, provider_job_id)
+        if type(failure_class) is not FailureClass:
+            raise ProductionPolicyError("invalid failure class")
+        if not isinstance(reason, str) or not reason:
             raise ProductionPolicyError("failure reason must not be empty")
+        self.attempt_history = self.attempt_history[:-1] + (
+            replace(
+                current,
+                status=AttemptStatus.FAILED,
+                failure_class=failure_class,
+                failure_reason=reason,
+            ),
+        )
         self.last_error = reason
         self.status = (
             JobStatus.RETRYABLE
-            if self.attempts < self.max_attempts
+            if failure_class is FailureClass.RETRYABLE_PROVIDER
+            and self.attempts < self.max_attempts
             else JobStatus.EXHAUSTED
         )
+
+    def _matching_running_attempt(
+        self, attempt_number: int, provider_job_id: str
+    ) -> GenerationAttempt:
+        if self.status is not JobStatus.RUNNING or not self.attempt_history:
+            raise ProductionPolicyError("only a running generation job accepts callbacks")
+        current = self.attempt_history[-1]
+        if (
+            type(attempt_number) is not int
+            or current.attempt_number != attempt_number
+            or current.status is not AttemptStatus.RUNNING
+            or current.provider_job_id != provider_job_id
+        ):
+            raise ProductionPolicyError("stale or mismatched provider callback")
+        return current
 
 
 @dataclass
@@ -170,6 +364,8 @@ class ProductionLedger:
     shots: Dict[str, Shot] = field(default_factory=dict)
     jobs: Dict[str, GenerationJob] = field(default_factory=dict)
     idempotency_index: Dict[str, str] = field(default_factory=dict)
+    authorization_index: Dict[str, str] = field(default_factory=dict)
+    provider_request_index: Dict[str, str] = field(default_factory=dict)
 
     def add_shot(self, shot: Shot) -> None:
         if not shot.shot_id or shot.shot_id in self.shots:
@@ -205,7 +401,13 @@ class ProductionLedger:
             raise ProductionPolicyError("max attempts must be positive")
         if any(
             job.shot_id == shot_id
-            and job.status in {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYABLE}
+            and job.status
+            in {
+                JobStatus.QUEUED,
+                JobStatus.AUTHORIZED,
+                JobStatus.RUNNING,
+                JobStatus.RETRYABLE,
+            }
             for job in self.jobs.values()
         ):
             raise ProductionPolicyError("shot already has an active generation job")
@@ -220,29 +422,264 @@ class ProductionLedger:
         self.idempotency_index[idempotency_key] = job_id
         return job
 
-    def start_generation(self, job_id: str, provider_job_id: str) -> None:
+    def authorize_attempt(
+        self,
+        job_id: str,
+        quote: ProviderQuote,
+    ) -> AttemptAuthorization:
         job = self._job(job_id)
-        job.start(provider_job_id)
         shot = self.shots[job.shot_id]
+        self._validate_quote(job, quote)
+        if job.status is JobStatus.AUTHORIZED and job.attempt_history:
+            existing = job.attempt_history[-1]
+            auth = existing.authorization
+            provider_request_key = self._provider_request_key(
+                job, quote, existing.attempt_number, auth.generation_epoch
+            )
+            authorization_id = self._authorization_id(
+                provider_request_key, quote.quote_id
+            )
+            if (
+                auth.authorization_id != authorization_id
+                or auth.job_id != job.job_id
+                or auth.shot_id != job.shot_id
+                or auth.input_fingerprint != job.input_fingerprint
+                or auth.provider_request_key != provider_request_key
+                or auth.provider_id != quote.provider_id
+                or auth.adapter_id != quote.adapter_id
+                or auth.adapter_version != quote.adapter_version
+                or auth.quote_id != quote.quote_id
+            ):
+                raise ProductionPolicyError("authorization replay changed bound content")
+            return auth
+        if job.status not in {JobStatus.QUEUED, JobStatus.RETRYABLE}:
+            raise ProductionPolicyError("generation job cannot authorize from current status")
+        attempt_number = len(job.attempt_history) + 1
+        claims_new_epoch = job.generation_epoch is None
+        if claims_new_epoch:
+            generation_epoch = shot.generation_epoch + 1
+        elif (
+            shot.generation_owner_job_id != job.job_id
+            or shot.generation_epoch != job.generation_epoch
+        ):
+            raise ProductionPolicyError("generation ownership mismatch")
+        else:
+            generation_epoch = job.generation_epoch
+        provider_request_key = self._provider_request_key(
+            job, quote, attempt_number, generation_epoch
+        )
+        authorization_id = self._authorization_id(
+            provider_request_key, quote.quote_id
+        )
+        if provider_request_key in self.provider_request_index:
+            raise ProductionPolicyError("provider request key already used")
+
+        authorization = AttemptAuthorization(
+            authorization_id=authorization_id,
+            job_id=job.job_id,
+            shot_id=job.shot_id,
+            generation_epoch=generation_epoch,
+            attempt_number=attempt_number,
+            provider_id=quote.provider_id,
+            adapter_id=quote.adapter_id,
+            adapter_version=quote.adapter_version,
+            quote_id=quote.quote_id,
+            input_fingerprint=job.input_fingerprint,
+            provider_request_key=provider_request_key,
+            maximum_cost_usd_micros=0,
+            cloud_execution=True,
+            charge_cap_enforced=True,
+        )
+        job._authorize(authorization)
+        if claims_new_epoch:
+            shot.generation_epoch = generation_epoch
+            shot.generation_owner_job_id = job.job_id
+        ref = self._attempt_ref(job.job_id, attempt_number)
+        self.authorization_index[authorization_id] = ref
+        self.provider_request_index[provider_request_key] = ref
         shot.reviews.clear()
         shot.canonical = False
         shot.upscale_allowed = False
         shot.asset_version = ""
         shot.status = ShotStatus.GENERATING
+        return authorization
 
-    def finish_generation(self, job_id: str, asset_version: str) -> None:
+    def start_generation(
+        self, job_id: str, receipt: ProviderSubmissionReceipt
+    ) -> None:
         job = self._job(job_id)
-        job.succeed(asset_version)
+        if not job.attempt_history:
+            raise ProductionPolicyError("generation job lacks authorization history")
+        attempt = job.attempt_history[-1]
+        self._validate_attempt(job, attempt, len(job.attempt_history))
+        auth = attempt.authorization
+        expected_request_key = self._provider_request_key_from_authorization(auth)
+        expected_authorization_id = self._authorization_id(
+            expected_request_key, auth.quote_id
+        )
+        ref = self._attempt_ref(job.job_id, attempt.attempt_number)
+        if (
+            auth.provider_request_key != expected_request_key
+            or auth.authorization_id != expected_authorization_id
+            or self.authorization_index.get(auth.authorization_id) != ref
+            or self.provider_request_index.get(auth.provider_request_key) != ref
+        ):
+            raise ProductionPolicyError("current authorization is not ledger-authenticated")
+        if (
+            job.generation_epoch != self.shots[job.shot_id].generation_epoch
+            or self.shots[job.shot_id].generation_owner_job_id != job.job_id
+        ):
+            raise ProductionPolicyError("generation ownership mismatch")
+        job._start(receipt)
+
+    def finish_generation(
+        self,
+        job_id: str,
+        attempt_number: int,
+        provider_job_id: str,
+        asset_version: str,
+    ) -> None:
+        job = self._job(job_id)
+        if job.status is JobStatus.SUCCEEDED and job.attempt_history:
+            latest = job.attempt_history[-1]
+            if (
+                latest.attempt_number == attempt_number
+                and latest.provider_job_id == provider_job_id
+                and latest.output_asset_version == asset_version
+            ):
+                return
+            raise ProductionPolicyError("conflicting duplicate success callback")
+        self._validate_generation_owner(job)
+        job._succeed(attempt_number, provider_job_id, asset_version)
         self.shots[job.shot_id].bind_generated_asset(asset_version)
 
-    def fail_generation(self, job_id: str, reason: str) -> None:
+    def fail_generation(
+        self,
+        job_id: str,
+        attempt_number: int,
+        provider_job_id: str,
+        failure_class: FailureClass,
+        reason: str,
+    ) -> None:
         job = self._job(job_id)
-        job.fail(reason)
+        if job.status in {JobStatus.RETRYABLE, JobStatus.EXHAUSTED} and job.attempt_history:
+            latest = job.attempt_history[-1]
+            if (
+                latest.attempt_number == attempt_number
+                and latest.provider_job_id == provider_job_id
+                and latest.failure_class is failure_class
+                and latest.failure_reason == reason
+            ):
+                return
+            raise ProductionPolicyError("conflicting duplicate failure callback")
+        self._validate_generation_owner(job)
+        job._fail(attempt_number, provider_job_id, failure_class, reason)
         self.shots[job.shot_id].status = (
             ShotStatus.BLOCKED
             if job.status is JobStatus.EXHAUSTED
             else ShotStatus.PLANNED
         )
+
+    def _validate_generation_owner(self, job: GenerationJob) -> None:
+        shot = self.shots[job.shot_id]
+        if (
+            job.generation_epoch != shot.generation_epoch
+            or shot.generation_owner_job_id != job.job_id
+        ):
+            raise ProductionPolicyError("stale generation owner")
+
+    @staticmethod
+    def _validate_quote(job: GenerationJob, quote: ProviderQuote) -> None:
+        if type(quote) is not ProviderQuote:
+            raise ProductionPolicyError("invalid provider quote type")
+        string_values = (
+            quote.quote_id,
+            quote.provider_id,
+            quote.adapter_id,
+            quote.adapter_version,
+            quote.request_fingerprint,
+        )
+        if any(
+            not isinstance(value, str) or not value.strip()
+            for value in string_values
+        ):
+            raise ProductionPolicyError("quote identifiers must be non-empty strings")
+        if (
+            type(quote.estimated_cost_usd_micros) is not int
+            or quote.estimated_cost_usd_micros != 0
+            or type(quote.maximum_cost_usd_micros) is not int
+            or quote.maximum_cost_usd_micros != 0
+            or quote.available is not True
+            or quote.cloud_execution is not True
+            or quote.charge_cap_enforced is not True
+            or quote.request_fingerprint != job.input_fingerprint
+        ):
+            raise ProductionPolicyError("quote is not eligible for zero-cost cloud execution")
+
+    @staticmethod
+    def _attempt_ref(job_id: str, attempt_number: int) -> str:
+        return f"{job_id}:{attempt_number}"
+
+    def _provider_request_key(
+        self,
+        job: GenerationJob,
+        quote: ProviderQuote,
+        attempt_number: int,
+        generation_epoch: int,
+    ) -> str:
+        material = json.dumps(
+            [
+                self.project_id,
+                job.job_id,
+                job.shot_id,
+                generation_epoch,
+                attempt_number,
+                quote.provider_id,
+                quote.adapter_id,
+                quote.adapter_version,
+                job.input_fingerprint,
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return "movie-studio-v2:" + sha256(material.encode("utf-8")).hexdigest()
+
+    def _provider_request_key_from_authorization(
+        self, authorization: AttemptAuthorization
+    ) -> str:
+        material = json.dumps(
+            [
+                self.project_id,
+                authorization.job_id,
+                authorization.shot_id,
+                authorization.generation_epoch,
+                authorization.attempt_number,
+                authorization.provider_id,
+                authorization.adapter_id,
+                authorization.adapter_version,
+                authorization.input_fingerprint,
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return "movie-studio-v2:" + sha256(material.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _authorization_id(provider_request_key: str, quote_id: str) -> str:
+        material = json.dumps(
+            [provider_request_key, quote_id],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return "authorization-v2:" + sha256(material.encode("utf-8")).hexdigest()
+
+    def _attempt_by_ref(self, ref: str) -> GenerationAttempt:
+        try:
+            job_id, attempt_text = ref.rsplit(":", 1)
+            attempt_number = int(attempt_text)
+            return self.jobs[job_id].attempt_history[attempt_number - 1]
+        except (KeyError, IndexError, ValueError) as exc:
+            raise ProductionPolicyError("corrupt attempt index") from exc
 
     def _job(self, job_id: str) -> GenerationJob:
         try:
@@ -258,7 +695,7 @@ class ProductionLedger:
                 return value.value
             if isinstance(value, dict):
                 return {enum_value(k): enum_value(v) for k, v in value.items()}
-            if isinstance(value, list):
+            if isinstance(value, (list, tuple)):
                 return [enum_value(v) for v in value]
             return value
 
@@ -272,6 +709,8 @@ class ProductionLedger:
             "shots": raw["shots"],
             "generation_jobs": raw["jobs"],
             "idempotency_index": raw["idempotency_index"],
+            "authorization_index": raw["authorization_index"],
+            "provider_request_index": raw["provider_request_index"],
         }
 
     @classmethod
@@ -294,6 +733,8 @@ class ProductionLedger:
             "shots",
             "generation_jobs",
             "idempotency_index",
+            "authorization_index",
+            "provider_request_index",
         }
         if not isinstance(data, Mapping) or set(data) != root_fields:
             raise ProductionPolicyError("production checkpoint fields mismatch")
@@ -338,6 +779,10 @@ class ProductionLedger:
             raise ProductionPolicyError("generation jobs must be a mapping")
         if not isinstance(data["idempotency_index"], Mapping):
             raise ProductionPolicyError("idempotency index must be a mapping")
+        if not isinstance(data["authorization_index"], Mapping):
+            raise ProductionPolicyError("authorization index must be a mapping")
+        if not isinstance(data["provider_request_index"], Mapping):
+            raise ProductionPolicyError("provider request index must be a mapping")
         ledger = cls(
             project_id=data["project_id"],
             bible=MovieBible(**bible_raw),
@@ -351,6 +796,8 @@ class ProductionLedger:
                 "reviews",
                 "canonical",
                 "upscale_allowed",
+                "generation_epoch",
+                "generation_owner_job_id",
             }
             if not isinstance(raw, Mapping) or set(raw) != shot_fields:
                 raise ProductionPolicyError("shot fields mismatch")
@@ -376,6 +823,8 @@ class ProductionLedger:
                 reviews=reviews,
                 canonical=raw["canonical"],
                 upscale_allowed=raw["upscale_allowed"],
+                generation_epoch=raw["generation_epoch"],
+                generation_owner_job_id=raw["generation_owner_job_id"],
             )
         for job_id, raw in data.get("generation_jobs", {}).items():
             job_fields = {
@@ -389,13 +838,63 @@ class ProductionLedger:
                 "provider_job_id",
                 "output_asset_version",
                 "last_error",
+                "generation_epoch",
+                "attempt_history",
             }
             if not isinstance(raw, Mapping) or set(raw) != job_fields:
                 raise ProductionPolicyError("generation-job fields mismatch")
             raw = dict(raw)
             raw["status"] = JobStatus(raw["status"])
+            attempts = []
+            for attempt_raw in raw["attempt_history"]:
+                if not isinstance(attempt_raw, Mapping) or set(attempt_raw) != {
+                    "attempt_number",
+                    "authorization",
+                    "status",
+                    "provider_job_id",
+                    "output_asset_version",
+                    "failure_class",
+                    "failure_reason",
+                }:
+                    raise ProductionPolicyError("generation-attempt fields mismatch")
+                auth_raw = attempt_raw["authorization"]
+                if not isinstance(auth_raw, Mapping) or set(auth_raw) != {
+                    "authorization_id",
+                    "job_id",
+                    "shot_id",
+                    "generation_epoch",
+                    "attempt_number",
+                    "provider_id",
+                    "adapter_id",
+                    "adapter_version",
+                    "quote_id",
+                    "input_fingerprint",
+                    "provider_request_key",
+                    "maximum_cost_usd_micros",
+                    "cloud_execution",
+                    "charge_cap_enforced",
+                }:
+                    raise ProductionPolicyError("attempt-authorization fields mismatch")
+                attempts.append(
+                    GenerationAttempt(
+                        attempt_number=attempt_raw["attempt_number"],
+                        authorization=AttemptAuthorization(**auth_raw),
+                        status=AttemptStatus(attempt_raw["status"]),
+                        provider_job_id=attempt_raw["provider_job_id"],
+                        output_asset_version=attempt_raw["output_asset_version"],
+                        failure_class=(
+                            FailureClass(attempt_raw["failure_class"])
+                            if attempt_raw["failure_class"] is not None
+                            else None
+                        ),
+                        failure_reason=attempt_raw["failure_reason"],
+                    )
+                )
+            raw["attempt_history"] = tuple(attempts)
             ledger.jobs[job_id] = GenerationJob(**raw)
         ledger.idempotency_index = dict(data.get("idempotency_index", {}))
+        ledger.authorization_index = dict(data.get("authorization_index", {}))
+        ledger.provider_request_index = dict(data.get("provider_request_index", {}))
         ledger.validate()
         return ledger
 
@@ -417,8 +916,21 @@ class ProductionLedger:
                 or type(shot.has_dialogue_or_audio) is not bool
                 or type(shot.canonical) is not bool
                 or type(shot.upscale_allowed) is not bool
+                or type(shot.generation_epoch) is not int
+                or shot.generation_epoch < 0
+                or (
+                    shot.generation_owner_job_id is not None
+                    and (
+                        not isinstance(shot.generation_owner_job_id, str)
+                        or not shot.generation_owner_job_id
+                    )
+                )
             ):
                 raise ProductionPolicyError("invalid shot field type")
+            if (shot.generation_epoch == 0) != (
+                shot.generation_owner_job_id is None
+            ):
+                raise ProductionPolicyError("shot generation ownership is inconsistent")
             validate_review_binding(shot, allow_empty=True)
             if shot.canonical != (shot.status is ShotStatus.CANONICAL):
                 raise ProductionPolicyError("canonical flag/status mismatch")
@@ -442,6 +954,8 @@ class ProductionLedger:
                 raise ProductionPolicyError("inactive shot retains approval evidence")
 
         derived_index: Dict[str, str] = {}
+        derived_authorizations: Dict[str, str] = {}
+        derived_requests: Dict[str, str] = {}
         for job_key, job in self.jobs.items():
             if not isinstance(job_key, str) or not job_key:
                 raise ProductionPolicyError("job id must not be empty")
@@ -477,35 +991,230 @@ class ProductionLedger:
                 or job.attempts > job.max_attempts
             ):
                 raise ProductionPolicyError("invalid job attempt count")
+            if job.attempts != len(job.attempt_history):
+                raise ProductionPolicyError("attempt counter/history mismatch")
+            if job.generation_epoch is not None and (
+                type(job.generation_epoch) is not int or job.generation_epoch < 1
+            ):
+                raise ProductionPolicyError("invalid job generation epoch")
+            if job.attempt_history and job.generation_epoch is None:
+                raise ProductionPolicyError("attempt history lacks generation epoch")
             if job.idempotency_key in derived_index:
                 raise ProductionPolicyError("duplicate job idempotency key")
             derived_index[job.idempotency_key] = job.job_id
+            for expected_number, attempt in enumerate(job.attempt_history, start=1):
+                self._validate_attempt(job, attempt, expected_number)
+                ref = self._attempt_ref(job.job_id, expected_number)
+                auth_id = attempt.authorization.authorization_id
+                request_key = attempt.authorization.provider_request_key
+                expected_request_key = self._provider_request_key_from_authorization(
+                    attempt.authorization
+                )
+                expected_auth_id = self._authorization_id(
+                    expected_request_key, attempt.authorization.quote_id
+                )
+                if request_key != expected_request_key or auth_id != expected_auth_id:
+                    raise ProductionPolicyError(
+                        "attempt authorization identifiers are not deterministic"
+                    )
+                if auth_id in derived_authorizations:
+                    raise ProductionPolicyError("duplicate authorization id")
+                if request_key in derived_requests:
+                    raise ProductionPolicyError("duplicate provider request key")
+                derived_authorizations[auth_id] = ref
+                derived_requests[request_key] = ref
             self._validate_job_status(job)
         if self.idempotency_index != derived_index:
             raise ProductionPolicyError("idempotency index is not an exact job bijection")
         if any(
             not isinstance(key, str)
-            or not key
+            or not key.strip()
             or not isinstance(value, str)
-            or not value
+            or not value.strip()
             for key, value in self.idempotency_index.items()
         ):
             raise ProductionPolicyError("invalid idempotency index entry")
+        if self.authorization_index != derived_authorizations:
+            raise ProductionPolicyError("authorization index is not an exact bijection")
+        if self.provider_request_index != derived_requests:
+            raise ProductionPolicyError("provider request index is not an exact bijection")
 
         active_by_shot: Dict[str, str] = {}
         for job in self.jobs.values():
-            if job.status in {JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYABLE}:
+            if job.status in {
+                JobStatus.QUEUED,
+                JobStatus.AUTHORIZED,
+                JobStatus.RUNNING,
+                JobStatus.RETRYABLE,
+            }:
                 if job.shot_id in active_by_shot:
                     raise ProductionPolicyError("multiple active jobs target one shot")
                 active_by_shot[job.shot_id] = job.job_id
-        running_by_shot = {
+                if job.status is not JobStatus.QUEUED:
+                    shot = self.shots[job.shot_id]
+                    if (
+                        shot.generation_owner_job_id != job.job_id
+                        or shot.generation_epoch != job.generation_epoch
+                    ):
+                        raise ProductionPolicyError("active job does not own shot epoch")
+        generating_by_shot = {
             job.shot_id
             for job in self.jobs.values()
-            if job.status is JobStatus.RUNNING
+            if job.status in {JobStatus.AUTHORIZED, JobStatus.RUNNING}
         }
         for shot in self.shots.values():
-            if (shot.status is ShotStatus.GENERATING) != (shot.shot_id in running_by_shot):
-                raise ProductionPolicyError("generating shot/running job mismatch")
+            if (shot.status is ShotStatus.GENERATING) != (
+                shot.shot_id in generating_by_shot
+            ):
+                raise ProductionPolicyError("generating shot/active attempt mismatch")
+            epoch_jobs = [
+                job
+                for job in self.jobs.values()
+                if job.shot_id == shot.shot_id and job.generation_epoch is not None
+            ]
+            if epoch_jobs:
+                epochs = sorted(job.generation_epoch for job in epoch_jobs)
+                if epochs != list(range(1, len(epoch_jobs) + 1)):
+                    raise ProductionPolicyError(
+                        "shot generation epochs must be unique and contiguous"
+                    )
+                latest_epoch = max(job.generation_epoch for job in epoch_jobs)
+                latest_jobs = [
+                    job for job in epoch_jobs if job.generation_epoch == latest_epoch
+                ]
+                if (
+                    len(latest_jobs) != 1
+                    or shot.generation_epoch != latest_epoch
+                    or shot.generation_owner_job_id != latest_jobs[0].job_id
+                ):
+                    raise ProductionPolicyError(
+                        "shot does not identify its unique latest generation owner"
+                    )
+            elif (
+                shot.generation_epoch != 0
+                or shot.generation_owner_job_id is not None
+            ):
+                raise ProductionPolicyError("shot has generation ownership without a job")
+            if shot.generation_owner_job_id is not None:
+                owner = self.jobs.get(shot.generation_owner_job_id)
+                if (
+                    owner is None
+                    or owner.shot_id != shot.shot_id
+                    or owner.generation_epoch != shot.generation_epoch
+                ):
+                    raise ProductionPolicyError("shot generation owner is invalid")
+                if owner.status in {JobStatus.AUTHORIZED, JobStatus.RUNNING}:
+                    valid_lifecycle = (
+                        shot.status is ShotStatus.GENERATING
+                        and not shot.asset_version
+                    )
+                elif owner.status is JobStatus.RETRYABLE:
+                    valid_lifecycle = (
+                        shot.status is ShotStatus.PLANNED and not shot.asset_version
+                    )
+                elif owner.status is JobStatus.EXHAUSTED:
+                    valid_lifecycle = (
+                        shot.status is ShotStatus.BLOCKED and not shot.asset_version
+                    )
+                elif owner.status is JobStatus.SUCCEEDED:
+                    valid_lifecycle = (
+                        shot.status
+                        in {
+                            ShotStatus.GENERATED,
+                            ShotStatus.APPROVED,
+                            ShotStatus.CANONICAL,
+                            ShotStatus.REJECTED,
+                        }
+                        and bool(owner.output_asset_version)
+                        and shot.asset_version == owner.output_asset_version
+                    )
+                else:
+                    valid_lifecycle = False
+                if not valid_lifecycle:
+                    raise ProductionPolicyError(
+                        "shot lifecycle does not match generation owner"
+                    )
+
+    @staticmethod
+    def _validate_attempt(
+        job: GenerationJob, attempt: GenerationAttempt, expected_number: int
+    ) -> None:
+        if type(attempt) is not GenerationAttempt:
+            raise ProductionPolicyError("invalid generation-attempt type")
+        auth = attempt.authorization
+        if type(auth) is not AttemptAuthorization:
+            raise ProductionPolicyError("invalid attempt-authorization type")
+        if (
+            type(attempt.attempt_number) is not int
+            or attempt.attempt_number != expected_number
+            or type(auth.attempt_number) is not int
+            or auth.attempt_number != expected_number
+            or type(auth.generation_epoch) is not int
+            or auth.job_id != job.job_id
+            or auth.shot_id != job.shot_id
+            or auth.input_fingerprint != job.input_fingerprint
+            or auth.generation_epoch != job.generation_epoch
+            or type(auth.maximum_cost_usd_micros) is not int
+            or auth.maximum_cost_usd_micros != 0
+            or auth.cloud_execution is not True
+            or auth.charge_cap_enforced is not True
+            or any(
+                not isinstance(value, str) or not value.strip()
+                for value in (
+                    auth.authorization_id,
+                    auth.provider_id,
+                    auth.adapter_id,
+                    auth.adapter_version,
+                    auth.quote_id,
+                    auth.provider_request_key,
+                )
+            )
+        ):
+            raise ProductionPolicyError("attempt authorization binding is invalid")
+        if type(attempt.status) is not AttemptStatus:
+            raise ProductionPolicyError("invalid attempt status")
+        if any(
+            value is not None and not isinstance(value, str)
+            for value in (
+                attempt.provider_job_id,
+                attempt.output_asset_version,
+                attempt.failure_reason,
+            )
+        ):
+            raise ProductionPolicyError("invalid attempt evidence type")
+        if attempt.status is AttemptStatus.AUTHORIZED:
+            valid = all(
+                value is None
+                for value in (
+                    attempt.provider_job_id,
+                    attempt.output_asset_version,
+                    attempt.failure_class,
+                    attempt.failure_reason,
+                )
+            )
+        elif attempt.status is AttemptStatus.RUNNING:
+            valid = (
+                bool(attempt.provider_job_id)
+                and attempt.output_asset_version is None
+                and attempt.failure_class is None
+                and attempt.failure_reason is None
+            )
+        elif attempt.status is AttemptStatus.SUCCEEDED:
+            valid = (
+                bool(attempt.provider_job_id)
+                and bool(attempt.output_asset_version)
+                and attempt.failure_class is None
+                and attempt.failure_reason is None
+            )
+        else:
+            valid = (
+                bool(attempt.provider_job_id)
+                and attempt.output_asset_version is None
+                and type(attempt.failure_class) is FailureClass
+                and bool(attempt.failure_reason)
+            )
+        if not valid:
+            raise ProductionPolicyError("attempt status evidence is inconsistent")
 
     def _validate_bible_maps(self) -> None:
         scalar_maps = (self.bible.story_rules, self.bible.continuity_facts)
@@ -545,40 +1254,68 @@ class ProductionLedger:
 
     @staticmethod
     def _validate_job_status(job: GenerationJob) -> None:
+        history = job.attempt_history
+        if any(
+            attempt.status is not AttemptStatus.FAILED
+            or attempt.failure_class is not FailureClass.RETRYABLE_PROVIDER
+            for attempt in history[:-1]
+        ):
+            raise ProductionPolicyError("nonterminal attempt history is invalid")
+        latest = history[-1] if history else None
         if job.status is JobStatus.QUEUED:
             valid = (
                 job.attempts == 0
+                and not history
+                and job.generation_epoch is None
+                and job.provider_job_id is None
+                and job.output_asset_version is None
+                and job.last_error is None
+            )
+        elif job.status is JobStatus.AUTHORIZED:
+            valid = (
+                latest is not None
+                and latest.status is AttemptStatus.AUTHORIZED
                 and job.provider_job_id is None
                 and job.output_asset_version is None
                 and job.last_error is None
             )
         elif job.status is JobStatus.RUNNING:
             valid = (
-                job.attempts > 0
-                and bool(job.provider_job_id)
+                latest is not None
+                and latest.status is AttemptStatus.RUNNING
+                and job.provider_job_id == latest.provider_job_id
                 and job.output_asset_version is None
                 and job.last_error is None
             )
         elif job.status is JobStatus.SUCCEEDED:
             valid = (
-                job.attempts > 0
-                and bool(job.provider_job_id)
-                and bool(job.output_asset_version)
+                latest is not None
+                and latest.status is AttemptStatus.SUCCEEDED
+                and job.provider_job_id == latest.provider_job_id
+                and job.output_asset_version == latest.output_asset_version
                 and job.last_error is None
             )
         elif job.status is JobStatus.RETRYABLE:
             valid = (
-                0 < job.attempts < job.max_attempts
-                and bool(job.provider_job_id)
+                latest is not None
+                and latest.status is AttemptStatus.FAILED
+                and latest.failure_class is FailureClass.RETRYABLE_PROVIDER
+                and job.attempts < job.max_attempts
+                and job.provider_job_id == latest.provider_job_id
                 and job.output_asset_version is None
-                and bool(job.last_error)
+                and job.last_error == latest.failure_reason
             )
         elif job.status is JobStatus.EXHAUSTED:
             valid = (
-                job.attempts == job.max_attempts
-                and bool(job.provider_job_id)
+                latest is not None
+                and latest.status is AttemptStatus.FAILED
+                and (
+                    job.attempts == job.max_attempts
+                    or latest.failure_class is not FailureClass.RETRYABLE_PROVIDER
+                )
+                and job.provider_job_id == latest.provider_job_id
                 and job.output_asset_version is None
-                and bool(job.last_error)
+                and job.last_error == latest.failure_reason
             )
         else:
             valid = False
@@ -653,15 +1390,30 @@ def choose_zero_cost_provider(quotes: Iterable[ProviderQuote]) -> ProviderQuote:
     eligible = [
         q
         for q in quotes
-        if q.available is True
-        and isinstance(q.provider, str)
-        and bool(q.provider.strip())
+        if all(
+            isinstance(value, str) and bool(value.strip())
+            for value in (
+                q.quote_id,
+                q.provider_id,
+                q.adapter_id,
+                q.adapter_version,
+                q.request_fingerprint,
+            )
+        )
         and type(q.estimated_cost_usd_micros) is int
         and q.estimated_cost_usd_micros == 0
+        and type(q.maximum_cost_usd_micros) is int
+        and q.maximum_cost_usd_micros == 0
+        and q.available is True
+        and q.cloud_execution is True
+        and q.charge_cap_enforced is True
     ]
     if not eligible:
         raise ProductionPolicyError("BLOCKED_ZERO_COST_PROVIDER_UNAVAILABLE")
-    return sorted(eligible, key=lambda q: q.provider)[0]
+    return sorted(
+        eligible,
+        key=lambda q: (q.provider_id, q.adapter_id, q.adapter_version, q.quote_id),
+    )[0]
 
 
 def episode_can_complete(

@@ -11,10 +11,12 @@
     "movie_bible",
     "shots",
     "generation_jobs",
-    "idempotency_index"
+    "idempotency_index",
+    "authorization_index",
+    "provider_request_index"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "project_id": {"type": "string", "minLength": 1},
     "spend_limit_usd_micros": {"type": "integer", "const": 0},
     "production": {
@@ -43,6 +45,14 @@
       "additionalProperties": {"$ref": "#/$defs/generation_job"}
     },
     "idempotency_index": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "authorization_index": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "minLength": 1}
+    },
+    "provider_request_index": {
       "type": "object",
       "additionalProperties": {"type": "string", "minLength": 1}
     }
@@ -103,7 +113,9 @@
         "status",
         "reviews",
         "canonical",
-        "upscale_allowed"
+        "upscale_allowed",
+        "generation_epoch",
+        "generation_owner_job_id"
       ],
       "properties": {
         "shot_id": {"type": "string", "minLength": 1},
@@ -125,7 +137,58 @@
           "additionalProperties": {"$ref": "#/$defs/review"}
         },
         "canonical": {"type": "boolean"},
-        "upscale_allowed": {"type": "boolean"}
+        "upscale_allowed": {"type": "boolean"},
+        "generation_epoch": {"type": "integer", "minimum": 0},
+        "generation_owner_job_id": {"type": ["string", "null"]}
+      }
+    },
+    "attempt_authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization_id", "job_id", "shot_id", "generation_epoch",
+        "attempt_number", "provider_id", "adapter_id", "adapter_version",
+        "quote_id", "input_fingerprint", "provider_request_key",
+        "maximum_cost_usd_micros", "cloud_execution", "charge_cap_enforced"
+      ],
+      "properties": {
+        "authorization_id": {"type": "string", "minLength": 1},
+        "job_id": {"type": "string", "minLength": 1},
+        "shot_id": {"type": "string", "minLength": 1},
+        "generation_epoch": {"type": "integer", "minimum": 1},
+        "attempt_number": {"type": "integer", "minimum": 1},
+        "provider_id": {"type": "string", "minLength": 1},
+        "adapter_id": {"type": "string", "minLength": 1},
+        "adapter_version": {"type": "string", "minLength": 1},
+        "quote_id": {"type": "string", "minLength": 1},
+        "input_fingerprint": {"type": "string", "minLength": 1},
+        "provider_request_key": {"type": "string", "minLength": 1},
+        "maximum_cost_usd_micros": {"type": "integer", "const": 0},
+        "cloud_execution": {"const": true},
+        "charge_cap_enforced": {"const": true}
+      }
+    },
+    "generation_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_number", "authorization", "status", "provider_job_id",
+        "output_asset_version", "failure_class", "failure_reason"
+      ],
+      "properties": {
+        "attempt_number": {"type": "integer", "minimum": 1},
+        "authorization": {"$ref": "#/$defs/attempt_authorization"},
+        "status": {"enum": ["AUTHORIZED", "RUNNING", "SUCCEEDED", "FAILED"]},
+        "provider_job_id": {"type": ["string", "null"]},
+        "output_asset_version": {"type": ["string", "null"]},
+        "failure_class": {
+          "type": ["string", "null"],
+          "enum": [
+            "RETRYABLE_PROVIDER", "NON_RETRYABLE_PROVIDER",
+            "POLICY", "INVALID_INPUT", null
+          ]
+        },
+        "failure_reason": {"type": ["string", "null"]}
       }
     },
     "generation_job": {
@@ -141,7 +204,9 @@
         "status",
         "provider_job_id",
         "output_asset_version",
-        "last_error"
+        "last_error",
+        "generation_epoch",
+        "attempt_history"
       ],
       "properties": {
         "job_id": {"type": "string", "minLength": 1},
@@ -153,6 +218,7 @@
         "status": {
           "enum": [
             "QUEUED",
+            "AUTHORIZED",
             "RUNNING",
             "SUCCEEDED",
             "RETRYABLE",
@@ -161,7 +227,12 @@
         },
         "provider_job_id": {"type": ["string", "null"]},
         "output_asset_version": {"type": ["string", "null"]},
-        "last_error": {"type": ["string", "null"]}
+        "last_error": {"type": ["string", "null"]},
+        "generation_epoch": {"type": ["integer", "null"], "minimum": 1},
+        "attempt_history": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/generation_attempt"}
+        }
       }
     }
   }

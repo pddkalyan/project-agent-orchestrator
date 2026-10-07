@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
+    AttemptStatus,
+    FailureClass,
     Gate,
     GenerationJob,
     JobStatus,
@@ -11,6 +13,7 @@ from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK
     ProductionLedger,
     ProductionPolicyError,
     ProviderQuote,
+    ProviderSubmissionReceipt,
     Review,
     Shot,
     ShotStatus,
@@ -28,6 +31,52 @@ class MovieStudioCoreTests(unittest.TestCase):
 
     def generated_shot(self, dialogue=False):
         return Shot("S1", "v1", dialogue, ShotStatus.GENERATED)
+
+    def quote(
+        self,
+        provider="afree",
+        fingerprint="F1",
+        estimated=0,
+        maximum=0,
+        available=True,
+        cloud=True,
+        cap=True,
+    ):
+        return ProviderQuote(
+            quote_id=f"Q-{provider}",
+            provider_id=provider,
+            adapter_id=f"adapter-{provider}",
+            adapter_version="1",
+            request_fingerprint=fingerprint,
+            estimated_cost_usd_micros=estimated,
+            maximum_cost_usd_micros=maximum,
+            available=available,
+            cloud_execution=cloud,
+            charge_cap_enforced=cap,
+        )
+
+    def authorize_and_start(
+        self, ledger, job_id="J1", provider_job_id="provider-1", provider="afree"
+    ):
+        attempt = len(ledger.jobs[job_id].attempt_history) + 1
+        authorization = ledger.authorize_attempt(
+            job_id,
+            self.quote(provider=provider),
+        )
+        ledger.start_generation(
+            job_id,
+            ProviderSubmissionReceipt(
+                authorization_id=authorization.authorization_id,
+                job_id=job_id,
+                attempt_number=attempt,
+                provider_id=authorization.provider_id,
+                adapter_id=authorization.adapter_id,
+                adapter_version=authorization.adapter_version,
+                provider_request_key=authorization.provider_request_key,
+                provider_job_id=provider_job_id,
+            ),
+        )
+        return attempt
 
     def test_canonical_requires_visual_continuity_and_technical(self):
         shot = self.generated_shot()
@@ -87,13 +136,13 @@ class MovieStudioCoreTests(unittest.TestCase):
 
     def test_paid_provider_never_selected(self):
         with self.assertRaises(ProductionPolicyError):
-            choose_zero_cost_provider([ProviderQuote("paid", 1)])
+            choose_zero_cost_provider([self.quote("paid", estimated=1, maximum=1)])
 
     def test_zero_cost_provider_deterministic(self):
         quote = choose_zero_cost_provider(
-            [ProviderQuote("zfree", 0), ProviderQuote("afree", 0)]
+            [self.quote("zfree"), self.quote("afree")]
         )
-        self.assertEqual("afree", quote.provider)
+        self.assertEqual("afree", quote.provider_id)
 
     def test_episode_requires_verified_drive_master(self):
         self.assertFalse(
@@ -162,8 +211,8 @@ class MovieStudioCoreTests(unittest.TestCase):
             idempotency_key="K1",
             input_fingerprint="F1",
         )
-        ledger.start_generation("J1", "provider-1")
-        ledger.finish_generation("J1", "asset-v1")
+        attempt = self.authorize_and_start(ledger)
+        ledger.finish_generation("J1", attempt, "provider-1", "asset-v1")
         self.assertIs(ledger.jobs["J1"].status, JobStatus.SUCCEEDED)
         self.assertEqual("asset-v1", ledger.shots["S1"].asset_version)
         self.assertIs(ledger.shots["S1"].status, ShotStatus.GENERATED)
@@ -178,20 +227,41 @@ class MovieStudioCoreTests(unittest.TestCase):
             input_fingerprint="F1",
             max_attempts=2,
         )
-        ledger.start_generation("J1", "provider-1")
-        ledger.fail_generation("J1", "transient")
+        attempt = self.authorize_and_start(ledger)
+        ledger.fail_generation(
+            "J1",
+            attempt,
+            "provider-1",
+            FailureClass.RETRYABLE_PROVIDER,
+            "transient",
+        )
         self.assertIs(ledger.jobs["J1"].status, JobStatus.RETRYABLE)
-        ledger.start_generation("J1", "provider-2")
-        ledger.fail_generation("J1", "still broken")
+        attempt = self.authorize_and_start(
+            ledger, provider_job_id="provider-2", provider="zfree"
+        )
+        ledger.fail_generation(
+            "J1",
+            attempt,
+            "provider-2",
+            FailureClass.RETRYABLE_PROVIDER,
+            "still broken",
+        )
         self.assertIs(ledger.jobs["J1"].status, JobStatus.EXHAUSTED)
         self.assertIs(ledger.shots["S1"].status, ShotStatus.BLOCKED)
 
     def test_job_rejects_double_completion(self):
-        job = GenerationJob("J1", "S1", "K1", "F1")
-        job.start("provider-1")
-        job.succeed("v1")
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        job = ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        attempt = self.authorize_and_start(ledger)
+        ledger.finish_generation("J1", attempt, "provider-1", "v1")
         with self.assertRaises(ProductionPolicyError):
-            job.succeed("v2")
+            ledger.finish_generation("J1", attempt, "provider-1", "v2")
 
     def test_movie_bible_updates_are_revisioned(self):
         bible = MovieBible()
@@ -211,7 +281,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             idempotency_key="K1",
             input_fingerprint="F1",
         )
-        ledger.start_generation("J1", "provider-1")
+        self.authorize_and_start(ledger)
         restored = ProductionLedger.from_dict(copy.deepcopy(ledger.to_dict()))
         self.assertEqual(ledger.to_dict(), restored.to_dict())
         self.assertIs(restored.jobs["J1"].status, JobStatus.RUNNING)
@@ -261,10 +331,24 @@ class MovieStudioCoreTests(unittest.TestCase):
             set(schema["$defs"]["generation_job"]["properties"]),
             set(payload["generation_jobs"]["J1"]),
         )
+        ledger.authorize_attempt(
+            "J1",
+            self.quote(),
+        )
+        authorized_payload = ledger.to_dict()
+        attempt = authorized_payload["generation_jobs"]["J1"]["attempt_history"][0]
+        self.assertEqual(
+            set(schema["$defs"]["generation_attempt"]["properties"]),
+            set(attempt),
+        )
+        self.assertEqual(
+            set(schema["$defs"]["attempt_authorization"]["properties"]),
+            set(attempt["authorization"]),
+        )
 
     def test_future_schema_version_fails_closed(self):
         data = ProductionLedger("movie").to_dict()
-        data["schema_version"] = 2
+        data["schema_version"] = 3
         with self.assertRaises(ProductionPolicyError):
             ProductionLedger.from_dict(data)
 
@@ -355,7 +439,10 @@ class MovieStudioCoreTests(unittest.TestCase):
             idempotency_key="K1",
             input_fingerprint="F1",
         )
-        ledger.start_generation("J1", "provider-1")
+        ledger.authorize_attempt(
+            "J1",
+            self.quote(),
+        )
         self.assertEqual({}, shot.reviews)
         self.assertFalse(shot.canonical)
         self.assertFalse(shot.upscale_allowed)
@@ -363,11 +450,13 @@ class MovieStudioCoreTests(unittest.TestCase):
 
     def test_zero_cost_routing_rejects_zero_like_non_integer(self):
         with self.assertRaises(ProductionPolicyError):
-            choose_zero_cost_provider([ProviderQuote("invalid", False)])
+            choose_zero_cost_provider([self.quote("invalid", estimated=False)])
         with self.assertRaises(ProductionPolicyError):
-            choose_zero_cost_provider([ProviderQuote("", 0)])
+            choose_zero_cost_provider([self.quote("")])
         with self.assertRaises(ProductionPolicyError):
-            choose_zero_cost_provider([ProviderQuote("invalid", 0, available="yes")])
+            choose_zero_cost_provider([self.quote("   ")])
+        with self.assertRaises(ProductionPolicyError):
+            choose_zero_cost_provider([self.quote("invalid", available="yes")])
 
     def test_schema_boolean_constants_and_unknown_fields_fail_closed(self):
         ledger = ProductionLedger("movie")
@@ -432,21 +521,29 @@ class MovieStudioCoreTests(unittest.TestCase):
             with self.subTest(data=data), self.assertRaises(ProductionPolicyError):
                 ProductionLedger.from_dict(data)
 
-    def test_generation_start_rejects_mutated_retry_numbers(self):
-        mutations = [
-            ("attempts", -100),
-            ("attempts", False),
-            ("attempts", 0.5),
-            ("max_attempts", False),
-            ("max_attempts", 1.5),
+    def test_attempt_authorization_rejects_ineligible_quotes(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        quotes = [
+            self.quote(estimated=1),
+            self.quote(maximum=1),
+            self.quote(available=False),
+            self.quote(cloud=False),
+            self.quote(cap=False),
+            self.quote(fingerprint="changed"),
         ]
-        for field, value in mutations:
-            job = GenerationJob("J1", "S1", "K1", "F1")
-            setattr(job, field, value)
-            with self.subTest(field=field, value=value), self.assertRaises(
-                ProductionPolicyError
-            ):
-                job.start("provider-1")
+        for quote in quotes:
+            with self.subTest(quote=quote), self.assertRaises(ProductionPolicyError):
+                ledger.authorize_attempt(
+                    "J1",
+                    quote,
+                )
 
     def test_checkpoint_rejects_corrupt_in_memory_enum_values(self):
         shot_status_ledger = ProductionLedger("movie")
@@ -476,6 +573,466 @@ class MovieStudioCoreTests(unittest.TestCase):
                 ProductionPolicyError
             ):
                 ledger.to_dict()
+
+    def test_start_requires_persisted_zero_cost_authorization(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        with self.assertRaises(ProductionPolicyError):
+            ledger.start_generation(
+                "J1",
+                ProviderSubmissionReceipt(
+                    "missing", "J1", 1, "p", "a", "1", "r", "provider-1"
+                ),
+            )
+
+    def test_authorization_replay_is_exactly_idempotent(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        first = ledger.authorize_attempt(
+            "J1",
+            self.quote(),
+        )
+        second = ledger.authorize_attempt(
+            "J1",
+            self.quote(),
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(1, len(ledger.jobs["J1"].attempt_history))
+        with self.assertRaises(ProductionPolicyError):
+            ledger.authorize_attempt(
+                "J1",
+                self.quote(provider="changed"),
+            )
+
+    def test_retry_preserves_first_attempt_and_rejects_late_callback(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+            max_attempts=2,
+        )
+        first_number = self.authorize_and_start(ledger, provider_job_id="P1")
+        ledger.fail_generation(
+            "J1",
+            first_number,
+            "P1",
+            FailureClass.RETRYABLE_PROVIDER,
+            "retry",
+        )
+        first_snapshot = ledger.jobs["J1"].attempt_history[0]
+        second_number = self.authorize_and_start(
+            ledger, provider_job_id="P2", provider="zfree"
+        )
+        with self.assertRaises(ProductionPolicyError):
+            ledger.finish_generation("J1", first_number, "P1", "stale")
+        self.assertEqual(first_snapshot, ledger.jobs["J1"].attempt_history[0])
+        self.assertEqual("", ledger.shots["S1"].asset_version)
+        ledger.finish_generation("J1", second_number, "P2", "fresh")
+        self.assertEqual("fresh", ledger.shots["S1"].asset_version)
+
+    def test_provider_job_id_must_match_current_attempt(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        attempt = self.authorize_and_start(ledger, provider_job_id="P1")
+        with self.assertRaises(ProductionPolicyError):
+            ledger.finish_generation("J1", attempt, "wrong", "asset")
+
+    def test_duplicate_terminal_callback_is_idempotent_but_conflict_rejects(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        attempt = self.authorize_and_start(ledger, provider_job_id="P1")
+        ledger.finish_generation("J1", attempt, "P1", "asset")
+        before = ledger.to_dict()
+        ledger.finish_generation("J1", attempt, "P1", "asset")
+        self.assertEqual(before, ledger.to_dict())
+        with self.assertRaises(ProductionPolicyError):
+            ledger.finish_generation("J1", attempt, "P1", "changed")
+
+    def test_non_retryable_failure_exhausts_immediately(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+            max_attempts=3,
+        )
+        attempt = self.authorize_and_start(ledger, provider_job_id="P1")
+        ledger.fail_generation(
+            "J1",
+            attempt,
+            "P1",
+            FailureClass.POLICY,
+            "policy rejected",
+        )
+        self.assertIs(ledger.jobs["J1"].status, JobStatus.EXHAUSTED)
+        with self.assertRaises(ProductionPolicyError):
+            ledger.authorize_attempt(
+                "J1",
+                self.quote(),
+            )
+
+    def test_authorized_and_running_checkpoints_round_trip(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        ledger.authorize_attempt(
+            "J1",
+            self.quote(),
+        )
+        restored = ProductionLedger.from_dict(copy.deepcopy(ledger.to_dict()))
+        self.assertEqual(ledger.to_dict(), restored.to_dict())
+        authorization = restored.jobs["J1"].attempt_history[-1].authorization
+        restored.start_generation(
+            "J1",
+            ProviderSubmissionReceipt(
+                authorization.authorization_id,
+                "J1",
+                1,
+                authorization.provider_id,
+                authorization.adapter_id,
+                authorization.adapter_version,
+                authorization.provider_request_key,
+                "P1",
+            ),
+        )
+        running = ProductionLedger.from_dict(copy.deepcopy(restored.to_dict()))
+        self.assertEqual(restored.to_dict(), running.to_dict())
+        with self.assertRaises(ProductionPolicyError):
+            running.authorize_attempt(
+                "J1",
+                self.quote(),
+            )
+
+    def test_corrupt_attempt_indexes_and_history_fail_closed(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        ledger.authorize_attempt(
+            "J1",
+            self.quote(),
+        )
+        baseline = ledger.to_dict()
+        corruptions = []
+        data = copy.deepcopy(baseline)
+        data["authorization_index"].clear()
+        corruptions.append(data)
+        data = copy.deepcopy(baseline)
+        data["provider_request_index"].clear()
+        corruptions.append(data)
+        data = copy.deepcopy(baseline)
+        data["generation_jobs"]["J1"]["attempt_history"][0]["attempt_number"] = 2
+        corruptions.append(data)
+        data = copy.deepcopy(baseline)
+        data["generation_jobs"]["J1"]["attempt_history"][0]["authorization"][
+            "maximum_cost_usd_micros"
+        ] = 1
+        corruptions.append(data)
+        for data in corruptions:
+            with self.subTest(data=data), self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(data)
+
+    def test_submission_receipt_must_match_authorized_adapter_and_request(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        authorization = ledger.authorize_attempt(
+            "J1",
+            self.quote(),
+        )
+        before = ledger.to_dict()
+        bad_receipt = ProviderSubmissionReceipt(
+            authorization_id=authorization.authorization_id,
+            job_id="J1",
+            attempt_number=1,
+            provider_id=authorization.provider_id,
+            adapter_id="wrong-adapter",
+            adapter_version=authorization.adapter_version,
+            provider_request_key=authorization.provider_request_key,
+            provider_job_id="P1",
+        )
+        with self.assertRaises(ProductionPolicyError):
+            ledger.start_generation("J1", bad_receipt)
+        self.assertEqual(before, ledger.to_dict())
+
+    def test_provider_receipt_is_idempotent_and_rejects_blank_job_id(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        authorization = ledger.authorize_attempt("J1", self.quote())
+        blank = ProviderSubmissionReceipt(
+            authorization.authorization_id,
+            "J1",
+            1,
+            authorization.provider_id,
+            authorization.adapter_id,
+            authorization.adapter_version,
+            authorization.provider_request_key,
+            "   ",
+        )
+        with self.assertRaises(ProductionPolicyError):
+            ledger.start_generation("J1", blank)
+        receipt = ProviderSubmissionReceipt(
+            authorization.authorization_id,
+            "J1",
+            1,
+            authorization.provider_id,
+            authorization.adapter_id,
+            authorization.adapter_version,
+            authorization.provider_request_key,
+            "P1",
+        )
+        ledger.start_generation("J1", receipt)
+        checkpoint = ledger.to_dict()
+        restored = ProductionLedger.from_dict(copy.deepcopy(checkpoint))
+        restored.start_generation("J1", receipt)
+        self.assertEqual(checkpoint, restored.to_dict())
+
+    def test_derived_authorization_identifiers_are_verified_on_restore(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        ledger.authorize_attempt("J1", self.quote())
+        baseline = ledger.to_dict()
+        for field, index_name, forged in (
+            ("authorization_id", "authorization_index", "forged-auth"),
+            ("provider_request_key", "provider_request_index", "forged-request"),
+        ):
+            data = copy.deepcopy(baseline)
+            authorization = data["generation_jobs"]["J1"]["attempt_history"][0][
+                "authorization"
+            ]
+            old_value = authorization[field]
+            authorization[field] = forged
+            ref = data[index_name].pop(old_value)
+            data[index_name][forged] = ref
+            with self.subTest(field=field), self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(data)
+
+    def test_start_revalidates_ledger_authenticated_zero_cost_authorization(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        authorization = ledger.authorize_attempt("J1", self.quote())
+        ledger.jobs["J1"].attempt_history = (
+            ledger.jobs["J1"].attempt_history[0].__class__(
+                attempt_number=1,
+                authorization=authorization.__class__(
+                    **{
+                        **authorization.__dict__,
+                        "maximum_cost_usd_micros": 1,
+                    }
+                ),
+                status=AttemptStatus.AUTHORIZED,
+            ),
+        )
+        receipt = ProviderSubmissionReceipt(
+            authorization.authorization_id,
+            "J1",
+            1,
+            authorization.provider_id,
+            authorization.adapter_id,
+            authorization.adapter_version,
+            authorization.provider_request_key,
+            "P1",
+        )
+        with self.assertRaises(ProductionPolicyError):
+            ledger.start_generation("J1", receipt)
+
+    def test_failed_authorization_preflight_does_not_claim_shot_epoch(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        job = ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        job.max_attempts = 0
+        before = copy.deepcopy(ledger)
+        with self.assertRaises(ProductionPolicyError):
+            ledger.authorize_attempt("J1", self.quote())
+        self.assertEqual(before, ledger)
+
+    def test_generation_owner_lifecycle_is_verified_on_restore(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        self.authorize_and_start(ledger, provider_job_id="P1")
+        ledger.finish_generation("J1", 1, "P1", "asset-good")
+        succeeded = ledger.to_dict()
+        corruptions = []
+        data = copy.deepcopy(succeeded)
+        data["shots"]["S1"]["asset_version"] = "asset-substituted"
+        corruptions.append(data)
+        data = copy.deepcopy(succeeded)
+        data["shots"]["S1"].update(status="PLANNED", asset_version="")
+        corruptions.append(data)
+        data = copy.deepcopy(succeeded)
+        data["shots"]["S1"].update(
+            generation_epoch=0, generation_owner_job_id=None
+        )
+        corruptions.append(data)
+        for data in corruptions:
+            with self.subTest(data=data), self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(data)
+
+    def test_provider_request_key_is_project_namespaced(self):
+        authorizations = []
+        for project_id in ("movie-a", "movie-b"):
+            ledger = ProductionLedger(project_id)
+            ledger.add_shot(Shot("S1"))
+            ledger.submit_generation(
+                job_id="J1",
+                shot_id="S1",
+                idempotency_key="K1",
+                input_fingerprint="F1",
+            )
+            authorizations.append(ledger.authorize_attempt("J1", self.quote()))
+        self.assertNotEqual(
+            authorizations[0].provider_request_key,
+            authorizations[1].provider_request_key,
+        )
+
+    def test_historical_generation_epochs_are_bound_and_contiguous(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        for number in (1, 2):
+            job_id = f"J{number}"
+            ledger.submit_generation(
+                job_id=job_id,
+                shot_id="S1",
+                idempotency_key=f"K{number}",
+                input_fingerprint="F1",
+                max_attempts=1,
+            )
+            self.authorize_and_start(
+                ledger, job_id=job_id, provider_job_id=f"P{number}"
+            )
+            ledger.fail_generation(
+                job_id,
+                1,
+                f"P{number}",
+                FailureClass.RETRYABLE_PROVIDER,
+                "exhausted",
+            )
+        ledger.submit_generation(
+            job_id="J3",
+            shot_id="S1",
+            idempotency_key="K3",
+            input_fingerprint="F1",
+        )
+        ledger.authorize_attempt("J3", self.quote())
+        baseline = ledger.to_dict()
+        self.assertEqual(
+            [1, 2, 3],
+            [baseline["generation_jobs"][f"J{i}"]["generation_epoch"] for i in (1, 2, 3)],
+        )
+        for replacement in (1, 4):
+            data = copy.deepcopy(baseline)
+            data["generation_jobs"]["J2"]["generation_epoch"] = replacement
+            data["generation_jobs"]["J2"]["attempt_history"][0]["authorization"][
+                "generation_epoch"
+            ] = replacement
+            with self.subTest(replacement=replacement), self.assertRaises(
+                ProductionPolicyError
+            ):
+                ProductionLedger.from_dict(data)
+
+    def test_old_job_epoch_callback_cannot_mutate_new_job(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+            max_attempts=1,
+        )
+        attempt = self.authorize_and_start(ledger, provider_job_id="P1")
+        ledger.fail_generation(
+            "J1",
+            attempt,
+            "P1",
+            FailureClass.RETRYABLE_PROVIDER,
+            "exhausted",
+        )
+        ledger.submit_generation(
+            job_id="J2",
+            shot_id="S1",
+            idempotency_key="K2",
+            input_fingerprint="F1",
+        )
+        self.authorize_and_start(
+            ledger, job_id="J2", provider_job_id="P2", provider="zfree"
+        )
+        before = ledger.to_dict()
+        with self.assertRaises(ProductionPolicyError):
+            ledger.finish_generation("J1", 1, "P1", "stale")
+        self.assertEqual(before, ledger.to_dict())
 
 
 if __name__ == "__main__":
