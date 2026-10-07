@@ -72,6 +72,8 @@ jobs:
           trigger=json.loads(Path(os.environ["TRIGGER_FILE"]).read_text(encoding="utf-8"))
           resume_sid=str(trigger.get("resume_jules_session_id") or "").strip()
           resume_prompt=str(trigger.get("resume_prompt") or "").strip()
+          fresh_prompt=str(trigger.get("fresh_jules_prompt") or "").strip()
+          fresh_title=str(trigger.get("fresh_jules_title") or "TASK-0005 Movie Studio verified implementation increment").strip()
           headers={"X-Goog-Api-Key":KEY,"Content-Type":"application/json"}
 
           def request(method, url, body=None):
@@ -149,8 +151,8 @@ jobs:
               session=request("GET", f"{API}/sessions/{sid}")
           else:
               payload={
-                  "prompt":prompt,
-                  "title":"TASK-0005 Movie Studio verified implementation increment",
+                  "prompt": fresh_prompt or prompt,
+                  "title": fresh_title,
                   "sourceContext":{
                       "source":source["name"],
                       "githubRepoContext":{"startingBranch":BRANCH}
