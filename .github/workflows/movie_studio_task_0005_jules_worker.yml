@@ -137,6 +137,9 @@ jobs:
           sid=session.get("id") or (session.get("name","").split("/")[-1])
           if not sid:
               raise SystemExit("JULES_SESSION_CREATE_RETURNED_NO_ID")
+          with open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf-8") as fh:
+              fh.write(f"session_id={sid}\\n")
+              fh.write(f"session_url={session.get('url','')}\\n")
 
           Path("jules-session.json").write_text(json.dumps({
               "id":sid,
@@ -170,6 +173,10 @@ jobs:
               if state in terminal:
                   if state=="FAILED":
                       acts=request("GET", f"{API}/sessions/{sid}/activities?pageSize=100").get("activities",[])
+                      Path("jules-session-activities.json").write_text(
+                          json.dumps({"session_id":sid,"activities":acts},indent=2)+"\\n",
+                          encoding="utf-8"
+                      )
                       reasons=[a.get("sessionFailed",{}).get("reason") for a in acts if a.get("sessionFailed")]
                       raise SystemExit("JULES_SESSION_FAILED: "+(" | ".join(x for x in reasons if x) or "no reason supplied"))
                   prs=[]
@@ -198,7 +205,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: task-0005-jules-session-${{ github.run_id }}
-          path: jules-session.json
+          path: |
+            jules-session.json
+            jules-session-activities.json
           if-no-files-found: warn
           retention-days: 14
 
