@@ -115,6 +115,12 @@
       "additionalProperties": {
         "$ref": "#/$defs/provider_adapter_registration"
       }
+    },
+    "shot_plans": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/shot_plan"
+      }
     }
   },
   "$defs": {
@@ -551,6 +557,43 @@
         },
         "maximum_cost_usd_micros": {
           "const": 0
+        }
+      }
+    },
+    "shot_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shot_id",
+        "scene_id",
+        "sequence_index",
+        "planned_duration_ms",
+        "prompt_fingerprint",
+        "has_dialogue_or_audio"
+      ],
+      "properties": {
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scene_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sequence_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "planned_duration_ms": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "prompt_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "has_dialogue_or_audio": {
+          "type": "boolean"
         }
       }
     }
