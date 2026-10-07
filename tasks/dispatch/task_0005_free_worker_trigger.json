@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 10,
+  "sequence": 11,
   "batch_cycle": 1,
   "batch_size": 4,
-  "mode": "jules_resume_existing_pr",
+  "mode": "jules_primary_worker",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "Continue green Jules PR #11 with the next narrow state-contract increment: episode/scene lifecycle statuses.",
+  "reason": "Start a fresh Jules session from the newly promoted green scene-integrity base. Implement only episode/scene lifecycle statuses with deterministic tests and zero-spend/no-merge constraints.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false,
-  "resume_jules_session_id": "16037978711825145865",
-  "resume_prompt": "Continue the SAME TASK-0005 pull request you already created. Do not create a new PR.\nYour previous scene-integrity increment is now green: all 52 deterministic tests pass, path boundaries pass, JSON validation passes, and the zero-spend/safety gate passes.\n\nImplement ONLY the next small durable-state increment: persist episode and scene lifecycle statuses.\n\nRequired:\n- Add EpisodeStatus enum with exactly: PLANNED, IN_PRODUCTION, ASSEMBLING, FINAL_QC, ARCHIVING, COMPLETED, BLOCKED.\n- Add SceneStatus enum with exactly: PLANNED, GENERATING, REVIEW, APPROVED, BLOCKED.\n- ProductionLedger must persist episode_status with a migration-safe default of PLANNED.\n- Scene must persist status with a migration-safe default of PLANNED.\n- to_dict/from_dict/_from_dict and the JSON schema must round-trip these fields exactly and reject unknown enum values fail-closed.\n- validate() must reject corrupted/non-enum lifecycle status state.\n- Add focused deterministic tests for defaults, round-trip, and malformed/unknown statuses.\n\nStrict scope:\n- Modify ONLY the existing Movie Studio core file, its deterministic test file, and the production-state schema file.\n- Do NOT create helper scripts, scratch files, plan files, migration scripts, wrappers, regex patch files, docs, reviews, workflows, dispatch files, memory files, or monitor files.\n- Do NOT weaken or delete existing tests.\n- Preserve all existing generation, QA, zero-spend, idempotency, scene-reference and checkpoint behavior.\n- Run the full existing deterministic test suite plus the new tests and repair your own changes until green.\n- Do not ask for ordinary implementation confirmation; choose the smallest safe reversible implementation and continue.\n- USD 0 only, no paid services, no local video inference, no merge."
+  "resume_jules_session_id": "",
+  "resume_prompt": ""
 }
