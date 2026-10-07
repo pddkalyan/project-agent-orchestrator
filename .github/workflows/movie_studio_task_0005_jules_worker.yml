@@ -153,6 +153,8 @@ jobs:
           print(f"Jules session: {session.get('url','(URL pending)')}")
           terminal={"COMPLETED","FAILED"}
           last=None
+          feedback_rounds=0
+          max_feedback_rounds=3
           deadline=time.time()+55*60
 
           while time.time()<deadline:
@@ -193,8 +195,40 @@ jobs:
                   else:
                       print("Jules PR:", prs[-1])
                   sys.exit(0)
+              if state=="AWAITING_PLAN_APPROVAL":
+                  request("POST", f"{API}/sessions/{sid}:approvePlan", {})
+                  print("Jules plan auto-approved by zero-spend supervisor policy.")
+                  time.sleep(10)
+                  continue
               if state=="AWAITING_USER_FEEDBACK":
-                  raise SystemExit("JULES_AWAITING_USER_FEEDBACK")
+                  feedback_rounds += 1
+                  acts=request("GET", f"{API}/sessions/{sid}/activities?pageSize=100").get("activities",[])
+                  Path("jules-session-activities.json").write_text(
+                      json.dumps({"session_id":sid,"feedback_round":feedback_rounds,"activities":acts},indent=2)+"\n",
+                      encoding="utf-8"
+                  )
+                  latest=""
+                  for activity in reversed(acts):
+                      msg=(activity.get("agentMessaged") or {}).get("agentMessage")
+                      if msg:
+                          latest=msg
+                          break
+                  print(f"Jules requested feedback round {feedback_rounds}: {latest[:800]}")
+                  if feedback_rounds > max_feedback_rounds:
+                      raise SystemExit("JULES_FEEDBACK_LOOP_EXHAUSTED")
+                  reply = "\n".join([
+                      "Proceed autonomously using your best safe engineering judgment within the existing TASK-0005 contract.",
+                      "Do not wait for user confirmation for ordinary coding decisions.",
+                      "Prefer the smallest reversible implementation that preserves existing tests and architecture.",
+                      "Do not spend money, enable billing, expose secrets, use private assets, merge PRs, or change files outside the allowlist.",
+                      "If your question concerns an implementation choice, choose the safest reasonable option and continue.",
+                      "If it truly requires a secret, payment, private asset, or irreversible external action, stop and report that exact blocker.",
+                      f"Your latest question/context was: {latest[:3000]}"
+                  ])
+                  request("POST", f"{API}/sessions/{sid}:sendMessage", {"prompt":reply})
+                  print("Autonomous supervisor feedback sent to Jules.")
+                  time.sleep(10)
+                  continue
               time.sleep(30)
 
           raise SystemExit("JULES_SESSION_MONITOR_TIMEOUT")

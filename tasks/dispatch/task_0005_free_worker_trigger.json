@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 7,
+  "sequence": 8,
   "batch_cycle": 1,
   "batch_size": 4,
   "mode": "jules_primary_worker",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "Retry Jules primary worker after fixing workflow YAML; create Jules PR against TASK-0005 branch and rely on Jules CI Fixer plus deterministic candidate CI.",
+  "reason": "Retry Jules primary worker with autonomous handling for plan approval and ordinary user-feedback waits; bounded to 3 feedback rounds and zero spend.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false
 }
