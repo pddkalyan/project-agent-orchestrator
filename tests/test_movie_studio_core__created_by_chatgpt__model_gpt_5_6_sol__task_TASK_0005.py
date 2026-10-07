@@ -79,6 +79,60 @@ class MovieStudioCoreTests(unittest.TestCase):
         )
         return attempt
 
+    def test_lifecycle_status_defaults(self):
+        ledger = ProductionLedger("P1")
+        self.assertEqual(ledger.episode_status, "PLANNED")
+
+        scene = Scene("SC1")
+        self.assertEqual(scene.status, "PLANNED")
+
+    def test_lifecycle_status_round_trip(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("P1")
+        ledger.episode_status = EpisodeStatus.FINAL_QC
+        scene = Scene("SC1", status=SceneStatus.REVIEW)
+        ledger.add_scene(scene)
+
+        data = ledger.to_dict()
+        self.assertEqual(data["episode_status"], "FINAL_QC")
+        self.assertEqual(data["scenes"]["SC1"]["status"], "REVIEW")
+
+        restored = ProductionLedger.from_dict(data)
+        self.assertEqual(restored.episode_status, "FINAL_QC")
+        self.assertEqual(restored.scenes["SC1"].status, "REVIEW")
+
+    def test_lifecycle_status_unknown_and_malformed_fails_closed(self):
+        ledger = ProductionLedger("P1")
+        scene = Scene("SC1")
+        ledger.add_scene(scene)
+        data = ledger.to_dict()
+
+        data_bad_episode = copy.deepcopy(data)
+        data_bad_episode["episode_status"] = "UNKNOWN_STATUS"
+        with self.assertRaisesRegex(ProductionPolicyError, "invalid episode status"):
+            ProductionLedger.from_dict(data_bad_episode)
+
+        data_bad_scene = copy.deepcopy(data)
+        data_bad_scene["scenes"]["SC1"]["status"] = "UNKNOWN_STATUS"
+        with self.assertRaisesRegex(ProductionPolicyError, "invalid scene status"):
+            ProductionLedger.from_dict(data_bad_scene)
+
+    def test_validate_rejects_corrupted_lifecycle_status_type(self):
+        ledger = ProductionLedger("P1")
+        ledger.episode_status = "PLANNED"  # must be enum instance
+        with self.assertRaisesRegex(ProductionPolicyError, "invalid episode status type"):
+            ledger.validate()
+
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus
+        ledger.episode_status = EpisodeStatus.PLANNED
+
+        scene = Scene("SC1")
+        scene.status = "PLANNED" # must be enum instance
+        ledger.add_scene(scene)
+
+        with self.assertRaisesRegex(ProductionPolicyError, "invalid scene status type"):
+            ledger.validate()
+
     def test_add_scene_rejects_blank_and_duplicate_ids(self):
         ledger = ProductionLedger("movie")
         ledger.add_scene(Scene("SC1"))
