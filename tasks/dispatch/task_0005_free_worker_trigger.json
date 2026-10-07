@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 3,
+  "sequence": 4,
   "batch_cycle": 1,
   "batch_size": 4,
   "mode": "continuous_free_worker_batch",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "Retry after hardening free-worker timeout, fallback visibility, and candidate-patch preservation; continue zero-cost TASK-0005 implementation.",
+  "reason": "Enable bounded automatic self-repair on deterministic verification failures; keep zero-cost free-worker continuation.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false
 }
