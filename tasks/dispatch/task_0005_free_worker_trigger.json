@@ -1,14 +1,16 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 11,
+  "sequence": 12,
   "batch_cycle": 1,
   "batch_size": 4,
   "mode": "jules_primary_worker",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "Start a fresh Jules session from the newly promoted green scene-integrity base. Implement only episode/scene lifecycle statuses with deterministic tests and zero-spend/no-merge constraints.",
+  "reason": "Corrected lifecycle-only Jules dispatch after prior fresh session used stale scene-integrity prompt.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false,
   "resume_jules_session_id": "",
-  "resume_prompt": ""
+  "resume_prompt": "",
+  "fresh_jules_title": "TASK-0005 Movie Studio lifecycle-state increment",
+  "fresh_jules_prompt": "You are the PRIMARY CODING AGENT for TASK-0005 Movie Studio.\n\nThis is a NARROW lifecycle-state increment. Do not repeat scene-integrity work that is already on the base branch.\n\nImplement ONLY durable EpisodeStatus and SceneStatus lifecycle state.\n\nRequired behavior:\n- Add EpisodeStatus enum with exactly: PLANNED, IN_PRODUCTION, ASSEMBLING, FINAL_QC, ARCHIVING, COMPLETED, BLOCKED.\n- Add SceneStatus enum with exactly: PLANNED, GENERATING, REVIEW, APPROVED, BLOCKED.\n- ProductionLedger must persist episode_status with migration-safe default PLANNED.\n- Scene must persist status with migration-safe default PLANNED.\n- Existing episode_id, scenes, shot scene_id, generation jobs, QA gates and zero-spend behavior must remain unchanged.\n- to_dict / from_dict / _from_dict must round-trip episode_status and scene status exactly.\n- JSON schema must include exact enums and persisted fields.\n- Unknown or malformed lifecycle status values must fail closed with ProductionPolicyError.\n- validate() must reject corrupted lifecycle status state.\n- Add focused deterministic tests for defaults, round-trip, valid non-default statuses, unknown statuses, malformed statuses, and checkpoint/schema alignment.\n\nStrict scope:\n- Modify ONLY these three files:\n  1. scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py\n  2. tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py\n  3. schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json\n- Do NOT create helper scripts, scratch files, migration files, plan files, wrappers, docs, reviews, workflow files, dispatch files, memory files or monitor files.\n- Do NOT weaken/delete existing tests.\n- Run the entire deterministic Movie Studio test suite plus the new tests and repair your own changes until green.\n- Do not ask for ordinary implementation confirmation; choose the smallest safe reversible implementation and continue.\n- USD 0 only. No paid services, no provider billing, no local video inference, no private assets.\n- Create a focused PR against feature/TASK-0005-movie-studio-core. Never merge it yourself."
 }
