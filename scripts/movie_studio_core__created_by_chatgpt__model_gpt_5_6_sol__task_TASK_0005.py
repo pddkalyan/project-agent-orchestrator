@@ -79,6 +79,11 @@ class Review:
 
 
 @dataclass
+class Scene:
+    scene_id: str
+
+
+@dataclass
 class Shot:
     shot_id: str
     asset_version: str = ""
@@ -89,6 +94,7 @@ class Shot:
     upscale_allowed: bool = False
     generation_epoch: int = 0
     generation_owner_job_id: Optional[str] = None
+    scene_id: str = ""
 
     def bind_generated_asset(self, asset_version: str) -> None:
         if not asset_version:
@@ -360,16 +366,25 @@ class MovieBible:
 @dataclass
 class ProductionLedger:
     project_id: str
+    episode_id: str = ""
     bible: MovieBible = field(default_factory=MovieBible)
+    scenes: Dict[str, Scene] = field(default_factory=dict)
     shots: Dict[str, Shot] = field(default_factory=dict)
     jobs: Dict[str, GenerationJob] = field(default_factory=dict)
     idempotency_index: Dict[str, str] = field(default_factory=dict)
     authorization_index: Dict[str, str] = field(default_factory=dict)
     provider_request_index: Dict[str, str] = field(default_factory=dict)
 
+    def add_scene(self, scene: Scene) -> None:
+        if not scene.scene_id or scene.scene_id in self.scenes:
+            raise ProductionPolicyError("scene id must be non-empty and unique")
+        self.scenes[scene.scene_id] = scene
+
     def add_shot(self, shot: Shot) -> None:
         if not shot.shot_id or shot.shot_id in self.shots:
             raise ProductionPolicyError("shot id must be non-empty and unique")
+        if shot.scene_id and shot.scene_id not in self.scenes:
+            raise ProductionPolicyError("shot references unknown scene")
         self.shots[shot.shot_id] = shot
 
     def submit_generation(
@@ -703,9 +718,11 @@ class ProductionLedger:
         return {
             "schema_version": SCHEMA_VERSION,
             "project_id": raw["project_id"],
+            "episode_id": raw["episode_id"],
             "spend_limit_usd_micros": 0,
             "production": dict(PRODUCTION_CONTRACT),
             "movie_bible": raw["bible"],
+            "scenes": raw["scenes"],
             "shots": raw["shots"],
             "generation_jobs": raw["jobs"],
             "idempotency_index": raw["idempotency_index"],
@@ -724,12 +741,18 @@ class ProductionLedger:
 
     @classmethod
     def _from_dict(cls, data: Mapping) -> "ProductionLedger":
+        data = dict(data)
+        data.setdefault("episode_id", "")
+        data.setdefault("scenes", {})
+
         root_fields = {
             "schema_version",
             "project_id",
+            "episode_id",
             "spend_limit_usd_micros",
             "production",
             "movie_bible",
+            "scenes",
             "shots",
             "generation_jobs",
             "idempotency_index",
@@ -773,6 +796,8 @@ class ProductionLedger:
         }
         if not isinstance(bible_raw, Mapping) or set(bible_raw) != bible_fields:
             raise ProductionPolicyError("movie-bible fields mismatch")
+        if not isinstance(data["scenes"], Mapping):
+            raise ProductionPolicyError("scenes must be a mapping")
         if not isinstance(data["shots"], Mapping):
             raise ProductionPolicyError("shots must be a mapping")
         if not isinstance(data["generation_jobs"], Mapping):
@@ -785,11 +810,20 @@ class ProductionLedger:
             raise ProductionPolicyError("provider request index must be a mapping")
         ledger = cls(
             project_id=data["project_id"],
+            episode_id=data["episode_id"],
             bible=MovieBible(**bible_raw),
         )
+        for scene_id, raw in data.get("scenes", {}).items():
+            if not isinstance(raw, Mapping) or set(raw) != {"scene_id"}:
+                raise ProductionPolicyError("scene fields mismatch")
+            ledger.scenes[scene_id] = Scene(scene_id=raw["scene_id"])
         for shot_id, raw in data.get("shots", {}).items():
+            raw = dict(raw)
+            raw.setdefault("scene_id", "")
+
             shot_fields = {
                 "shot_id",
+                "scene_id",
                 "asset_version",
                 "has_dialogue_or_audio",
                 "status",
@@ -817,6 +851,7 @@ class ProductionLedger:
                 raise ProductionPolicyError("review fields mismatch")
             ledger.shots[shot_id] = Shot(
                 shot_id=raw["shot_id"],
+                scene_id=raw["scene_id"],
                 asset_version=raw["asset_version"],
                 has_dialogue_or_audio=raw["has_dialogue_or_audio"],
                 status=ShotStatus(raw["status"]),
@@ -901,14 +936,25 @@ class ProductionLedger:
     def validate(self) -> None:
         if not isinstance(self.project_id, str) or not self.project_id:
             raise ProductionPolicyError("project id must not be empty")
+        if not isinstance(self.episode_id, str):
+            raise ProductionPolicyError("episode id must be a string")
         if type(self.bible.revision) is not int or self.bible.revision < 1:
             raise ProductionPolicyError("invalid movie-bible revision")
         self._validate_bible_maps()
+        for scene_key, scene in self.scenes.items():
+            if not isinstance(scene_key, str) or not scene_key:
+                raise ProductionPolicyError("scene id must not be empty")
+            if scene_key != scene.scene_id:
+                raise ProductionPolicyError("scene key/id mismatch")
         for shot_key, shot in self.shots.items():
             if not isinstance(shot_key, str) or not shot_key:
                 raise ProductionPolicyError("shot id must not be empty")
             if shot_key != shot.shot_id:
                 raise ProductionPolicyError("shot key/id mismatch")
+            if not isinstance(shot.scene_id, str):
+                raise ProductionPolicyError("shot scene_id must be a string")
+            if shot.scene_id and shot.scene_id not in self.scenes:
+                raise ProductionPolicyError("shot references unknown scene")
             if type(shot.status) is not ShotStatus:
                 raise ProductionPolicyError("invalid shot status")
             if (
