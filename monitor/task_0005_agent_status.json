@@ -3,32 +3,27 @@
   "task_id": "TASK-0005",
   "active_pr": 8,
   "branch": "feature/TASK-0005-movie-studio-core",
-  "execution_state": "IDLE",
+  "execution_state": "ACTIVE",
   "primary_agent": {
     "name": "ChatGPT Movie Studio Builder",
     "model": "gpt-5.6-sol",
     "role": "primary implementation and orchestration"
   },
-  "supporting_review_roles": [
-    "architecture_implementation_review",
-    "qa_regression_state_integrity_review",
-    "zero_spend_security_continuity_review"
-  ],
-  "current_phase": "CYCLE_COMPLETE",
-  "current_work_item": "Provider authorization, immutable attempt history, retry/epoch integrity, and zero-cost dispatch contract published and verified",
-  "last_evidence_sha": "89da44e7d14f0a49172d8b2fa6ded75d78b2ab03",
-  "note": "Cycle completed with 49/49 deterministic tests, four independent review approvals, and successful Movie Studio GitHub monitor run. Live providers remain disabled pending a trusted adapter/account boundary.",
+  "supporting_review_roles": [],
+  "current_phase": "REVIEW_PREVIOUS_WORK",
+  "current_work_item": "Revalidate provider-authorization increment and plan controlled Movie Bible character, voice, location, costume, prop, and continuity mutations",
+  "last_evidence_sha": "73a1991944a10ba603080dfbfcc44b0e730d83d4",
+  "note": "Observable phase metadata only. This cycle has started with the mandatory prior-evidence gate; private chain-of-thought is never exposed.",
   "last_cycle": {
-    "outcome": "CYCLE_COMPLETE",
-    "started_at_utc": null,
+    "outcome": "ACTIVE",
+    "started_at_utc": "2026-10-07T03:41:50Z",
     "finished_at_utc": null,
     "duration_seconds": null,
-    "duration_note": "Duration was not recorded for this already-completed cycle; future cycles must record start/end timestamps and computed duration.",
     "tests": {
-      "passed": 49,
+      "passed": 0,
       "failed": 0
     },
-    "review_summary": "Four independent review approvals recorded in the prior cycle evidence."
+    "review_summary": "No review result claimed yet; prior-cycle verification is in progress."
   },
   "work_log": [
     {
@@ -39,7 +34,7 @@
     {
       "phase": "IMPLEMENTING",
       "action": "Published provider authorization, immutable attempt-history, retry/epoch integrity, and zero-cost dispatch contracts.",
-      "evidence": "Current work item recorded at cycle completion."
+      "evidence": "Commit 89da44e7d14f0a49172d8b2fa6ded75d78b2ab03."
     },
     {
       "phase": "TESTING",
@@ -48,13 +43,18 @@
     },
     {
       "phase": "REVIEWING",
-      "action": "Recorded independent review approvals and successful Movie Studio GitHub monitor result.",
-      "evidence": "Cycle completion note."
+      "action": "Recorded architecture, state-integrity, QA, and zero-spend/security approvals.",
+      "evidence": "Provider authorization review packet and successful Movie Studio monitor run."
     },
     {
       "phase": "CYCLE_COMPLETE",
-      "action": "Returned agent to IDLE awaiting the next scheduled or user-triggered cycle.",
-      "evidence": "execution_state=IDLE, current_phase=CYCLE_COMPLETE."
+      "action": "Returned agent to IDLE after publishing and verification.",
+      "evidence": "Head b7a70657977c441dafec91386797f85bc8274189 completed monitor run 37567456623."
+    },
+    {
+      "phase": "REVIEW_PREVIOUS_WORK",
+      "action": "Started a new immediate cycle and began exact-head, tests, review-packet, and invariant revalidation.",
+      "evidence": "started_at_utc=2026-10-07T03:41:50Z; pre-cycle head=73a1991944a10ba603080dfbfcc44b0e730d83d4."
     }
   ]
 }
