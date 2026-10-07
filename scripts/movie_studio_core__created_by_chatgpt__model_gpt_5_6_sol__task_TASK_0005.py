@@ -136,6 +136,21 @@ class ShotContinuityBinding:
     prop_ids: FrozenSet[str]
     reference_asset_versions: FrozenSet[str]
 
+    def __post_init__(self):
+        for field_name in ["character_ids", "voice_ids", "costume_ids", "prop_ids", "reference_asset_versions"]:
+            val = getattr(self, field_name)
+            if type(val) is not frozenset:
+                raise ProductionPolicyError(f"{field_name} must be a frozenset")
+            for item in val:
+                if type(item) is not str or not item:
+                    raise ProductionPolicyError(f"{field_name} must contain non-empty strings")
+        if type(self.bible_revision) is not int:
+            raise ProductionPolicyError("bible_revision must be an int")
+        if type(self.shot_id) is not str or not self.shot_id:
+            raise ProductionPolicyError("shot_id must be a non-empty string")
+        if type(self.location_id) is not str:
+            raise ProductionPolicyError("location_id must be a string")
+
 
 def continuity_binding_digest(binding: ShotContinuityBinding) -> str:
     data = asdict(binding)
@@ -1101,6 +1116,10 @@ class ProductionLedger:
                 if len(field_list) != len(set(field_list)):
                     raise ProductionPolicyError(f"shot continuity binding {field_name} contains duplicates")
                 raw[field_name] = frozenset(field_list)
+
+            if type(raw.get("bible_revision")) is not int or raw.get("bible_revision") != ledger.bible.revision:
+                raise ProductionPolicyError("binding bible_revision must match current movie-bible revision exactly")
+
             try:
                 ledger.shot_continuity_bindings[shot_id] = ShotContinuityBinding(**raw)
             except (TypeError, ValueError) as exc:
