@@ -29,6 +29,7 @@ jobs:
       REPO_NAME: project-agent-orchestrator
       STARTING_BRANCH: feature/TASK-0005-movie-studio-core
       CONTRACT_FILE: tasks/worker/task_0005_free_worker_contract.json
+      TRIGGER_FILE: tasks/dispatch/task_0005_free_worker_trigger.json
     steps:
       - name: Checkout TASK-0005 control branch
         uses: actions/checkout@v4
@@ -68,6 +69,9 @@ jobs:
           OWNER=os.environ["REPO_OWNER"]
           REPO=os.environ["REPO_NAME"]
           BRANCH=os.environ["STARTING_BRANCH"]
+          trigger=json.loads(Path(os.environ["TRIGGER_FILE"]).read_text(encoding="utf-8"))
+          resume_sid=str(trigger.get("resume_jules_session_id") or "").strip()
+          resume_prompt=str(trigger.get("resume_prompt") or "").strip()
           headers={"X-Goog-Api-Key":KEY,"Content-Type":"application/json"}
 
           def request(method, url, body=None):
@@ -134,23 +138,34 @@ jobs:
               "Create a focused pull request against feature/TASK-0005-movie-studio-core only after the increment is coherent. Never merge it yourself.",
           ])
 
-          payload={
-              "prompt":prompt,
-              "title":"TASK-0005 Movie Studio verified implementation increment",
-              "sourceContext":{
-                  "source":source["name"],
-                  "githubRepoContext":{"startingBranch":BRANCH}
-              },
-              "requirePlanApproval":False,
-              "automationMode":"AUTO_CREATE_PR"
-          }
-          session=request("POST", f"{API}/sessions", payload)
-          sid=session.get("id") or (session.get("name","").split("/")[-1])
-          if not sid:
-              raise SystemExit("JULES_SESSION_CREATE_RETURNED_NO_ID")
+          if resume_sid:
+              sid=resume_sid
+              if not resume_prompt:
+                  raise SystemExit("JULES_RESUME_PROMPT_MISSING")
+              prior=request("GET", f"{API}/sessions/{sid}")
+              print(f"Resuming Jules session: {prior.get('url') or ('https://jules.google.com/session/'+sid)}")
+              request("POST", f"{API}/sessions/{sid}:sendMessage", {"prompt": resume_prompt})
+              time.sleep(8)
+              session=request("GET", f"{API}/sessions/{sid}")
+          else:
+              payload={
+                  "prompt":prompt,
+                  "title":"TASK-0005 Movie Studio verified implementation increment",
+                  "sourceContext":{
+                      "source":source["name"],
+                      "githubRepoContext":{"startingBranch":BRANCH}
+                  },
+                  "requirePlanApproval":False,
+                  "automationMode":"AUTO_CREATE_PR"
+              }
+              session=request("POST", f"{API}/sessions", payload)
+              sid=session.get("id") or (session.get("name","").split("/")[-1])
+              if not sid:
+                  raise SystemExit("JULES_SESSION_CREATE_RETURNED_NO_ID")
+
           with open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf-8") as fh:
               fh.write(f"session_id={sid}\n")
-              fh.write(f"session_url={session.get('url','')}\n")
+              fh.write(f"session_url={session.get('url') or ('https://jules.google.com/session/'+sid)}\n")
 
           Path("jules-session.json").write_text(json.dumps({
               "id":sid,
@@ -166,6 +181,8 @@ jobs:
           last=None
           feedback_rounds=0
           max_feedback_rounds=3
+          resume_waiting_for_reactivation=bool(resume_sid)
+          resume_started=time.time()
           deadline=time.time()+55*60
 
           while time.time()<deadline:
@@ -174,6 +191,14 @@ jobs:
               if state != last:
                   print(f"Jules state: {state}")
                   last=state
+              if resume_waiting_for_reactivation:
+                  if state not in {"COMPLETED","FAILED"}:
+                      resume_waiting_for_reactivation=False
+                  elif time.time()-resume_started < 90:
+                      time.sleep(5)
+                      continue
+                  else:
+                      raise SystemExit("JULES_RESUME_DID_NOT_REACTIVATE")
               Path("jules-session.json").write_text(json.dumps({
                   "id":sid,
                   "name":current.get("name"),
