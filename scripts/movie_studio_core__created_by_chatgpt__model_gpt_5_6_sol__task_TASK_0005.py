@@ -430,8 +430,12 @@ class ProductionLedger:
             raise ProductionPolicyError("provider adapter must enforce charge cap")
         if type(adapter.maximum_cost_usd_micros) is not int or adapter.maximum_cost_usd_micros != 0:
             raise ProductionPolicyError("provider adapter must enforce zero cost ceiling")
-        if not adapter.capabilities:
-            raise ProductionPolicyError("provider adapter must declare capabilities")
+        if (
+            type(adapter.capabilities) is not frozenset
+            or not adapter.capabilities
+            or any(type(capability) is not ProviderCapability for capability in adapter.capabilities)
+        ):
+            raise ProductionPolicyError("provider adapter capabilities must be a non-empty ProviderCapability frozenset")
         key = f"{adapter.provider_id}:{adapter.adapter_id}:{adapter.adapter_version}"
         if key in self.provider_adapters:
             existing = self.provider_adapters[key]
@@ -1132,6 +1136,13 @@ class ProductionLedger:
         for adapter_key, adapter in self.provider_adapters.items():
             if not isinstance(adapter_key, str) or not adapter_key:
                 raise ProductionPolicyError("provider adapter key must not be empty")
+            if type(adapter) is not ProviderAdapterRegistration:
+                raise ProductionPolicyError("invalid provider adapter registration")
+            if any(
+                not isinstance(val, str) or not val.strip()
+                for val in (adapter.provider_id, adapter.adapter_id, adapter.adapter_version)
+            ):
+                raise ProductionPolicyError("adapter identifiers must be non-empty strings")
             expected_key = f"{adapter.provider_id}:{adapter.adapter_id}:{adapter.adapter_version}"
             if adapter_key != expected_key:
                 raise ProductionPolicyError("provider adapter key mismatch")
@@ -1141,8 +1152,12 @@ class ProductionLedger:
                 raise ProductionPolicyError("charge cap enforced must be true")
             if type(adapter.maximum_cost_usd_micros) is not int or adapter.maximum_cost_usd_micros != 0:
                 raise ProductionPolicyError("maximum cost must be zero")
-            if not adapter.capabilities:
-                raise ProductionPolicyError("capabilities must not be empty")
+            if (
+                type(adapter.capabilities) is not frozenset
+                or not adapter.capabilities
+                or any(type(capability) is not ProviderCapability for capability in adapter.capabilities)
+            ):
+                raise ProductionPolicyError("invalid provider adapter capabilities")
 
         for job_key, job in self.jobs.items():
             if not isinstance(job_key, str) or not job_key:
