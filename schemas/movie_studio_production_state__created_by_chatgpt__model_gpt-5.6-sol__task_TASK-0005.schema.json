@@ -19,9 +19,16 @@
     "provider_request_index"
   ],
   "properties": {
-    "schema_version": {"const": 2},
-    "project_id": {"type": "string", "minLength": 1},
-    "episode_id": {"type": "string"},
+    "schema_version": {
+      "const": 2
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "episode_id": {
+      "type": "string"
+    },
     "episode_status": {
       "enum": [
         "PLANNED",
@@ -33,7 +40,10 @@
         "BLOCKED"
       ]
     },
-    "spend_limit_usd_micros": {"type": "integer", "const": 0},
+    "spend_limit_usd_micros": {
+      "type": "integer",
+      "const": 0
+    },
     "production": {
       "type": "object",
       "additionalProperties": false,
@@ -44,53 +54,94 @@
         "final_storage_provider"
       ],
       "properties": {
-        "aspect_ratio": {"const": "16:9"},
-        "target_episode_minutes": {"const": 20},
-        "local_video_inference": {"const": false},
-        "final_storage_provider": {"const": "Google Drive"}
+        "aspect_ratio": {
+          "const": "16:9"
+        },
+        "target_episode_minutes": {
+          "const": 20
+        },
+        "local_video_inference": {
+          "const": false
+        },
+        "final_storage_provider": {
+          "const": "Google Drive"
+        }
       }
     },
-    "movie_bible": {"$ref": "#/$defs/movie_bible"},
+    "movie_bible": {
+      "$ref": "#/$defs/movie_bible"
+    },
     "scenes": {
       "type": "object",
-      "additionalProperties": {"$ref": "#/$defs/scene"}
+      "additionalProperties": {
+        "$ref": "#/$defs/scene"
+      }
     },
     "shots": {
       "type": "object",
-      "additionalProperties": {"$ref": "#/$defs/shot"}
+      "additionalProperties": {
+        "$ref": "#/$defs/shot"
+      }
     },
     "generation_jobs": {
       "type": "object",
-      "additionalProperties": {"$ref": "#/$defs/generation_job"}
+      "additionalProperties": {
+        "$ref": "#/$defs/generation_job"
+      }
     },
     "idempotency_index": {
       "type": "object",
-      "additionalProperties": {"type": "string", "minLength": 1}
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "authorization_index": {
       "type": "object",
-      "additionalProperties": {"type": "string", "minLength": 1}
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "provider_request_index": {
       "type": "object",
-      "additionalProperties": {"type": "string", "minLength": 1}
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "provider_adapters": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/provider_adapter_registration"
+      }
     }
   },
   "$defs": {
     "string_map": {
       "type": "object",
-      "additionalProperties": {"type": "string"}
+      "additionalProperties": {
+        "type": "string"
+      }
     },
     "entity_map": {
       "type": "object",
-      "additionalProperties": {"$ref": "#/$defs/string_map"}
+      "additionalProperties": {
+        "$ref": "#/$defs/string_map"
+      }
     },
     "scene": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["scene_id", "status"],
+      "required": [
+        "scene_id",
+        "status"
+      ],
       "properties": {
-        "scene_id": {"type": "string", "minLength": 1},
+        "scene_id": {
+          "type": "string",
+          "minLength": 1
+        },
         "status": {
           "enum": [
             "PLANNED",
@@ -114,18 +165,35 @@
         "continuity_facts"
       ],
       "properties": {
-        "revision": {"type": "integer", "minimum": 1},
-        "story_rules": {"$ref": "#/$defs/string_map"},
-        "characters": {"$ref": "#/$defs/entity_map"},
-        "voices": {"$ref": "#/$defs/entity_map"},
-        "locations": {"$ref": "#/$defs/entity_map"},
-        "continuity_facts": {"$ref": "#/$defs/string_map"}
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "story_rules": {
+          "$ref": "#/$defs/string_map"
+        },
+        "characters": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "voices": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "locations": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "continuity_facts": {
+          "$ref": "#/$defs/string_map"
+        }
       }
     },
     "review": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["gate", "asset_version", "verdict"],
+      "required": [
+        "gate",
+        "asset_version",
+        "verdict"
+      ],
       "properties": {
         "gate": {
           "enum": [
@@ -135,8 +203,18 @@
             "TECHNICAL_QA"
           ]
         },
-        "asset_version": {"type": "string", "minLength": 1},
-        "verdict": {"enum": ["PENDING", "PASS", "FAIL", "BLOCKED"]}
+        "asset_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "enum": [
+            "PENDING",
+            "PASS",
+            "FAIL",
+            "BLOCKED"
+          ]
+        }
       }
     },
     "shot": {
@@ -155,10 +233,19 @@
         "generation_owner_job_id"
       ],
       "properties": {
-        "shot_id": {"type": "string", "minLength": 1},
-        "scene_id": {"type": "string"},
-        "asset_version": {"type": "string"},
-        "has_dialogue_or_audio": {"type": "boolean"},
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scene_id": {
+          "type": "string"
+        },
+        "asset_version": {
+          "type": "string"
+        },
+        "has_dialogue_or_audio": {
+          "type": "boolean"
+        },
         "status": {
           "enum": [
             "PLANNED",
@@ -172,61 +259,163 @@
         },
         "reviews": {
           "type": "object",
-          "additionalProperties": {"$ref": "#/$defs/review"}
+          "additionalProperties": {
+            "$ref": "#/$defs/review"
+          }
         },
-        "canonical": {"type": "boolean"},
-        "upscale_allowed": {"type": "boolean"},
-        "generation_epoch": {"type": "integer", "minimum": 0},
-        "generation_owner_job_id": {"type": ["string", "null"]}
+        "canonical": {
+          "type": "boolean"
+        },
+        "upscale_allowed": {
+          "type": "boolean"
+        },
+        "generation_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "generation_owner_job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "attempt_authorization": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "authorization_id", "job_id", "shot_id", "generation_epoch",
-        "attempt_number", "provider_id", "adapter_id", "adapter_version",
-        "quote_id", "input_fingerprint", "provider_request_key",
-        "maximum_cost_usd_micros", "cloud_execution", "charge_cap_enforced"
+        "authorization_id",
+        "job_id",
+        "shot_id",
+        "generation_epoch",
+        "attempt_number",
+        "provider_id",
+        "adapter_id",
+        "adapter_version",
+        "quote_id",
+        "input_fingerprint",
+        "provider_request_key",
+        "maximum_cost_usd_micros",
+        "cloud_execution",
+        "charge_cap_enforced"
       ],
       "properties": {
-        "authorization_id": {"type": "string", "minLength": 1},
-        "job_id": {"type": "string", "minLength": 1},
-        "shot_id": {"type": "string", "minLength": 1},
-        "generation_epoch": {"type": "integer", "minimum": 1},
-        "attempt_number": {"type": "integer", "minimum": 1},
-        "provider_id": {"type": "string", "minLength": 1},
-        "adapter_id": {"type": "string", "minLength": 1},
-        "adapter_version": {"type": "string", "minLength": 1},
-        "quote_id": {"type": "string", "minLength": 1},
-        "input_fingerprint": {"type": "string", "minLength": 1},
-        "provider_request_key": {"type": "string", "minLength": 1},
-        "maximum_cost_usd_micros": {"type": "integer", "const": 0},
-        "cloud_execution": {"const": true},
-        "charge_cap_enforced": {"const": true}
+        "authorization_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation_epoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "provider_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quote_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider_request_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maximum_cost_usd_micros": {
+          "type": "integer",
+          "const": 0
+        },
+        "cloud_execution": {
+          "const": true
+        },
+        "charge_cap_enforced": {
+          "const": true
+        }
       }
     },
     "generation_attempt": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "attempt_number", "authorization", "status", "provider_job_id",
-        "output_asset_version", "failure_class", "failure_reason"
+        "attempt_number",
+        "authorization",
+        "status",
+        "provider_job_id",
+        "output_asset_version",
+        "failure_class",
+        "failure_reason"
       ],
       "properties": {
-        "attempt_number": {"type": "integer", "minimum": 1},
-        "authorization": {"$ref": "#/$defs/attempt_authorization"},
-        "status": {"enum": ["AUTHORIZED", "RUNNING", "SUCCEEDED", "FAILED"]},
-        "provider_job_id": {"type": ["string", "null"]},
-        "output_asset_version": {"type": ["string", "null"]},
-        "failure_class": {
-          "type": ["string", "null"],
+        "attempt_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "authorization": {
+          "$ref": "#/$defs/attempt_authorization"
+        },
+        "status": {
           "enum": [
-            "RETRYABLE_PROVIDER", "NON_RETRYABLE_PROVIDER",
-            "POLICY", "INVALID_INPUT", null
+            "AUTHORIZED",
+            "RUNNING",
+            "SUCCEEDED",
+            "FAILED"
           ]
         },
-        "failure_reason": {"type": ["string", "null"]}
+        "provider_job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_asset_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failure_class": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "RETRYABLE_PROVIDER",
+            "NON_RETRYABLE_PROVIDER",
+            "POLICY",
+            "INVALID_INPUT",
+            null
+          ]
+        },
+        "failure_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "generation_job": {
@@ -247,12 +436,30 @@
         "attempt_history"
       ],
       "properties": {
-        "job_id": {"type": "string", "minLength": 1},
-        "shot_id": {"type": "string", "minLength": 1},
-        "idempotency_key": {"type": "string", "minLength": 1},
-        "input_fingerprint": {"type": "string", "minLength": 1},
-        "max_attempts": {"type": "integer", "minimum": 1},
-        "attempts": {"type": "integer", "minimum": 0},
+        "job_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
         "status": {
           "enum": [
             "QUEUED",
@@ -263,13 +470,87 @@
             "EXHAUSTED"
           ]
         },
-        "provider_job_id": {"type": ["string", "null"]},
-        "output_asset_version": {"type": ["string", "null"]},
-        "last_error": {"type": ["string", "null"]},
-        "generation_epoch": {"type": ["integer", "null"], "minimum": 1},
+        "provider_job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_asset_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation_epoch": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
         "attempt_history": {
           "type": "array",
-          "items": {"$ref": "#/$defs/generation_attempt"}
+          "items": {
+            "$ref": "#/$defs/generation_attempt"
+          }
+        }
+      }
+    },
+    "provider_adapter_registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "adapter_id",
+        "adapter_version",
+        "capabilities",
+        "cloud_execution",
+        "charge_cap_enforced",
+        "maximum_cost_usd_micros"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "TEXT",
+              "IMAGE",
+              "VIDEO",
+              "AUDIO",
+              "LIP_SYNC",
+              "UPSCALE"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "cloud_execution": {
+          "const": true
+        },
+        "charge_cap_enforced": {
+          "const": true
+        },
+        "maximum_cost_usd_micros": {
+          "const": 0
         }
       }
     }
