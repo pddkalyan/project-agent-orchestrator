@@ -13,7 +13,6 @@
     "movie_bible",
     "scenes",
     "shots",
-    "shot_continuity_bindings",
     "generation_jobs",
     "idempotency_index",
     "authorization_index",
