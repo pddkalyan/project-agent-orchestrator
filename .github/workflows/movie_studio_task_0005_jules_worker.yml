@@ -98,29 +98,30 @@ jobs:
           contract=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
           allowed="\n".join(f"- {p}" for p in contract["allowed_paths"])
           priorities="\n".join(f"- {p}" for p in contract["next_work_priority"])
-          prompt=f"""You are the PRIMARY CODING AGENT for TASK-0005 Movie Studio.
-
-Read AGENTS.md, GEMINI.md, the TASK-0005 architecture, schema, core implementation, tests, review evidence, and worker contract before changing anything.
-
-Implement the next highest-priority unfinished SAFE engineering increment:
-{priorities}
-
-Hard boundaries:
-- Incremental spend must remain USD 0.00. Do not enable paid APIs, provider billing, or paid fallbacks.
-- Do not perform real media generation and do not use local video inference.
-- Do not modify TASK-0004.
-- Do not merge anything.
-- Preserve provider-neutral architecture, durable/idempotent state, semantic QA gates, provenance, and crash-safe recovery.
-- Add or strengthen deterministic tests for every new invariant.
-- Never weaken an existing test merely to make CI green.
-- If CI on your pull request fails, diagnose the actual failure and repair your PR; keep iterating until CI is green or a genuine external blocker is reached.
-
-You may modify ONLY these files:
-{allowed}
-
-Do not modify workflows, dispatch files, memory/*, secrets, monitor control files, or any other path.
-Create a focused pull request against the starting branch. Do not target main directly.
-"""
+          prompt = "\n".join([
+              "You are the PRIMARY CODING AGENT for TASK-0005 Movie Studio.",
+              "",
+              "Read AGENTS.md, GEMINI.md, the TASK-0005 architecture, schema, core implementation, tests, review evidence, and worker contract before changing anything.",
+              "",
+              "Implement the next highest-priority unfinished SAFE engineering increment:",
+              priorities,
+              "",
+              "Hard boundaries:",
+              "- Incremental spend must remain USD 0.00. Do not enable paid APIs, provider billing, or paid fallbacks.",
+              "- Do not perform real media generation and do not use local video inference.",
+              "- Do not modify TASK-0004.",
+              "- Do not merge anything.",
+              "- Preserve provider-neutral architecture, durable/idempotent state, semantic QA gates, provenance, and crash-safe recovery.",
+              "- Add or strengthen deterministic tests for every new invariant.",
+              "- Never weaken an existing test merely to make CI green.",
+              "- If CI on your pull request fails, diagnose the actual failure and repair your PR; keep iterating until CI is green or a genuine external blocker is reached.",
+              "",
+              "You may modify ONLY these files:",
+              allowed,
+              "",
+              "Do not modify workflows, dispatch files, memory/*, secrets, monitor control files, or any other path.",
+              "Create a focused pull request against the starting branch. Do not target main directly.",
+          ])
 
           payload={
               "prompt":prompt,
