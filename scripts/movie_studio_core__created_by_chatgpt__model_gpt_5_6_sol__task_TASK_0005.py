@@ -20,6 +20,15 @@ PRODUCTION_CONTRACT = {
 }
 
 
+class ProviderCapability(str, Enum):
+    TEXT = "TEXT"
+    IMAGE = "IMAGE"
+    VIDEO = "VIDEO"
+    AUDIO = "AUDIO"
+    LIP_SYNC = "LIP_SYNC"
+    UPSCALE = "UPSCALE"
+
+
 class Gate(str, Enum):
     VISUAL_QA = "VISUAL_QA"
     CONTINUITY_QA = "CONTINUITY_QA"
@@ -124,6 +133,17 @@ class Shot:
             self.upscale_allowed = False
         self.asset_version = asset_version
         self.status = ShotStatus.GENERATED
+
+
+@dataclass(frozen=True)
+class ProviderAdapterRegistration:
+    provider_id: str
+    adapter_id: str
+    adapter_version: str
+    capabilities: FrozenSet[ProviderCapability]
+    cloud_execution: bool = True
+    charge_cap_enforced: bool = True
+    maximum_cost_usd_micros: int = 0
 
 
 @dataclass(frozen=True)
@@ -394,6 +414,39 @@ class ProductionLedger:
     idempotency_index: Dict[str, str] = field(default_factory=dict)
     authorization_index: Dict[str, str] = field(default_factory=dict)
     provider_request_index: Dict[str, str] = field(default_factory=dict)
+    provider_adapters: Dict[str, ProviderAdapterRegistration] = field(default_factory=dict)
+
+    def register_provider_adapter(self, adapter: ProviderAdapterRegistration) -> None:
+        if type(adapter) is not ProviderAdapterRegistration:
+            raise ProductionPolicyError("invalid provider adapter registration")
+        if any(
+            not isinstance(val, str) or not val.strip()
+            for val in (adapter.provider_id, adapter.adapter_id, adapter.adapter_version)
+        ):
+            raise ProductionPolicyError("adapter identifiers must be non-empty strings")
+        if not adapter.cloud_execution:
+            raise ProductionPolicyError("local execution not supported by provider registry")
+        if not adapter.charge_cap_enforced:
+            raise ProductionPolicyError("provider adapter must enforce charge cap")
+        if type(adapter.maximum_cost_usd_micros) is not int or adapter.maximum_cost_usd_micros != 0:
+            raise ProductionPolicyError("provider adapter must enforce zero cost ceiling")
+        if (
+            type(adapter.capabilities) is not frozenset
+            or not adapter.capabilities
+            or any(type(capability) is not ProviderCapability for capability in adapter.capabilities)
+        ):
+            raise ProductionPolicyError("provider adapter capabilities must be a non-empty ProviderCapability frozenset")
+        key = f"{adapter.provider_id}:{adapter.adapter_id}:{adapter.adapter_version}"
+        if key in self.provider_adapters:
+            existing = self.provider_adapters[key]
+            if (
+                existing.capabilities != adapter.capabilities
+                or existing.cloud_execution != adapter.cloud_execution
+                or existing.charge_cap_enforced != adapter.charge_cap_enforced
+                or existing.maximum_cost_usd_micros != adapter.maximum_cost_usd_micros
+            ):
+                raise ProductionPolicyError("conflicting provider adapter registration")
+        self.provider_adapters[key] = adapter
 
     def add_scene(self, scene: Scene) -> None:
         if not scene.scene_id or scene.scene_id in self.scenes:
@@ -465,6 +518,16 @@ class ProductionLedger:
         job = self._job(job_id)
         shot = self.shots[job.shot_id]
         self._validate_quote(job, quote)
+
+        adapter_key = f"{quote.provider_id}:{quote.adapter_id}:{quote.adapter_version}"
+        if adapter_key not in self.provider_adapters:
+            raise ProductionPolicyError("provider adapter not registered")
+        adapter = self.provider_adapters[adapter_key]
+        if ProviderCapability.VIDEO not in adapter.capabilities:
+            raise ProductionPolicyError("registered adapter does not support video generation")
+        if not adapter.cloud_execution or not adapter.charge_cap_enforced or adapter.maximum_cost_usd_micros != 0:
+            raise ProductionPolicyError("registered adapter is not eligible for zero-cost cloud execution")
+
         if job.status is JobStatus.AUTHORIZED and job.attempt_history:
             existing = job.attempt_history[-1]
             auth = existing.authorization
@@ -749,6 +812,7 @@ class ProductionLedger:
             "idempotency_index": raw["idempotency_index"],
             "authorization_index": raw["authorization_index"],
             "provider_request_index": raw["provider_request_index"],
+            "provider_adapters": raw["provider_adapters"],
         }
 
     @classmethod
@@ -781,8 +845,14 @@ class ProductionLedger:
             "idempotency_index",
             "authorization_index",
             "provider_request_index",
+            "provider_adapters",
         }
-        if not isinstance(data, Mapping) or set(data) != root_fields:
+        if not isinstance(data, Mapping):
+            raise ProductionPolicyError("production checkpoint fields mismatch")
+        actual_fields = set(data.keys())
+        if "provider_adapters" not in actual_fields:
+            actual_fields.add("provider_adapters")
+        if actual_fields != root_fields:
             raise ProductionPolicyError("production checkpoint fields mismatch")
         if (
             type(data.get("schema_version")) is not int
@@ -965,6 +1035,28 @@ class ProductionLedger:
         ledger.idempotency_index = dict(data.get("idempotency_index", {}))
         ledger.authorization_index = dict(data.get("authorization_index", {}))
         ledger.provider_request_index = dict(data.get("provider_request_index", {}))
+        provider_adapters = data.get("provider_adapters", {})
+        if not isinstance(provider_adapters, Mapping):
+            raise ProductionPolicyError("provider adapters must be a mapping")
+        for key, raw in provider_adapters.items():
+            if not isinstance(raw, Mapping):
+                raise ProductionPolicyError("provider adapter must be a mapping")
+            try:
+                capabilities = frozenset(
+                    ProviderCapability(c) for c in raw.get("capabilities", [])
+                )
+                ledger.provider_adapters[key] = ProviderAdapterRegistration(
+                    provider_id=raw["provider_id"],
+                    adapter_id=raw["adapter_id"],
+                    adapter_version=raw["adapter_version"],
+                    capabilities=capabilities,
+                    cloud_execution=raw.get("cloud_execution", True),
+                    charge_cap_enforced=raw.get("charge_cap_enforced", True),
+                    maximum_cost_usd_micros=raw.get("maximum_cost_usd_micros", 0),
+                )
+            except (KeyError, ValueError, TypeError) as exc:
+                raise ProductionPolicyError("malformed provider adapter registration") from exc
+
         ledger.validate()
         return ledger
 
@@ -1041,6 +1133,32 @@ class ProductionLedger:
         derived_index: Dict[str, str] = {}
         derived_authorizations: Dict[str, str] = {}
         derived_requests: Dict[str, str] = {}
+        for adapter_key, adapter in self.provider_adapters.items():
+            if not isinstance(adapter_key, str) or not adapter_key:
+                raise ProductionPolicyError("provider adapter key must not be empty")
+            if type(adapter) is not ProviderAdapterRegistration:
+                raise ProductionPolicyError("invalid provider adapter registration")
+            if any(
+                not isinstance(val, str) or not val.strip()
+                for val in (adapter.provider_id, adapter.adapter_id, adapter.adapter_version)
+            ):
+                raise ProductionPolicyError("adapter identifiers must be non-empty strings")
+            expected_key = f"{adapter.provider_id}:{adapter.adapter_id}:{adapter.adapter_version}"
+            if adapter_key != expected_key:
+                raise ProductionPolicyError("provider adapter key mismatch")
+            if type(adapter.cloud_execution) is not bool or not adapter.cloud_execution:
+                raise ProductionPolicyError("cloud execution must be true")
+            if type(adapter.charge_cap_enforced) is not bool or not adapter.charge_cap_enforced:
+                raise ProductionPolicyError("charge cap enforced must be true")
+            if type(adapter.maximum_cost_usd_micros) is not int or adapter.maximum_cost_usd_micros != 0:
+                raise ProductionPolicyError("maximum cost must be zero")
+            if (
+                type(adapter.capabilities) is not frozenset
+                or not adapter.capabilities
+                or any(type(capability) is not ProviderCapability for capability in adapter.capabilities)
+            ):
+                raise ProductionPolicyError("invalid provider adapter capabilities")
+
         for job_key, job in self.jobs.items():
             if not isinstance(job_key, str) or not job_key:
                 raise ProductionPolicyError("job id must not be empty")
