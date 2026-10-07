@@ -111,6 +111,20 @@ class Scene:
     status: SceneStatus = SceneStatus.PLANNED
 
 
+@dataclass(frozen=True)
+class ShotPlan:
+    shot_id: str
+    scene_id: str
+    sequence_index: int
+    planned_duration_ms: int
+    prompt_fingerprint: str
+    has_dialogue_or_audio: bool
+
+
+def plan_digest(plan: ShotPlan) -> str:
+    return sha256(json.dumps(asdict(plan), sort_keys=True).encode("utf-8")).hexdigest()
+
+
 @dataclass
 class Shot:
     shot_id: str
@@ -410,6 +424,7 @@ class ProductionLedger:
     bible: MovieBible = field(default_factory=MovieBible)
     scenes: Dict[str, Scene] = field(default_factory=dict)
     shots: Dict[str, Shot] = field(default_factory=dict)
+    shot_plans: Dict[str, ShotPlan] = field(default_factory=dict)
     jobs: Dict[str, GenerationJob] = field(default_factory=dict)
     idempotency_index: Dict[str, str] = field(default_factory=dict)
     authorization_index: Dict[str, str] = field(default_factory=dict)
@@ -459,6 +474,41 @@ class ProductionLedger:
         if shot.scene_id and shot.scene_id not in self.scenes:
             raise ProductionPolicyError("shot references unknown scene")
         self.shots[shot.shot_id] = shot
+
+    def add_shot_plan(self, plan: ShotPlan) -> None:
+        if type(plan) is not ShotPlan:
+            raise ProductionPolicyError("plan must be a ShotPlan instance")
+        if not plan.shot_id or plan.shot_id not in self.shots:
+            raise ProductionPolicyError("plan must reference an existing shot")
+        if not plan.scene_id or plan.scene_id not in self.scenes:
+            raise ProductionPolicyError("plan must reference an existing scene")
+
+        shot = self.shots[plan.shot_id]
+        if shot.scene_id != plan.scene_id:
+            raise ProductionPolicyError("plan scene_id must match runtime shot scene_id")
+        if plan.has_dialogue_or_audio != shot.has_dialogue_or_audio:
+            raise ProductionPolicyError("plan has_dialogue_or_audio must match runtime shot")
+
+        if type(plan.sequence_index) is not int or plan.sequence_index < 0:
+            raise ProductionPolicyError("plan sequence_index must be a non-negative integer")
+        if type(plan.planned_duration_ms) is not int or plan.planned_duration_ms <= 0:
+            raise ProductionPolicyError("plan planned_duration_ms must be a positive integer")
+        if type(plan.prompt_fingerprint) is not str or not plan.prompt_fingerprint.strip():
+            raise ProductionPolicyError("plan prompt_fingerprint must be a non-empty string")
+        if type(plan.has_dialogue_or_audio) is not bool:
+            raise ProductionPolicyError("plan has_dialogue_or_audio must be a strict boolean")
+
+        for existing_plan in self.shot_plans.values():
+            if existing_plan.scene_id == plan.scene_id and existing_plan.sequence_index == plan.sequence_index and existing_plan.shot_id != plan.shot_id:
+                raise ProductionPolicyError("duplicate sequence_index within the same scene is not allowed")
+
+        if plan.shot_id in self.shot_plans:
+            existing = self.shot_plans[plan.shot_id]
+            if existing != plan:
+                raise ProductionPolicyError("conflicting shot plan replacement is not allowed")
+            return
+
+        self.shot_plans[plan.shot_id] = plan
 
     def submit_generation(
         self,
@@ -808,6 +858,7 @@ class ProductionLedger:
             "movie_bible": raw["bible"],
             "scenes": raw["scenes"],
             "shots": raw["shots"],
+            "shot_plans": raw["shot_plans"],
             "generation_jobs": raw["jobs"],
             "idempotency_index": raw["idempotency_index"],
             "authorization_index": raw["authorization_index"],
@@ -830,6 +881,7 @@ class ProductionLedger:
         data.setdefault("episode_id", "")
         data.setdefault("episode_status", EpisodeStatus.PLANNED.value)
         data.setdefault("scenes", {})
+        data.setdefault("shot_plans", {})
 
         root_fields = {
             "schema_version",
@@ -841,6 +893,7 @@ class ProductionLedger:
             "movie_bible",
             "scenes",
             "shots",
+            "shot_plans",
             "generation_jobs",
             "idempotency_index",
             "authorization_index",
@@ -852,6 +905,8 @@ class ProductionLedger:
         actual_fields = set(data.keys())
         if "provider_adapters" not in actual_fields:
             actual_fields.add("provider_adapters")
+        if "shot_plans" not in actual_fields:
+            actual_fields.add("shot_plans")
         if actual_fields != root_fields:
             raise ProductionPolicyError("production checkpoint fields mismatch")
         if (
@@ -897,6 +952,8 @@ class ProductionLedger:
             raise ProductionPolicyError("scenes must be a mapping")
         if not isinstance(data["shots"], Mapping):
             raise ProductionPolicyError("shots must be a mapping")
+        if not isinstance(data["shot_plans"], Mapping):
+            raise ProductionPolicyError("shot plans must be a mapping")
         if not isinstance(data["generation_jobs"], Mapping):
             raise ProductionPolicyError("generation jobs must be a mapping")
         if not isinstance(data["idempotency_index"], Mapping):
@@ -965,6 +1022,25 @@ class ProductionLedger:
                 upscale_allowed=raw["upscale_allowed"],
                 generation_epoch=raw["generation_epoch"],
                 generation_owner_job_id=raw["generation_owner_job_id"],
+            )
+        for plan_id, raw in data.get("shot_plans", {}).items():
+            plan_fields = {
+                "shot_id",
+                "scene_id",
+                "sequence_index",
+                "planned_duration_ms",
+                "prompt_fingerprint",
+                "has_dialogue_or_audio",
+            }
+            if not isinstance(raw, Mapping) or set(raw) != plan_fields:
+                raise ProductionPolicyError("shot plan fields mismatch")
+            ledger.shot_plans[plan_id] = ShotPlan(
+                shot_id=raw["shot_id"],
+                scene_id=raw["scene_id"],
+                sequence_index=raw["sequence_index"],
+                planned_duration_ms=raw["planned_duration_ms"],
+                prompt_fingerprint=raw["prompt_fingerprint"],
+                has_dialogue_or_audio=raw["has_dialogue_or_audio"],
             )
         for job_id, raw in data.get("generation_jobs", {}).items():
             job_fields = {
@@ -1088,6 +1164,39 @@ class ProductionLedger:
                 raise ProductionPolicyError("shot references unknown scene")
             if type(shot.status) is not ShotStatus:
                 raise ProductionPolicyError("invalid shot status")
+
+        sequence_indices_by_scene = {}
+        for plan_key, plan in self.shot_plans.items():
+            if type(plan) is not ShotPlan:
+                raise ProductionPolicyError("shot plan must be a ShotPlan instance")
+            if plan_key != plan.shot_id:
+                raise ProductionPolicyError("shot plan key must match plan.shot_id")
+            if not plan.shot_id or plan.shot_id not in self.shots:
+                raise ProductionPolicyError("shot plan has dangling shot reference")
+            if not plan.scene_id or plan.scene_id not in self.scenes:
+                raise ProductionPolicyError("shot plan has dangling scene reference")
+
+            shot = self.shots[plan.shot_id]
+            if shot.scene_id != plan.scene_id:
+                raise ProductionPolicyError("shot plan scene_id must match runtime shot")
+            if plan.has_dialogue_or_audio != shot.has_dialogue_or_audio:
+                raise ProductionPolicyError("shot plan has_dialogue_or_audio must match runtime shot")
+
+            if type(plan.sequence_index) is not int or plan.sequence_index < 0:
+                raise ProductionPolicyError("shot plan sequence_index must be non-negative integer")
+            if type(plan.planned_duration_ms) is not int or plan.planned_duration_ms <= 0:
+                raise ProductionPolicyError("shot plan planned_duration_ms must be positive integer")
+            if type(plan.prompt_fingerprint) is not str or not plan.prompt_fingerprint.strip():
+                raise ProductionPolicyError("shot plan prompt_fingerprint must be non-empty string")
+            if type(plan.has_dialogue_or_audio) is not bool:
+                raise ProductionPolicyError("shot plan has_dialogue_or_audio must be strict boolean")
+
+            scene_indices = sequence_indices_by_scene.setdefault(plan.scene_id, set())
+            if plan.sequence_index in scene_indices:
+                raise ProductionPolicyError("duplicate sequence_index within the same scene is not allowed")
+            scene_indices.add(plan.sequence_index)
+
+        for shot_key, shot in self.shots.items():
             if (
                 not isinstance(shot.asset_version, str)
                 or type(shot.has_dialogue_or_audio) is not bool
