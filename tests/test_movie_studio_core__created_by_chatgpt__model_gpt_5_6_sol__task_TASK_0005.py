@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 
 from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
+    ShotPlan,
+    plan_digest,
     AttemptStatus,
     ProviderAdapterRegistration,
     ProviderCapability,
@@ -1276,6 +1278,168 @@ class MovieStudioCoreTests(unittest.TestCase):
         with self.assertRaises(ProductionPolicyError):
             ledger2.validate()
 
+
+
+    def test_shot_plan_happy_path(self):
+        ledger = ProductionLedger(project_id="test_proj")
+        scene = Scene(scene_id="scn1")
+        shot = Shot(shot_id="sht1", scene_id="scn1", has_dialogue_or_audio=True)
+        ledger.add_scene(scene)
+        ledger.add_shot(shot)
+
+        plan = ShotPlan(
+            shot_id="sht1",
+            scene_id="scn1",
+            sequence_index=0,
+            planned_duration_ms=5000,
+            prompt_fingerprint="prompt1",
+            has_dialogue_or_audio=True
+        )
+        ledger.add_shot_plan(plan)
+        self.assertIn("sht1", ledger.shot_plans)
+        self.assertEqual(ledger.shot_plans["sht1"], plan)
+
+        # Test exact duplicate is idempotent
+        ledger.add_shot_plan(plan)
+        self.assertEqual(len(ledger.shot_plans), 1)
+
+    def test_shot_plan_rejects_conflicting_replacement(self):
+        ledger = ProductionLedger(project_id="test_proj")
+        scene = Scene(scene_id="scn1")
+        shot = Shot(shot_id="sht1", scene_id="scn1", has_dialogue_or_audio=True)
+        ledger.add_scene(scene)
+        ledger.add_shot(shot)
+
+        plan1 = ShotPlan(
+            shot_id="sht1",
+            scene_id="scn1",
+            sequence_index=0,
+            planned_duration_ms=5000,
+            prompt_fingerprint="prompt1",
+            has_dialogue_or_audio=True
+        )
+        ledger.add_shot_plan(plan1)
+
+        plan2 = ShotPlan(
+            shot_id="sht1",
+            scene_id="scn1",
+            sequence_index=1, # conflicting sequence
+            planned_duration_ms=5000,
+            prompt_fingerprint="prompt1",
+            has_dialogue_or_audio=True
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement"):
+            ledger.add_shot_plan(plan2)
+
+    def test_shot_plan_rejects_duplicate_sequence_index(self):
+        ledger = ProductionLedger(project_id="test_proj")
+        scene = Scene(scene_id="scn1")
+        shot1 = Shot(shot_id="sht1", scene_id="scn1", has_dialogue_or_audio=True)
+        shot2 = Shot(shot_id="sht2", scene_id="scn1", has_dialogue_or_audio=True)
+        ledger.add_scene(scene)
+        ledger.add_shot(shot1)
+        ledger.add_shot(shot2)
+
+        plan1 = ShotPlan(
+            shot_id="sht1",
+            scene_id="scn1",
+            sequence_index=0,
+            planned_duration_ms=5000,
+            prompt_fingerprint="prompt1",
+            has_dialogue_or_audio=True
+        )
+        ledger.add_shot_plan(plan1)
+
+        plan2 = ShotPlan(
+            shot_id="sht2",
+            scene_id="scn1",
+            sequence_index=0, # duplicate index within same scene
+            planned_duration_ms=5000,
+            prompt_fingerprint="prompt2",
+            has_dialogue_or_audio=True
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "duplicate sequence_index"):
+            ledger.add_shot_plan(plan2)
+
+    def test_shot_plan_malformed_state(self):
+        ledger = ProductionLedger(project_id="test_proj")
+        scene = Scene(scene_id="scn1")
+        shot = Shot(shot_id="sht1", scene_id="scn1", has_dialogue_or_audio=True)
+        ledger.add_scene(scene)
+        ledger.add_shot(shot)
+
+        # Missing shot reference
+        with self.assertRaisesRegex(ProductionPolicyError, "reference an existing shot"):
+            ledger.add_shot_plan(ShotPlan("sht2", "scn1", 0, 1000, "prompt", True))
+
+        # Mismatch has_dialogue
+        with self.assertRaisesRegex(ProductionPolicyError, "has_dialogue_or_audio must match"):
+            ledger.add_shot_plan(ShotPlan("sht1", "scn1", 0, 1000, "prompt", False))
+
+        # Negative duration
+        with self.assertRaisesRegex(ProductionPolicyError, "must be a positive integer"):
+            ledger.add_shot_plan(ShotPlan("sht1", "scn1", 0, -100, "prompt", True))
+
+        # Empty prompt fingerprint
+        with self.assertRaisesRegex(ProductionPolicyError, "non-empty string"):
+            ledger.add_shot_plan(ShotPlan("sht1", "scn1", 0, 1000, "", True))
+
+    def test_shot_plan_digest_stability(self):
+        plan = ShotPlan("sht1", "scn1", 0, 1000, "prompt", True)
+        digest1 = plan_digest(plan)
+
+        plan_same = ShotPlan("sht1", "scn1", 0, 1000, "prompt", True)
+        digest2 = plan_digest(plan_same)
+        self.assertEqual(digest1, digest2)
+
+        plan_diff = ShotPlan("sht1", "scn1", 1, 1000, "prompt", True)
+        digest3 = plan_digest(plan_diff)
+        self.assertNotEqual(digest1, digest3)
+
+    def test_shot_plan_roundtrip_and_migration_safe(self):
+        # Initial empty ledger
+        ledger = ProductionLedger(project_id="test_proj")
+        data = ledger.to_dict()
+
+        # Manually remove shot_plans for migration-safe test
+        if "shot_plans" in data:
+            del data["shot_plans"]
+
+        restored_ledger = ProductionLedger.from_dict(data)
+        self.assertEqual(restored_ledger.shot_plans, {})
+
+        # Add plans
+        scene = Scene(scene_id="scn1")
+        shot = Shot(shot_id="sht1", scene_id="scn1", has_dialogue_or_audio=True)
+        restored_ledger.add_scene(scene)
+        restored_ledger.add_shot(shot)
+
+        plan = ShotPlan("sht1", "scn1", 0, 1000, "prompt", True)
+        restored_ledger.add_shot_plan(plan)
+
+        # Roundtrip
+        data2 = restored_ledger.to_dict()
+        self.assertIn("sht1", data2["shot_plans"])
+
+        restored2 = ProductionLedger.from_dict(data2)
+        self.assertIn("sht1", restored2.shot_plans)
+        self.assertEqual(restored2.shot_plans["sht1"], plan)
+
+    def test_corrupted_shot_plan_restore_fails(self):
+        ledger = ProductionLedger(project_id="test_proj")
+        scene = Scene(scene_id="scn1")
+        shot = Shot(shot_id="sht1", scene_id="scn1", has_dialogue_or_audio=True)
+        ledger.add_scene(scene)
+        ledger.add_shot(shot)
+        plan = ShotPlan("sht1", "scn1", 0, 1000, "prompt", True)
+        ledger.add_shot_plan(plan)
+
+        data = ledger.to_dict()
+        # Corrupt key
+        data["shot_plans"]["sht2"] = data["shot_plans"].pop("sht1")
+
+        with self.assertRaisesRegex(ProductionPolicyError, "key must match plan.shot_id"):
+            ProductionLedger.from_dict(data)
 
 if __name__ == "__main__":
     unittest.main()
