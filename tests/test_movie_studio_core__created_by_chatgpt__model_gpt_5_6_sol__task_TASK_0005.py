@@ -321,6 +321,54 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertIs(restored.jobs["J1"].status, JobStatus.RUNNING)
         self.assertEqual({}, restored.shots["S1"].reviews)
 
+    def test_legacy_unassigned_shots_migration_is_handled(self):
+        # A legacy ledger may be serialized without episode_id, scenes, or scene_id on shots.
+        legacy_data = {
+            "schema_version": 2,
+            "project_id": "movie",
+            # "episode_id" is missing
+            "spend_limit_usd_micros": 0,
+            "production": {
+                "aspect_ratio": "16:9",
+                "target_episode_minutes": 20,
+                "local_video_inference": False,
+                "final_storage_provider": "Google Drive",
+            },
+            "movie_bible": {
+                "revision": 1,
+                "story_rules": {},
+                "characters": {},
+                "voices": {},
+                "locations": {},
+                "continuity_facts": {}
+            },
+            # "scenes" is missing
+            "shots": {
+                "S1": {
+                    "shot_id": "S1",
+                    # "scene_id" is missing
+                    "asset_version": "",
+                    "has_dialogue_or_audio": False,
+                    "status": "PLANNED",
+                    "reviews": {},
+                    "canonical": False,
+                    "upscale_allowed": False,
+                    "generation_epoch": 0,
+                    "generation_owner_job_id": None
+                }
+            },
+            "generation_jobs": {},
+            "idempotency_index": {},
+            "authorization_index": {},
+            "provider_request_index": {}
+        }
+
+        restored = ProductionLedger.from_dict(legacy_data)
+
+        self.assertEqual("", restored.episode_id)
+        self.assertEqual({}, restored.scenes)
+        self.assertEqual("", restored.shots["S1"].scene_id)
+
     def test_corrupt_resume_state_is_rejected(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
