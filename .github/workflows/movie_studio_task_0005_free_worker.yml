@@ -1,0 +1,246 @@
+name: Movie Studio Free Worker
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - synchronize
+    paths:
+      - "tasks/dispatch/task_0005_free_worker_trigger.json"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: task-0005-free-worker
+  cancel-in-progress: false
+
+jobs:
+  free_worker:
+    name: "FREE WORKER · Gemini 3.8 Flash"
+    if: ${{ github.event.pull_request.head.ref == 'feature/TASK-0005-movie-studio-core' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      BRANCH: feature/TASK-0005-movie-studio-core
+      STATUS_FILE: monitor/task_0005_agent_status.json
+      CONTRACT_FILE: tasks/worker/task_0005_free_worker_contract.json
+      TEST_FILE: tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py
+    steps:
+      - name: Checkout exact TASK-0005 branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Wait for current supervisor cycle to become idle
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            git fetch --no-tags origin "$BRANCH"
+            state="$(git show "origin/$BRANCH:$STATUS_FILE" | python -c 'import json,sys; print(json.load(sys.stdin).get("execution_state","UNKNOWN"))')"
+            agent="$(git show "origin/$BRANCH:$STATUS_FILE" | python -c 'import json,sys; print(json.load(sys.stdin).get("primary_agent",{}).get("name","UNKNOWN"))')"
+            echo "handoff check $attempt/30: state=$state agent=$agent"
+            if [[ "$state" != "ACTIVE" || "$agent" == "Gemini Free Cloud Worker" ]]; then
+              git reset --hard "origin/$BRANCH"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "BLOCKED_SUPERVISOR_STILL_ACTIVE after 15 minutes" >&2
+          exit 75
+
+      - name: Set up runtimes
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Validate zero-spend worker contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${GEMINI_API_KEY:-}" || { echo "BLOCKED_GEMINI_API_KEY_MISSING" >&2; exit 76; }
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          c=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
+          assert c["task_id"] == "TASK-0005"
+          assert c["spend_limit_usd"] == 0
+          assert c["provider_billing_allowed"] is False
+          assert c["openai_routine_worker_allowed"] is False
+          assert c["primary_worker_family"] == "Gemini API free-tier Flash"
+          assert c["preferred_worker_models"][0] == "gemini-3.8-flash"
+          print("zero-spend free-worker contract verified")
+          PY
+
+      - name: Install Gemini CLI
+        run: npm install --global @google/gemini-cli
+
+      - name: Select strongest available free Flash model
+        id: model
+        shell: bash
+        run: |
+          set -euo pipefail
+          models=("gemini-3.8-flash" "gemini-3.7-flash" "gemini-3.5-flash" "gemini-3.5-flash-lite")
+          chosen=""
+          : > "$RUNNER_TEMP/model-probe.log"
+          for model in "${models[@]}"; do
+            echo "Probing $model" | tee -a "$RUNNER_TEMP/model-probe.log"
+            if gemini --skip-trust --model "$model" --approval-mode=plan --output-format=json               --prompt "Return only READY. Do not call tools."               > "$RUNNER_TEMP/probe-$model.json" 2>> "$RUNNER_TEMP/model-probe.log"; then
+              chosen="$model"
+              break
+            fi
+          done
+          if [[ -z "$chosen" ]]; then
+            echo "BLOCKED_FREE_GEMINI_MODEL_OR_QUOTA_UNAVAILABLE" >&2
+            cat "$RUNNER_TEMP/model-probe.log" >&2
+            exit 77
+          fi
+          echo "model=$chosen" >> "$GITHUB_OUTPUT"
+          echo "Selected free worker model: $chosen" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Snapshot candidate before worker
+        id: before
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Run free cloud coding worker
+        id: worker
+        shell: bash
+        env:
+          WORKER_MODEL: ${{ steps.model.outputs.model }}
+        run: |
+          set -euo pipefail
+          gemini --skip-trust --model "$WORKER_MODEL" --approval-mode=auto_edit --output-format=json             --prompt "You are the PRIMARY FREE CLOUD CODING WORKER for TASK-0005 Movie Studio. Read AGENTS.md and GEMINI.md first, then read $CONTRACT_FILE, the current TASK-0005 task JSON, architecture doc, production-state schema, core implementation, deterministic tests, current monitor status, existing TASK-0005 review files, and relevant memory. Continue the next highest-priority unfinished SAFE engineering increment on the current PR branch. Prefer concrete production architecture/code/tests over commentary. You may edit repository files only; do not run shell commands, install software, call external services, use paid resources, access user devices, or perform real media generation. Do not modify GitHub workflows, dispatch files, secrets, or unrelated TASKs. Preserve USD 0.00, cloud-only media inference, provider-neutral adapters, crash-safe/idempotent state, review/canonicalization gates, no merge, and no TASK-0004 work. Keep changes coherent and reviewable. Add or strengthen deterministic tests for every new invariant. Update provenance and the TASK-0005 review evidence for what you changed. Never claim GPT/Astra approval. Stop before any step requiring provider credentials, billing, private assets, or a user-only action."             > "worker_result_TASK-0005_${GITHUB_RUN_ID}.json"
+
+      - name: Enforce worker file boundaries
+        id: boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed < <(git diff --name-only)
+          if [[ "${#changed[@]}" -eq 0 ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Worker produced no repository changes." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          printf '%s\n' "${changed[@]}" > "$RUNNER_TEMP/changed-files.txt"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          changed=[x.strip() for x in Path(__import__("os").environ["RUNNER_TEMP"]).joinpath("changed-files.txt").read_text().splitlines() if x.strip()]
+          c=json.loads(Path("tasks/worker/task_0005_free_worker_contract.json").read_text(encoding="utf-8"))
+          allowed=set(c["allowed_paths"])
+          bad=[p for p in changed if p not in allowed]
+          if bad:
+              raise SystemExit("FREE_WORKER_CHANGED_DISALLOWED_PATHS: "+", ".join(bad))
+          print("worker file boundaries verified:", ", ".join(changed))
+          PY
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run TASK-0005 deterministic verification
+        if: steps.boundary.outputs.changed == 'true'
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py
+          python "$TEST_FILE" -v
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for p in [
+            Path("schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json"),
+            Path("tasks/worker/task_0005_free_worker_contract.json"),
+            Path("monitor/task_0005_agent_status.json"),
+          ]:
+              json.loads(p.read_text(encoding="utf-8"))
+          print("JSON validation passed")
+          PY
+          if git grep -nE 'OPENAI_API_KEY|sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}' --               scripts tests schemas docs reviews review_packets monitor PROVENANCE_REGISTRY.jsonl; then
+            echo "Potential secret pattern found in TASK-0005 candidate" >&2
+            exit 78
+          fi
+
+      - name: Record free-worker observable status
+        if: steps.boundary.outputs.changed == 'true'
+        shell: bash
+        env:
+          WORKER_MODEL: ${{ steps.model.outputs.model }}
+          BEFORE_SHA: ${{ steps.before.outputs.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          p=Path("monitor/task_0005_agent_status.json")
+          data=json.loads(p.read_text(encoding="utf-8"))
+          model=os.environ["WORKER_MODEL"]
+          data["primary_agent"]={
+            "name":"Gemini Free Cloud Worker",
+            "model":model,
+            "role":"primary routine implementation worker"
+          }
+          data["supervisor"]={
+            "name":"ChatGPT Movie Studio Supervisor",
+            "model":"gpt-5.6-sol",
+            "role":"review, orchestration, blocker handling; not routine coding"
+          }
+          data["execution_state"]="AWAITING_SUPERVISOR_REVIEW"
+          data["current_phase"]="FREE_WORKER_COMPLETE"
+          data["current_work_item"]="Free-worker increment completed and deterministic verification passed; awaiting supervisor review"
+          data["note"]="Routine implementation was performed by the free Gemini worker. GPT is reserved for supervision/review. Private chain-of-thought is not exposed."
+          log=data.get("work_log",[])
+          log.append({
+            "phase":"FREE_WORKER_COMPLETE",
+            "action":f"Gemini free cloud worker ({model}) completed a bounded TASK-0005 implementation increment.",
+            "evidence":f"GitHub Actions run {os.environ.get('GITHUB_RUN_ID')} verified deterministic tests before commit."
+          })
+          data["work_log"]=log[-12:]
+          p.write_text(json.dumps(data,indent=2)+"\n",encoding="utf-8")
+          PY
+
+      - name: Commit verified free-worker increment
+        if: steps.boundary.outputs.changed == 'true'
+        shell: bash
+        env:
+          WORKER_MODEL: ${{ steps.model.outputs.model }}
+        run: |
+          set -euo pipefail
+          git config user.name "Movie Studio Free Worker"
+          git config user.email "movie-studio-free-worker@users.noreply.github.com"
+          git add --             scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py             tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py             schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json             docs/movie_studio_core_architecture__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.md             reviews/task_0005_state_contract_review__created_by_chatgpt__model_gpt-5.6-sol__run_20261007.md             review_packets/task_0005_free_worker_review.json             PROVENANCE_REGISTRY.jsonl             monitor/task_0005_agent_status.json
+          git diff --cached --quiet && { echo "No staged change after validation"; exit 0; }
+          git commit -m "TASK-0005: free worker increment [$WORKER_MODEL]"
+          git push origin "HEAD:$BRANCH"
+          echo "Verified free-worker increment pushed to $BRANCH." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish worker summary
+        if: always()
+        shell: bash
+        env:
+          WORKER_MODEL: ${{ steps.model.outputs.model }}
+        run: |
+          {
+            echo "## TASK-0005 Free Worker"
+            echo
+            echo "**Primary worker:** Gemini Free Cloud Worker"
+            echo "**Model:** ${WORKER_MODEL:-unavailable}"
+            echo "**Spend policy:** USD 0 only"
+            echo "**OpenAI routine coding:** disabled by contract"
+            echo
+            echo "If this run fails with a model/quota/authentication error, the supervisor must notify the user rather than fall back to paid usage."
+          } >> "$GITHUB_STEP_SUMMARY"
