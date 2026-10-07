@@ -356,11 +356,90 @@ class MovieBible:
         stores[namespace][key] = value
         self.revision += 1
 
+    def update_entity(self, namespace: str, entity_id: str, field: str, value: str) -> None:
+        stores = {
+            "characters": self.characters,
+            "voices": self.voices,
+            "locations": self.locations,
+        }
+        if namespace not in stores:
+            raise ProductionPolicyError("unsupported entity movie-bible namespace")
+        if not entity_id or not field or not value:
+            raise ProductionPolicyError("entity id, field, and value are required")
+        if entity_id not in stores[namespace]:
+            stores[namespace][entity_id] = {}
+        stores[namespace][entity_id][field] = value
+        self.revision += 1
+
+    @property
+    def digest(self) -> str:
+        def sorted_dict(d: dict):
+            if isinstance(d, dict):
+                return {k: sorted_dict(v) for k, v in sorted(d.items())}
+            return d
+
+        material = json.dumps(
+            [
+                self.revision,
+                sorted_dict(self.story_rules),
+                sorted_dict(self.characters),
+                sorted_dict(self.voices),
+                sorted_dict(self.locations),
+                sorted_dict(self.continuity_facts),
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return "movie-bible-v2:" + sha256(material.encode("utf-8")).hexdigest()
+
+
+@dataclass
+class Scene:
+    scene_id: str
+    bible_revision: int = 1
+    shot_ids: Tuple[str, ...] = ()
+
+
+@dataclass
+class Episode:
+    episode_id: str
+    scene_ids: Tuple[str, ...] = ()
+    timeline_digest: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    aspect_ratio: Optional[str] = None
+    cleanup_authorized: bool = False
+
+    def submit_timeline_qc(
+        self, digest: str, duration_seconds: int, aspect_ratio: str
+    ) -> None:
+        if not digest or type(duration_seconds) is not int or duration_seconds <= 0 or not aspect_ratio:
+            raise ProductionPolicyError("invalid timeline qc evidence")
+        if aspect_ratio != PRODUCTION_CONTRACT["aspect_ratio"]:
+            raise ProductionPolicyError("timeline aspect ratio violates production contract")
+        self.timeline_digest = digest
+        self.duration_seconds = duration_seconds
+        self.aspect_ratio = aspect_ratio
+
+    def verify_drive_master(
+        self, master_digest: str, all_shots_canonical: bool, final_qc_passed: bool
+    ) -> None:
+        if not self.timeline_digest:
+            raise ProductionPolicyError("cannot verify master archive without prior timeline qc")
+        if master_digest != self.timeline_digest:
+            raise ProductionPolicyError("master archive digest mismatch")
+        if not all_shots_canonical:
+            raise ProductionPolicyError("cannot authorize cleanup before all shots are canonical")
+        if not final_qc_passed:
+            raise ProductionPolicyError("cannot authorize cleanup before final qc passes")
+        self.cleanup_authorized = True
+
 
 @dataclass
 class ProductionLedger:
     project_id: str
     bible: MovieBible = field(default_factory=MovieBible)
+    episodes: Dict[str, Episode] = field(default_factory=dict)
+    scenes: Dict[str, Scene] = field(default_factory=dict)
     shots: Dict[str, Shot] = field(default_factory=dict)
     jobs: Dict[str, GenerationJob] = field(default_factory=dict)
     idempotency_index: Dict[str, str] = field(default_factory=dict)
@@ -706,6 +785,8 @@ class ProductionLedger:
             "spend_limit_usd_micros": 0,
             "production": dict(PRODUCTION_CONTRACT),
             "movie_bible": raw["bible"],
+            "episodes": raw["episodes"],
+            "scenes": raw["scenes"],
             "shots": raw["shots"],
             "generation_jobs": raw["jobs"],
             "idempotency_index": raw["idempotency_index"],
@@ -730,6 +811,8 @@ class ProductionLedger:
             "spend_limit_usd_micros",
             "production",
             "movie_bible",
+            "episodes",
+            "scenes",
             "shots",
             "generation_jobs",
             "idempotency_index",
@@ -773,6 +856,10 @@ class ProductionLedger:
         }
         if not isinstance(bible_raw, Mapping) or set(bible_raw) != bible_fields:
             raise ProductionPolicyError("movie-bible fields mismatch")
+        if not isinstance(data["episodes"], Mapping):
+            raise ProductionPolicyError("episodes must be a mapping")
+        if not isinstance(data["scenes"], Mapping):
+            raise ProductionPolicyError("scenes must be a mapping")
         if not isinstance(data["shots"], Mapping):
             raise ProductionPolicyError("shots must be a mapping")
         if not isinstance(data["generation_jobs"], Mapping):
@@ -787,6 +874,38 @@ class ProductionLedger:
             project_id=data["project_id"],
             bible=MovieBible(**bible_raw),
         )
+        for episode_id, raw in data.get("episodes", {}).items():
+            ep_fields = {
+                "episode_id",
+                "scene_ids",
+                "timeline_digest",
+                "duration_seconds",
+                "aspect_ratio",
+                "cleanup_authorized",
+            }
+            if not isinstance(raw, Mapping) or set(raw) != ep_fields:
+                raise ProductionPolicyError("episode fields mismatch")
+            ledger.episodes[episode_id] = Episode(
+                episode_id=raw["episode_id"],
+                scene_ids=tuple(raw["scene_ids"]),
+                timeline_digest=raw["timeline_digest"],
+                duration_seconds=raw["duration_seconds"],
+                aspect_ratio=raw["aspect_ratio"],
+                cleanup_authorized=raw["cleanup_authorized"],
+            )
+        for scene_id, raw in data.get("scenes", {}).items():
+            sc_fields = {
+                "scene_id",
+                "bible_revision",
+                "shot_ids",
+            }
+            if not isinstance(raw, Mapping) or set(raw) != sc_fields:
+                raise ProductionPolicyError("scene fields mismatch")
+            ledger.scenes[scene_id] = Scene(
+                scene_id=raw["scene_id"],
+                bible_revision=raw["bible_revision"],
+                shot_ids=tuple(raw["shot_ids"]),
+            )
         for shot_id, raw in data.get("shots", {}).items():
             shot_fields = {
                 "shot_id",
@@ -904,6 +1023,49 @@ class ProductionLedger:
         if type(self.bible.revision) is not int or self.bible.revision < 1:
             raise ProductionPolicyError("invalid movie-bible revision")
         self._validate_bible_maps()
+
+        all_referenced_scenes = set()
+        for ep_key, ep in self.episodes.items():
+            if not isinstance(ep_key, str) or not ep_key:
+                raise ProductionPolicyError("episode id must not be empty")
+            if ep_key != ep.episode_id:
+                raise ProductionPolicyError("episode key/id mismatch")
+            if not isinstance(ep.scene_ids, tuple) or not all(isinstance(x, str) for x in ep.scene_ids):
+                raise ProductionPolicyError("episode scene_ids must be a tuple of strings")
+            if len(ep.scene_ids) != len(set(ep.scene_ids)):
+                raise ProductionPolicyError("episode scene_ids must be unique")
+            for sc_id in ep.scene_ids:
+                if sc_id not in self.scenes:
+                    raise ProductionPolicyError(f"episode references unknown scene {sc_id}")
+                all_referenced_scenes.add(sc_id)
+            if ep.timeline_digest is not None and not isinstance(ep.timeline_digest, str):
+                raise ProductionPolicyError("timeline digest must be a string or null")
+            if ep.duration_seconds is not None and type(ep.duration_seconds) is not int:
+                raise ProductionPolicyError("duration seconds must be an integer or null")
+            if ep.aspect_ratio is not None and ep.aspect_ratio != PRODUCTION_CONTRACT["aspect_ratio"]:
+                raise ProductionPolicyError("aspect ratio must match production contract or null")
+            if type(ep.cleanup_authorized) is not bool:
+                raise ProductionPolicyError("cleanup_authorized must be a boolean")
+            if ep.cleanup_authorized and not ep.timeline_digest:
+                raise ProductionPolicyError("cleanup_authorized requires timeline_digest")
+
+        all_referenced_shots = set()
+        for sc_key, sc in self.scenes.items():
+            if not isinstance(sc_key, str) or not sc_key:
+                raise ProductionPolicyError("scene id must not be empty")
+            if sc_key != sc.scene_id:
+                raise ProductionPolicyError("scene key/id mismatch")
+            if type(sc.bible_revision) is not int or sc.bible_revision < 1:
+                raise ProductionPolicyError("invalid scene bible revision")
+            if not isinstance(sc.shot_ids, tuple) or not all(isinstance(x, str) for x in sc.shot_ids):
+                raise ProductionPolicyError("scene shot_ids must be a tuple of strings")
+            if len(sc.shot_ids) != len(set(sc.shot_ids)):
+                raise ProductionPolicyError("scene shot_ids must be unique")
+            for sh_id in sc.shot_ids:
+                if sh_id not in self.shots:
+                    raise ProductionPolicyError(f"scene references unknown shot {sh_id}")
+                all_referenced_shots.add(sh_id)
+
         for shot_key, shot in self.shots.items():
             if not isinstance(shot_key, str) or not shot_key:
                 raise ProductionPolicyError("shot id must not be empty")

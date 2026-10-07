@@ -9,6 +9,8 @@
     "spend_limit_usd_micros",
     "production",
     "movie_bible",
+    "episodes",
+    "scenes",
     "shots",
     "generation_jobs",
     "idempotency_index",
@@ -36,6 +38,14 @@
       }
     },
     "movie_bible": {"$ref": "#/$defs/movie_bible"},
+    "episodes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/episode"}
+    },
+    "scenes": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/scene"}
+    },
     "shots": {
       "type": "object",
       "additionalProperties": {"$ref": "#/$defs/shot"}
@@ -84,6 +94,46 @@
         "voices": {"$ref": "#/$defs/entity_map"},
         "locations": {"$ref": "#/$defs/entity_map"},
         "continuity_facts": {"$ref": "#/$defs/string_map"}
+      }
+    },
+    "episode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "episode_id",
+        "scene_ids",
+        "timeline_digest",
+        "duration_seconds",
+        "aspect_ratio",
+        "cleanup_authorized"
+      ],
+      "properties": {
+        "episode_id": {"type": "string", "minLength": 1},
+        "scene_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "timeline_digest": {"type": ["string", "null"]},
+        "duration_seconds": {"type": ["integer", "null"]},
+        "aspect_ratio": {"type": ["string", "null"]},
+        "cleanup_authorized": {"type": "boolean"}
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scene_id",
+        "bible_revision",
+        "shot_ids"
+      ],
+      "properties": {
+        "scene_id": {"type": "string", "minLength": 1},
+        "bible_revision": {"type": "integer", "minimum": 1},
+        "shot_ids": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
       }
     },
     "review": {
