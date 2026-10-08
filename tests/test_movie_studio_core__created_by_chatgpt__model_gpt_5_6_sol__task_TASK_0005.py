@@ -1541,49 +1541,44 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.bible.characters["char-1"] = {}
 
         # Test character_ids
-        binding_mutable_chars = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=set(["char-1"]), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
         with self.assertRaisesRegex(ProductionPolicyError, "character_ids must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_chars)
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=ledger.bible.revision,
+                character_ids=set(["char-1"]), voice_ids=frozenset(), location_id="",
+                costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+            )
 
         # Test voice_ids
-        binding_mutable_voices = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["char-1"]), voice_ids=set(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
         with self.assertRaisesRegex(ProductionPolicyError, "voice_ids must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_voices)
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=ledger.bible.revision,
+                character_ids=frozenset(["char-1"]), voice_ids=set(), location_id="",
+                costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+            )
 
         # Test costume_ids
-        binding_mutable_costumes = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
-            costume_ids=set(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
         with self.assertRaisesRegex(ProductionPolicyError, "costume_ids must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_costumes)
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=ledger.bible.revision,
+                character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+                costume_ids=list(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+            )
 
         # Test prop_ids
-        binding_mutable_props = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=set(), reference_asset_versions=frozenset()
-        )
         with self.assertRaisesRegex(ProductionPolicyError, "prop_ids must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_props)
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=ledger.bible.revision,
+                character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+                costume_ids=frozenset(), prop_ids=list(), reference_asset_versions=frozenset()
+            )
 
         # Test reference_asset_versions
-        binding_mutable_assets = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=list()
-        )
         with self.assertRaisesRegex(ProductionPolicyError, "reference_asset_versions must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_assets)
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=ledger.bible.revision,
+                character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+                costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=list()
+            )
 
     def test_continuity_binding_duplicate_schema_list(self):
         ledger = ProductionLedger(project_id="test-dup-list")
