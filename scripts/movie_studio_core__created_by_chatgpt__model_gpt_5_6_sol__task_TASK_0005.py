@@ -458,6 +458,8 @@ class ProductionLedger:
     project_id: str
     episode_id: str = ""
     episode_status: EpisodeStatus = EpisodeStatus.PLANNED
+    plan_revision: int = 1
+    plan_frozen: bool = False
     bible: MovieBible = field(default_factory=MovieBible)
     scenes: Dict[str, Scene] = field(default_factory=dict)
     shots: Dict[str, Shot] = field(default_factory=dict)
@@ -501,12 +503,25 @@ class ProductionLedger:
                 raise ProductionPolicyError("conflicting provider adapter registration")
         self.provider_adapters[key] = adapter
 
+    def freeze_plan(self) -> None:
+        if self.plan_frozen:
+            raise ProductionPolicyError("plan is already frozen")
+        self.plan_frozen = True
+
+    def create_new_plan_revision(self) -> None:
+        self.plan_revision += 1
+        self.plan_frozen = False
+
     def add_scene(self, scene: Scene) -> None:
+        if self.plan_frozen:
+            raise ProductionPolicyError("plan is frozen")
         if not scene.scene_id or scene.scene_id in self.scenes:
             raise ProductionPolicyError("scene id must be non-empty and unique")
         self.scenes[scene.scene_id] = scene
 
     def add_shot(self, shot: Shot) -> None:
+        if self.plan_frozen:
+            raise ProductionPolicyError("plan is frozen")
         if not shot.shot_id or shot.shot_id in self.shots:
             raise ProductionPolicyError("shot id must be non-empty and unique")
         if shot.scene_id and shot.scene_id not in self.scenes:
@@ -514,6 +529,8 @@ class ProductionLedger:
         self.shots[shot.shot_id] = shot
 
     def add_shot_plan(self, plan: ShotPlan) -> None:
+        if self.plan_frozen:
+            raise ProductionPolicyError("plan is frozen")
         if type(plan) is not ShotPlan:
             raise ProductionPolicyError("plan must be a ShotPlan instance")
         if not plan.shot_id or plan.shot_id not in self.shots:
@@ -549,6 +566,8 @@ class ProductionLedger:
         self.shot_plans[plan.shot_id] = plan
 
     def add_shot_continuity_binding(self, binding: ShotContinuityBinding) -> None:
+        if self.plan_frozen:
+            raise ProductionPolicyError("plan is frozen")
         if type(binding) is not ShotContinuityBinding:
             raise ProductionPolicyError("invalid continuity binding type")
         if not isinstance(binding.shot_id, str) or not binding.shot_id:
@@ -955,6 +974,8 @@ class ProductionLedger:
             "project_id": raw["project_id"],
             "episode_id": raw["episode_id"],
             "episode_status": raw["episode_status"],
+            "plan_revision": raw["plan_revision"],
+            "plan_frozen": raw["plan_frozen"],
             "spend_limit_usd_micros": 0,
             "production": dict(PRODUCTION_CONTRACT),
             "movie_bible": raw["bible"],
@@ -983,6 +1004,8 @@ class ProductionLedger:
         data = dict(data)
         data.setdefault("episode_id", "")
         data.setdefault("episode_status", EpisodeStatus.PLANNED.value)
+        data.setdefault("plan_revision", 1)
+        data.setdefault("plan_frozen", False)
         data.setdefault("scenes", {})
         data.setdefault("shot_plans", {})
         data.setdefault("shot_continuity_bindings", {})
@@ -992,6 +1015,8 @@ class ProductionLedger:
             "project_id",
             "episode_id",
             "episode_status",
+            "plan_revision",
+            "plan_frozen",
             "spend_limit_usd_micros",
             "production",
             "movie_bible",
@@ -1023,6 +1048,12 @@ class ProductionLedger:
             episode_status = EpisodeStatus(data["episode_status"])
         except ValueError as exc:
             raise ProductionPolicyError("invalid episode status") from exc
+
+        if type(data.get("plan_revision")) is not int or data.get("plan_revision") < 1:
+            raise ProductionPolicyError("invalid plan_revision")
+        if type(data.get("plan_frozen")) is not bool:
+            raise ProductionPolicyError("invalid plan_frozen")
+
         if (
             type(data.get("spend_limit_usd_micros")) is not int
             or data.get("spend_limit_usd_micros") != 0
@@ -1082,6 +1113,8 @@ class ProductionLedger:
             project_id=data["project_id"],
             episode_id=data["episode_id"],
             episode_status=episode_status,
+            plan_revision=data["plan_revision"],
+            plan_frozen=data["plan_frozen"],
             bible=MovieBible(**bible_raw),
         )
         for scene_id, raw in data.get("scenes", {}).items():
@@ -1289,6 +1322,10 @@ class ProductionLedger:
             raise ProductionPolicyError("episode id must be a string")
         if type(self.episode_status) is not EpisodeStatus:
             raise ProductionPolicyError("invalid episode status")
+        if type(self.plan_revision) is not int or self.plan_revision < 1:
+            raise ProductionPolicyError("invalid plan_revision")
+        if type(self.plan_frozen) is not bool:
+            raise ProductionPolicyError("invalid plan_frozen")
         if type(self.bible.revision) is not int or self.bible.revision < 1:
             raise ProductionPolicyError("invalid movie-bible revision")
         self._validate_bible_maps()
