@@ -1773,5 +1773,53 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertEqual(restored_binding, binding)
         self.assertEqual(restored_binding.character_ids, frozenset(["char-1"]))
 
+
+    def test_asset_version_whitespace_validation(self):
+        # Test Shot.bind_generated_asset
+        shot = Shot("shot-1")
+        with self.assertRaisesRegex(ProductionPolicyError, "asset version must not be empty"):
+            shot.bind_generated_asset("   ")
+
+        # Test GenerationJob._succeed
+        ledger = ProductionLedger("project-1")
+        ledger.provider_adapters["p:a:v"] = ProviderAdapterRegistration(
+            provider_id="p", adapter_id="a", adapter_version="v", capabilities=frozenset([ProviderCapability.VIDEO])
+        )
+        shot2 = Shot("shot-2", generation_epoch=1)
+        ledger.add_shot(shot2)
+        job1 = ledger.submit_generation(job_id="job-1", shot_id="shot-2", input_fingerprint="fp1", idempotency_key="ik1", max_attempts=3)
+        quote1 = ProviderQuote(
+            quote_id="q1", provider_id="p", adapter_id="a", adapter_version="v", request_fingerprint="fp1",
+            estimated_cost_usd_micros=0, maximum_cost_usd_micros=0, available=True, cloud_execution=True, charge_cap_enforced=True
+        )
+        auth1 = ledger.authorize_attempt(job1.job_id, quote1)
+        receipt1 = ProviderSubmissionReceipt(
+            authorization_id=auth1.authorization_id, job_id=job1.job_id, attempt_number=1, provider_id="p", adapter_id="a", adapter_version="v", provider_request_key=auth1.provider_request_key, provider_job_id="pjob-1"
+        )
+        ledger.start_generation(job1.job_id, receipt1)
+
+        with self.assertRaisesRegex(ProductionPolicyError, "asset version must not be empty"):
+            ledger.finish_generation(job1.job_id, 1, "pjob-1", "   ")
+
+        # Test ShotContinuityBinding
+        with self.assertRaisesRegex(ProductionPolicyError, "reference_asset_versions must contain non-empty strings"):
+            ShotContinuityBinding(
+                shot_id="shot-3",
+                bible_revision=1,
+                character_ids=frozenset(),
+                voice_ids=frozenset(),
+                location_id="",
+                costume_ids=frozenset(),
+                prop_ids=frozenset(),
+                reference_asset_versions=frozenset(["   "])
+            )
+
+        # Test validate_review_binding
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import validate_review_binding
+        shot3 = Shot("shot-3", asset_version="asset-1")
+        shot3.reviews[Gate.VISUAL_QA] = Review(gate=Gate.VISUAL_QA, asset_version="   ", verdict=Verdict.PASS)
+        with self.assertRaisesRegex(ProductionPolicyError, "invalid review evidence type"):
+            validate_review_binding(shot3)
+
 if __name__ == "__main__":
     unittest.main()
