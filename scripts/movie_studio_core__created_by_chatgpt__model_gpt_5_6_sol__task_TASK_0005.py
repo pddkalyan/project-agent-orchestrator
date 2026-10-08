@@ -136,6 +136,12 @@ class ShotContinuityBinding:
     prop_ids: FrozenSet[str]
     reference_asset_versions: FrozenSet[str]
 
+    def __post_init__(self):
+        for field_name in ["character_ids", "voice_ids", "costume_ids", "prop_ids", "reference_asset_versions"]:
+            val = getattr(self, field_name)
+            if type(val) is not frozenset:
+                raise TypeError(f"{field_name} must be a frozenset")
+
 
 def continuity_binding_digest(binding: ShotContinuityBinding) -> str:
     data = asdict(binding)
