@@ -182,7 +182,9 @@ jobs:
           terminal={"COMPLETED","FAILED"}
           last=None
           feedback_rounds=0
-          max_feedback_rounds=3
+          max_feedback_rounds=8
+          last_feedback_message=None
+          repeated_feedback_count=0
           failure_recovery_rounds=0
           max_failure_recovery_rounds=2
           resume_waiting_for_reactivation=bool(resume_sid)
@@ -271,7 +273,6 @@ jobs:
                   time.sleep(10)
                   continue
               if state=="AWAITING_USER_FEEDBACK":
-                  feedback_rounds += 1
                   acts=request("GET", f"{API}/sessions/{sid}/activities?pageSize=100").get("activities",[])
                   Path("jules-session-activities.json").write_text(
                       json.dumps({"session_id":sid,"feedback_round":feedback_rounds,"activities":acts},indent=2)+"\n",
@@ -283,7 +284,17 @@ jobs:
                       if msg:
                           latest=msg
                           break
-                  print(f"Jules requested feedback round {feedback_rounds}: {latest[:800]}")
+                  if latest == last_feedback_message:
+                      repeated_feedback_count += 1
+                      print(f"Jules repeated identical feedback {repeated_feedback_count}/8; waiting before retry: {latest[:400]}")
+                      if repeated_feedback_count >= 8:
+                          raise SystemExit("JULES_STUCK_IDENTICAL_FEEDBACK: supervisor intervention needed; no paid fallback")
+                      time.sleep(90)
+                      continue
+                  last_feedback_message=latest
+                  repeated_feedback_count=0
+                  feedback_rounds += 1
+                  print(f"Jules requested distinct feedback round {feedback_rounds}: {latest[:800]}")
                   if feedback_rounds > max_feedback_rounds:
                       raise SystemExit("JULES_FEEDBACK_LOOP_EXHAUSTED")
                   reply = "\n".join([
@@ -292,6 +303,7 @@ jobs:
                       "Prefer the smallest reversible implementation that preserves existing tests and architecture.",
                       "Do not spend money, enable billing, expose secrets, use private assets, merge PRs, or change files outside the allowlist.",
                       "If your question concerns an implementation choice, choose the safest reasonable option and continue.",
+                      "Do not repeat a progress update as a feedback request. Make the code changes, run tests, fix failures, and create the focused candidate PR.",
                       "If it truly requires a secret, payment, private asset, or irreversible external action, stop and report that exact blocker.",
                       f"Your latest question/context was: {latest[:3000]}"
                   ])
