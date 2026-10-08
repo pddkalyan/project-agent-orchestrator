@@ -51,7 +51,8 @@ jobs:
               if allowed:
                   prs=get(base+"/pulls?state=open&per_page=100")
                   for pr in prs:
-                      # PRs <= 28 are legacy candidates predating reviewed PR #28 promotion.\n                      if pr["base"]["ref"]=="feature/TASK-0005-movie-studio-core" and pr["number"] > 28:
+                      # PRs <= 28 are legacy candidates predating reviewed PR #28 promotion.
+                      if pr["base"]["ref"]=="feature/TASK-0005-movie-studio-core" and pr["number"] > 28:
                           allowed=False
                           reason="candidate PR awaiting review"
                           break
