@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 23,
+  "sequence": 24,
   "batch_cycle": 1,
   "batch_size": 4,
   "mode": "jules_primary_worker",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "PR #28 planning-freeze increment promoted; continue Phase 2 with next missing crash-safe orchestration invariants, without repeating promoted work.",
+  "reason": "PR #29 corruption tests promoted after successful CI. Continue Phase 2 with a nonduplicated substantive crash-safe orchestration increment.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false,
   "resume_jules_session_id": "",
   "resume_prompt": "",
-  "fresh_jules_title": "TASK-0005 Phase 2 crash-safe resumable orchestration",
-  "fresh_jules_prompt": "TASK-0005 PHASE 2 ONLY. Existing continuity binding and PR #28 planning freeze/revision increment are ALREADY PROMOTED on starting branch. Do not reimplement them. Inspect existing core/schema/tests and implement one focused missing Phase 2 increment for crash-safe resumable generation-job orchestration: durable idempotency, safe replay after checkpoint restore, stale callback rejection, and ownership/epoch validation, only where absent. Preserve existing contracts, deterministic shot ordering, continuity, checkpoint migration, zero-cost policy and public APIs. Add positive, negative, corrupted-checkpoint, retry/replay tests. Run deterministic suite, schema parse and py_compile; repair failures autonomously. Limit edits to existing Movie Studio core Python, matching schema and tests. Open ONE focused candidate PR against feature/TASK-0005-movie-studio-core and never merge. Do not redo completed work or create duplicate PRs. No TASK-0004, no local inference, provider activation, paid API, secrets, destructive changes or unrelated files. If already satisfied, identify next genuinely missing Phase 2 invariant and prove it with focused tests. Never claim Phase 2 complete until checklist A-H and actual Astra approval. Do not use AWAITING_USER_FEEDBACK for status updates; report only concrete irreducible blockers."
+  "fresh_jules_title": "TASK-0005 Phase 2 crash-safe orchestration missing invariant",
+  "fresh_jules_prompt": "TASK-0005 PHASE 2 ONLY. PR #28 planning freeze and PR #29 corrupted-generation-job tests have ALREADY BEEN PROMOTED to starting branch. Do not redo those or earlier continuity/shot planning work. Inspect actual code and deterministic tests, find ONE concrete missing crash-safe orchestration invariant (for example stale callbacks, epoch ownership, idempotent replay, or checkpoint consistency) that existing tests do not already cover. Implement the smallest safe correction and targeted positive/negative regression tests. If no real gap, report NO_SAFE_CHANGE with evidence, not duplicate tests or speculative code. Run full offline deterministic tests, schema JSON parse, py_compile. Only modify existing Movie Studio core Python, its schema and tests; open ONE focused candidate PR against feature/TASK-0005-movie-studio-core, never merge. Maintain zero USD, no real provider activation, local inference, secrets, TASK-0004 or unrelated changes. Work autonomously, repair test failures, no AWAITING_USER_FEEDBACK status loops. Do not claim Phase 2 completion without full checklist and Astra review."
 }
