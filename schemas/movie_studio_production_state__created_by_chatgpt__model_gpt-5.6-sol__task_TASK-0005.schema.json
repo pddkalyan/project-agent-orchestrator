@@ -128,6 +128,22 @@
       "additionalProperties": {
         "$ref": "#/$defs/shot_continuity_binding"
       }
+    },
+    "episode_plan": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/episode_plan"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "scene_plans": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/scene_plan"
+      }
     }
   },
   "$defs": {
@@ -676,6 +692,46 @@
         },
         "has_dialogue_or_audio": {
           "type": "boolean"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "episode_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "episode_id",
+        "revision"
+      ],
+      "properties": {
+        "episode_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "scene_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scene_id",
+        "revision"
+      ],
+      "properties": {
+        "scene_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     }
