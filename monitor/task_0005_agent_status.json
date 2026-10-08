@@ -17,7 +17,7 @@
   "current_phase": "HANDOFF_TO_FREE_WORKER",
   "current_work_item": "Supervisor status was stale after the free worker waited 15 minutes; handing routine implementation to the Gemini free cloud worker.",
   "last_evidence_sha": "b593ebe4f61b782a5ef8d3441a087ec6dd3a45ca",
-  "note": "No active GitHub TASK-0005 worker was observed at repair time. Status cleared only to allow the free-worker handoff; private chain-of-thought is not exposed.",
+  "note": "TASK-0005 GitHub connector write diagnostic requested by user on 2026-10-08; previous note superseded. No Jules implementation, test, or phase approval is asserted by this diagnostic.",
   "last_cycle": {
     "outcome": "ACTIVE",
     "started_at_utc": "2026-10-07T03:41:50Z",
