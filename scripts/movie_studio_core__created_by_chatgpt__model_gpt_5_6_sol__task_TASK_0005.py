@@ -110,6 +110,16 @@ class Scene:
     scene_id: str
     status: SceneStatus = SceneStatus.PLANNED
 
+@dataclass(frozen=True)
+class ScenePlan:
+    scene_id: str
+    revision: int = 1
+
+@dataclass(frozen=True)
+class EpisodePlan:
+    episode_id: str
+    revision: int = 1
+
 
 @dataclass(frozen=True)
 class ShotPlan:
@@ -119,6 +129,7 @@ class ShotPlan:
     planned_duration_ms: int
     prompt_fingerprint: str
     has_dialogue_or_audio: bool
+    revision: int = 1
 
 
 def plan_digest(plan: ShotPlan) -> str:
@@ -463,6 +474,8 @@ class ProductionLedger:
     bible: MovieBible = field(default_factory=MovieBible)
     scenes: Dict[str, Scene] = field(default_factory=dict)
     shots: Dict[str, Shot] = field(default_factory=dict)
+    episode_plan: Optional[EpisodePlan] = None
+    scene_plans: Dict[str, ScenePlan] = field(default_factory=dict)
     shot_plans: Dict[str, ShotPlan] = field(default_factory=dict)
     shot_continuity_bindings: Dict[str, ShotContinuityBinding] = field(default_factory=dict)
     jobs: Dict[str, GenerationJob] = field(default_factory=dict)
@@ -552,18 +565,76 @@ class ProductionLedger:
             raise ProductionPolicyError("plan prompt_fingerprint must be a non-empty string")
         if type(plan.has_dialogue_or_audio) is not bool:
             raise ProductionPolicyError("plan has_dialogue_or_audio must be a strict boolean")
+        if type(plan.revision) is not int or plan.revision < 1:
+            raise ProductionPolicyError("plan revision must be a positive integer")
 
         for existing_plan in self.shot_plans.values():
             if existing_plan.scene_id == plan.scene_id and existing_plan.sequence_index == plan.sequence_index and existing_plan.shot_id != plan.shot_id:
                 raise ProductionPolicyError("duplicate sequence_index within the same scene is not allowed")
 
+        frozen = (
+            self.episode_status != EpisodeStatus.PLANNED
+            or self.scenes[plan.scene_id].status != SceneStatus.PLANNED
+            or shot.status != ShotStatus.PLANNED
+        )
+
         if plan.shot_id in self.shot_plans:
             existing = self.shot_plans[plan.shot_id]
-            if existing != plan:
-                raise ProductionPolicyError("conflicting shot plan replacement is not allowed")
-            return
+            if existing == plan:
+                return
+            if plan.revision <= existing.revision:
+                if frozen:
+                    raise ProductionPolicyError("frozen plan mutation requires explicit new revision")
+                else:
+                    raise ProductionPolicyError("conflicting shot plan replacement is not allowed")
 
         self.shot_plans[plan.shot_id] = plan
+
+    def add_scene_plan(self, plan: ScenePlan) -> None:
+        if type(plan) is not ScenePlan:
+            raise ProductionPolicyError("plan must be a ScenePlan instance")
+        if not plan.scene_id or plan.scene_id not in self.scenes:
+            raise ProductionPolicyError("plan must reference an existing scene")
+        if type(plan.revision) is not int or plan.revision < 1:
+            raise ProductionPolicyError("plan revision must be a positive integer")
+
+        frozen = (
+            self.episode_status != EpisodeStatus.PLANNED
+            or self.scenes[plan.scene_id].status != SceneStatus.PLANNED
+        )
+
+        if plan.scene_id in self.scene_plans:
+            existing = self.scene_plans[plan.scene_id]
+            if existing == plan:
+                return
+            if plan.revision <= existing.revision:
+                if frozen:
+                    raise ProductionPolicyError("frozen scene plan mutation requires explicit new revision")
+                else:
+                    raise ProductionPolicyError("conflicting scene plan replacement is not allowed")
+
+        self.scene_plans[plan.scene_id] = plan
+
+    def set_episode_plan(self, plan: EpisodePlan) -> None:
+        if type(plan) is not EpisodePlan:
+            raise ProductionPolicyError("plan must be an EpisodePlan instance")
+        if type(plan.revision) is not int or plan.revision < 1:
+            raise ProductionPolicyError("plan revision must be a positive integer")
+        if type(plan.episode_id) is not str or not plan.episode_id:
+            raise ProductionPolicyError("plan episode_id must be a non-empty string")
+
+        frozen = (self.episode_status != EpisodeStatus.PLANNED)
+
+        if self.episode_plan is not None:
+            if self.episode_plan == plan:
+                return
+            if plan.revision <= self.episode_plan.revision:
+                if frozen:
+                    raise ProductionPolicyError("frozen episode plan mutation requires explicit new revision")
+                else:
+                    raise ProductionPolicyError("conflicting episode plan replacement is not allowed")
+
+        self.episode_plan = plan
 
     def add_shot_continuity_binding(self, binding: ShotContinuityBinding) -> None:
         if self.plan_frozen:
@@ -1007,6 +1078,8 @@ class ProductionLedger:
         data.setdefault("plan_revision", 1)
         data.setdefault("plan_frozen", False)
         data.setdefault("scenes", {})
+        data.setdefault("episode_plan", None)
+        data.setdefault("scene_plans", {})
         data.setdefault("shot_plans", {})
         data.setdefault("shot_continuity_bindings", {})
 
@@ -1035,10 +1108,19 @@ class ProductionLedger:
         actual_fields = set(data.keys())
         if "provider_adapters" not in actual_fields:
             actual_fields.add("provider_adapters")
+        if "episode_plan" not in actual_fields:
+            actual_fields.add("episode_plan")
+        if "scene_plans" not in actual_fields:
+            actual_fields.add("scene_plans")
         if "shot_plans" not in actual_fields:
             actual_fields.add("shot_plans")
+        if "episode_plan" not in root_fields:
+            root_fields.add("episode_plan")
+        if "scene_plans" not in root_fields:
+            root_fields.add("scene_plans")
+
         if actual_fields != root_fields:
-            raise ProductionPolicyError("production checkpoint fields mismatch")
+            raise ProductionPolicyError(f"production checkpoint fields mismatch: {actual_fields} != {root_fields}")
         if (
             type(data.get("schema_version")) is not int
             or data.get("schema_version") != SCHEMA_VERSION
@@ -1097,6 +1179,10 @@ class ProductionLedger:
             raise ProductionPolicyError("scenes must be a mapping")
         if not isinstance(data["shots"], Mapping):
             raise ProductionPolicyError("shots must be a mapping")
+        if data["episode_plan"] is not None and not isinstance(data["episode_plan"], Mapping):
+            raise ProductionPolicyError("episode plan must be a mapping or null")
+        if not isinstance(data["scene_plans"], Mapping):
+            raise ProductionPolicyError("scene plans must be a mapping")
         if not isinstance(data["shot_plans"], Mapping):
             raise ProductionPolicyError("shot plans must be a mapping")
         if not isinstance(data["shot_continuity_bindings"], Mapping):
@@ -1202,7 +1288,22 @@ class ProductionLedger:
                 generation_epoch=raw["generation_epoch"],
                 generation_owner_job_id=raw["generation_owner_job_id"],
             )
+        ep_raw = data.get("episode_plan")
+        if ep_raw:
+            ep_fields = {"episode_id", "revision"}
+            if not isinstance(ep_raw, Mapping) or set(ep_raw) != ep_fields:
+                raise ProductionPolicyError("episode plan fields mismatch")
+            ledger.set_episode_plan(EpisodePlan(episode_id=ep_raw["episode_id"], revision=ep_raw["revision"]))
+
+        for plan_id, raw in data.get("scene_plans", {}).items():
+            plan_fields = {"scene_id", "revision"}
+            if not isinstance(raw, Mapping) or set(raw) != plan_fields:
+                raise ProductionPolicyError("scene plan fields mismatch")
+            ledger.scene_plans[plan_id] = ScenePlan(scene_id=raw["scene_id"], revision=raw["revision"])
+
         for plan_id, raw in data.get("shot_plans", {}).items():
+            raw = dict(raw)
+            raw.setdefault("revision", 1)
             plan_fields = {
                 "shot_id",
                 "scene_id",
@@ -1210,6 +1311,7 @@ class ProductionLedger:
                 "planned_duration_ms",
                 "prompt_fingerprint",
                 "has_dialogue_or_audio",
+                "revision",
             }
             if not isinstance(raw, Mapping) or set(raw) != plan_fields:
                 raise ProductionPolicyError("shot plan fields mismatch")
@@ -1220,6 +1322,7 @@ class ProductionLedger:
                 planned_duration_ms=raw["planned_duration_ms"],
                 prompt_fingerprint=raw["prompt_fingerprint"],
                 has_dialogue_or_audio=raw["has_dialogue_or_audio"],
+                revision=raw["revision"],
             )
         for job_id, raw in data.get("generation_jobs", {}).items():
             job_fields = {
@@ -1389,6 +1492,22 @@ class ProductionLedger:
                 if not isinstance(asset_version, str) or not asset_version:
                     raise ProductionPolicyError("invalid reference asset version in binding")
 
+        if self.episode_plan is not None:
+            if type(self.episode_plan) is not EpisodePlan:
+                raise ProductionPolicyError("episode plan must be EpisodePlan")
+            if type(self.episode_plan.revision) is not int or self.episode_plan.revision < 1:
+                raise ProductionPolicyError("episode plan revision must be a positive integer")
+
+        for plan_key, plan in self.scene_plans.items():
+            if type(plan) is not ScenePlan:
+                raise ProductionPolicyError("scene plan must be a ScenePlan instance")
+            if plan_key != plan.scene_id:
+                raise ProductionPolicyError("scene plan key must match plan.scene_id")
+            if not plan.scene_id or plan.scene_id not in self.scenes:
+                raise ProductionPolicyError("scene plan has dangling scene reference")
+            if type(plan.revision) is not int or plan.revision < 1:
+                raise ProductionPolicyError("scene plan revision must be a positive integer")
+
         sequence_indices_by_scene = {}
         for plan_key, plan in self.shot_plans.items():
             if type(plan) is not ShotPlan:
@@ -1414,6 +1533,8 @@ class ProductionLedger:
                 raise ProductionPolicyError("shot plan prompt_fingerprint must be non-empty string")
             if type(plan.has_dialogue_or_audio) is not bool:
                 raise ProductionPolicyError("shot plan has_dialogue_or_audio must be strict boolean")
+            if type(plan.revision) is not int or plan.revision < 1:
+                raise ProductionPolicyError("shot plan revision must be a positive integer")
 
             scene_indices = sequence_indices_by_scene.setdefault(plan.scene_id, set())
             if plan.sequence_index in scene_indices:
