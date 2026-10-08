@@ -15,7 +15,6 @@ concurrency:
 jobs:
   jules_worker:
     name: "PRIMARY WORKER · Jules"
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'feature/TASK-0005-movie-studio-core' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -64,13 +63,15 @@ jobs:
               out.write("proceed="+str(allowed).lower()+"\n")
           PY
 
-      - name:Checkout TASK-0005 control branch
+      - name: Checkout TASK-0005 control branch
+        if: steps.gate.outputs.proceed == 'true'
         uses: actions/checkout@v4
         with:
           ref: feature/TASK-0005-movie-studio-core
           fetch-depth: 0
 
-      - name:Validate Jules zero-incremental-spend contract
+      - name: Validate Jules zero-incremental-spend contract
+        if: steps.gate.outputs.proceed == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -88,7 +89,8 @@ jobs:
           print("Jules worker contract verified.")
           PY
 
-      - name:Create and monitor Jules coding session
+      - name: Create and monitor Jules coding session
+        if: steps.gate.outputs.proceed == 'true'
         id: jules
         shell: bash
         run: |
@@ -369,7 +371,7 @@ jobs:
           sys.exit(0)
           PY
 
-      - name:Upload Jules session evidence
+      - name: Upload Jules session evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -380,7 +382,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name:Publish Jules worker summary
+      - name: Publish Jules worker summary
         if: always()
         shell: bash
         run: |
