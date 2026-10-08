@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: task-0005-jules-dispatch
@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 60
     env:
       JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+      GH_TOKEN: ${{ github.token }}
       REPO_OWNER: pddkalyan
       REPO_NAME: project-agent-orchestrator
       STARTING_BRANCH: feature/TASK-0005-movie-studio-core
@@ -61,7 +62,7 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import json, os, sys, time, urllib.request, urllib.error
+          import json, os, sys, time, urllib.request, urllib.error, base64
           from pathlib import Path
 
           API="https://jules.googleapis.com/v1alpha"
@@ -70,7 +71,24 @@ jobs:
           REPO=os.environ["REPO_NAME"]
           BRANCH=os.environ["STARTING_BRANCH"]
           trigger=json.loads(Path(os.environ["TRIGGER_FILE"]).read_text(encoding="utf-8"))
-          resume_sid=str(trigger.get("resume_jules_session_id") or "").strip()
+          STATUS_PATH="monitor/task_0005_jules_active_session.json"
+          GH_API=f"https://api.github.com/repos/{OWNER}/{REPO}/contents/{STATUS_PATH}"
+          def read_checkpoint():
+              req=urllib.request.Request(GH_API+"?ref="+BRANCH,headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json"})
+              try:
+                  with urllib.request.urlopen(req,timeout=30) as response: data=json.load(response)
+                  return json.loads(base64.b64decode(data["content"])),data["sha"]
+              except urllib.error.HTTPError as error:
+                  if error.code==404: return {},None
+                  raise
+          def save_checkpoint(status):
+              old,sha=read_checkpoint()
+              payload={"message":"chore(task-0005): checkpoint Jules session","branch":BRANCH,"content":base64.b64encode((json.dumps(status,indent=2)+"\\n").encode()).decode()}
+              if sha: payload["sha"]=sha
+              req=urllib.request.Request(GH_API,data=json.dumps(payload).encode(),headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json","Content-Type":"application/json"},method="PUT")
+              with urllib.request.urlopen(req,timeout=30) as response: return json.load(response)
+          saved,_=read_checkpoint()
+          resume_sid=str(trigger.get("resume_jules_session_id") or saved.get("active_session_id") or "").strip()
           resume_prompt=str(trigger.get("resume_prompt") or "").strip()
           fresh_prompt=str(trigger.get("fresh_jules_prompt") or "").strip()
           fresh_title=str(trigger.get("fresh_jules_title") or "TASK-0005 Movie Studio verified implementation increment").strip()
@@ -142,11 +160,10 @@ jobs:
 
           if resume_sid:
               sid=resume_sid
-              if not resume_prompt:
-                  raise SystemExit("JULES_RESUME_PROMPT_MISSING")
               prior=request("GET", f"{API}/sessions/{sid}")
               print(f"Resuming Jules session: {prior.get('url') or ('https://jules.google.com/session/'+sid)}")
-              request("POST", f"{API}/sessions/{sid}:sendMessage", {"prompt": resume_prompt})
+              if resume_prompt and prior.get("state") in {"FAILED","PAUSED","AWAITING_USER_FEEDBACK"}:
+                  request("POST", f"{API}/sessions/{sid}:sendMessage", {"prompt": resume_prompt})
               time.sleep(8)
               session=request("GET", f"{API}/sessions/{sid}")
           else:
@@ -165,6 +182,7 @@ jobs:
               if not sid:
                   raise SystemExit("JULES_SESSION_CREATE_RETURNED_NO_ID")
 
+          save_checkpoint({"task_id":"TASK-0005","active_session_id":sid,"session_url":session.get("url") or "https://jules.google.com/session/"+sid,"state":session.get("state"),"phase":2})
           with open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf-8") as fh:
               fh.write(f"session_id={sid}\n")
               fh.write(f"session_url={session.get('url') or ('https://jules.google.com/session/'+sid)}\n")
@@ -187,7 +205,7 @@ jobs:
           repeated_feedback_count=0
           failure_recovery_rounds=0
           max_failure_recovery_rounds=2
-          resume_waiting_for_reactivation=bool(resume_sid)
+          resume_waiting_for_reactivation=bool(resume_sid and resume_prompt)
           resume_started=time.time()
           deadline=time.time()+55*60
 
@@ -266,6 +284,7 @@ jobs:
                       print("Jules completed without creating a PR.")
                   else:
                       print("Jules PR:", prs[-1])
+                  save_checkpoint({"task_id":"TASK-0005","active_session_id":"","last_session_id":sid,"state":"COMPLETED","phase":2,"pr_url":prs[-1] if prs else None})
                   sys.exit(0)
               if state=="AWAITING_PLAN_APPROVAL":
                   request("POST", f"{API}/sessions/{sid}:approvePlan", {})
@@ -313,7 +332,9 @@ jobs:
                   continue
               time.sleep(30)
 
-          raise SystemExit("JULES_SESSION_MONITOR_TIMEOUT")
+          save_checkpoint({"task_id":"TASK-0005","active_session_id":sid,"session_url":"https://jules.google.com/session/"+sid,"state":"MONITOR_WINDOW_ENDED","phase":2})
+          print("JULES_MONITOR_HANDOFF: checkpoint saved for next watchdog cycle.")
+          sys.exit(0)
           PY
 
       - name: Upload Jules session evidence
