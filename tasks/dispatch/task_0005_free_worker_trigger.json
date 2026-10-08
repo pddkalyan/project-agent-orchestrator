@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 20,
+  "sequence": 21,
   "batch_cycle": 1,
   "batch_size": 4,
   "mode": "jules_primary_worker",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "Recovery from Jules run 37711116741: stale completed continuity-binding task caused four identical feedback requests and JULES_FEEDBACK_LOOP_EXHAUSTED. Advance to Phase 2 planning freeze/versioning.",
+  "reason": "Retry Phase 2 planning freeze after correcting repeated identical Jules feedback handling in workflow commit 91ed3593; preserve zero spend and no merge.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false,
   "resume_jules_session_id": "",
   "resume_prompt": "",
-  "fresh_jules_title": "TASK-0005 Phase 2 planning freeze and explicit revisions",
-  "fresh_jules_prompt": "TASK-0005 Phase 2 ONLY. The continuity-binding correction is ALREADY PROMOTED on the starting branch and its 76 deterministic tests passed in GitHub run 37711116773. DO NOT redo continuity binding, episode-scene-shot referential integrity, or completed work. Implement the next missing narrow increment: durable planning freeze/versioning for approved episode, scene and shot plans, rejecting mutation after freeze unless an explicit new revision/version is created. Preserve stable ordering, digests, existing checkpoint roundtrips and migration-safe defaults; fail closed on corrupt revisions. Restrict edits to the existing Movie Studio core Python file, its tests and production-state JSON schema. Add focused positive, negative, corruption and checkpoint roundtrip tests; run all deterministic tests and schema parse/py_compile. Do not add helper/scratch files. If already implemented, inspect and identify the next truly missing Phase 2 invariant instead of asking repeatedly about completed requirements; make a concrete safe improvement or report NO_SAFE_CHANGE with evidence. Create a focused candidate PR against feature/TASK-0005-movie-studio-core, never merge. USD 0, no provider activation, no local inference, no TASK-0004, no unrelated changes."
+  "fresh_jules_title": "TASK-0005 Phase 2 planning freeze self-correcting worker retry",
+  "fresh_jules_prompt": "TASK-0005 Phase 2 ONLY. The continuity-binding correction is ALREADY PROMOTED on the starting branch and its 76 deterministic tests passed in GitHub run 37711116773. DO NOT redo continuity binding, episode-scene-shot referential integrity, or completed work. Implement the next missing narrow increment: durable planning freeze/versioning for approved episode, scene and shot plans, rejecting mutation after freeze unless an explicit new revision/version is created. Preserve stable ordering, digests, existing checkpoint roundtrips and migration-safe defaults; fail closed on corrupt revisions. Restrict edits to the existing Movie Studio core Python file, its tests and production-state JSON schema. Add focused positive, negative, corruption and checkpoint roundtrip tests; run all deterministic tests and schema parse/py_compile. Do not add helper/scratch files. If already implemented, inspect and identify the next truly missing Phase 2 invariant instead of asking repeatedly about completed requirements; make a concrete safe improvement or report NO_SAFE_CHANGE with evidence. Create a focused candidate PR against feature/TASK-0005-movie-studio-core, never merge. USD 0, no provider activation, no local inference, no TASK-0004, no unrelated changes. IMPORTANT: Do not use AWAITING_USER_FEEDBACK for status updates such as 'I am working'. Work autonomously on allowed files, run tests, repair failures and create focused candidate PR. If blocked, provide a specific irreducible blocker, not repeated progress statements. This run is a bounded retry after prior feedback-loop failure."
 }
