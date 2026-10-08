@@ -1632,6 +1632,38 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertEqual(restored.bible.props, {})
         self.assertEqual(restored.shot_continuity_bindings, {})
 
+
+    def test_continuity_binding_schema_validation_rejections(self):
+        ledger = ProductionLedger(project_id="test-roundtrip")
+        ledger.add_shot(Shot(shot_id="shot-1"))
+        ledger.bible.characters["char-1"] = {"name": "Alice"}
+        ledger.bible.voices["voice-1"] = {"style": "soft"}
+        ledger.bible.locations["loc-1"] = {"setting": "park"}
+        ledger.bible.costumes["costume-1"] = {"desc": "red jacket"}
+        ledger.bible.props["prop-1"] = {"desc": "watch"}
+        binding = ShotContinuityBinding(
+            shot_id="shot-1",
+            bible_revision=ledger.bible.revision,
+            character_ids=frozenset(["char-1"]),
+            voice_ids=frozenset(["voice-1"]),
+            location_id="loc-1",
+            costume_ids=frozenset(["costume-1"]),
+            prop_ids=frozenset(["prop-1"]),
+            reference_asset_versions=frozenset(["asset-v1"])
+        )
+        ledger.add_shot_continuity_binding(binding)
+        ledger_dict = ledger.to_dict()
+
+        # Stale mismatch
+        ledger_dict["shot_continuity_bindings"]["shot-1"]["bible_revision"] = ledger.bible.revision - 1
+        with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision must match current movie-bible revision exactly"):
+            ProductionLedger.from_dict(ledger_dict)
+
+        # Future mismatch
+        ledger_dict["shot_continuity_bindings"]["shot-1"]["bible_revision"] = ledger.bible.revision + 1
+        with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision must match current movie-bible revision exactly"):
+            ProductionLedger.from_dict(ledger_dict)
+
     def test_continuity_binding_roundtrip(self):
         ledger = ProductionLedger(project_id="test-roundtrip")
         ledger.add_shot(Shot(shot_id="shot-1"))
