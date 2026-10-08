@@ -1540,50 +1540,42 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.add_shot(Shot(shot_id="shot-1"))
         ledger.bible.characters["char-1"] = {}
 
-        # Test character_ids
-        binding_mutable_chars = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=set(["char-1"]), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
-        with self.assertRaisesRegex(ProductionPolicyError, "character_ids must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_chars)
+        # The mutable collections test was previously relying on add_shot_continuity_binding
+        # but with __post_init__ it fails on instantiation directly with TypeError.
+        # This is already covered by test_continuity_binding_direct_instantiation_rejects_mutable_types.
+        pass
 
-        # Test voice_ids
-        binding_mutable_voices = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["char-1"]), voice_ids=set(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
-        with self.assertRaisesRegex(ProductionPolicyError, "voice_ids must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_voices)
-
-        # Test costume_ids
-        binding_mutable_costumes = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
-            costume_ids=set(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
-        with self.assertRaisesRegex(ProductionPolicyError, "costume_ids must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_costumes)
-
-        # Test prop_ids
-        binding_mutable_props = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=set(), reference_asset_versions=frozenset()
-        )
-        with self.assertRaisesRegex(ProductionPolicyError, "prop_ids must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_props)
-
-        # Test reference_asset_versions
-        binding_mutable_assets = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=list()
-        )
-        with self.assertRaisesRegex(ProductionPolicyError, "reference_asset_versions must be a frozenset"):
-            ledger.add_shot_continuity_binding(binding_mutable_assets)
+    def test_continuity_binding_direct_instantiation_rejects_mutable_types(self):
+        with self.assertRaisesRegex(TypeError, "character_ids must be a frozenset"):
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=1,
+                character_ids=set(["char-1"]), voice_ids=frozenset(), location_id="",
+                costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+            )
+        with self.assertRaisesRegex(TypeError, "voice_ids must be a frozenset"):
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=1,
+                character_ids=frozenset(["char-1"]), voice_ids=set(), location_id="",
+                costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+            )
+        with self.assertRaisesRegex(TypeError, "costume_ids must be a frozenset"):
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=1,
+                character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+                costume_ids=set(), prop_ids=frozenset(), reference_asset_versions=frozenset()
+            )
+        with self.assertRaisesRegex(TypeError, "prop_ids must be a frozenset"):
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=1,
+                character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+                costume_ids=frozenset(), prop_ids=set(), reference_asset_versions=frozenset()
+            )
+        with self.assertRaisesRegex(TypeError, "reference_asset_versions must be a frozenset"):
+            ShotContinuityBinding(
+                shot_id="shot-1", bible_revision=1,
+                character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
+                costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=set()
+            )
 
     def test_continuity_binding_duplicate_schema_list(self):
         ledger = ProductionLedger(project_id="test-dup-list")
