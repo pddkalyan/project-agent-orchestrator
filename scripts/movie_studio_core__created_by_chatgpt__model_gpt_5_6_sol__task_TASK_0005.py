@@ -321,11 +321,16 @@ class GenerationJob:
         self.last_error = None
 
     def _start(self, receipt: ProviderSubmissionReceipt) -> None:
-        if self.status is JobStatus.RUNNING and self.attempt_history:
+        if self.status in {
+            JobStatus.RUNNING,
+            JobStatus.SUCCEEDED,
+            JobStatus.RETRYABLE,
+            JobStatus.EXHAUSTED,
+        } and self.attempt_history:
             current = self.attempt_history[-1]
             auth = current.authorization
             if (
-                current.status is AttemptStatus.RUNNING
+                current.status in {AttemptStatus.RUNNING, AttemptStatus.SUCCEEDED, AttemptStatus.FAILED}
                 and receipt.authorization_id == auth.authorization_id
                 and receipt.job_id == self.job_id
                 and receipt.attempt_number == current.attempt_number
@@ -336,7 +341,8 @@ class GenerationJob:
                 and receipt.provider_job_id == current.provider_job_id
             ):
                 return
-            raise ProductionPolicyError("conflicting duplicate provider receipt")
+            if self.status is JobStatus.RUNNING:
+                raise ProductionPolicyError("conflicting duplicate provider receipt")
         if self.status is not JobStatus.AUTHORIZED or not self.attempt_history:
             raise ProductionPolicyError("generation job lacks current authorization")
         current = self.attempt_history[-1]
