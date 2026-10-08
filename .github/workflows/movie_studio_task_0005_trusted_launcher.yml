@@ -2,6 +2,8 @@ name: Movie Studio TASK-0005 Trusted Jules Launcher
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
 
 permissions:
   contents: write
@@ -25,13 +27,50 @@ jobs:
       CONTRACT_FILE: tasks/worker/task_0005_free_worker_contract.json
       TRIGGER_FILE: tasks/dispatch/task_0005_free_worker_trigger.json
     steps:
-      - name: Checkout TASK-0005 control branch
+      - name: Check for existing Jules work and pending candidate review
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json, os, urllib.request, urllib.error
+          base="https://api.github.com/repos/pddkalyan/project-agent-orchestrator"
+          headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json"}
+          def get(url):
+              req=urllib.request.Request(url,headers=headers)
+              with urllib.request.urlopen(req,timeout=30) as response: return json.load(response)
+          allowed=True
+          reason="idle"
+          try:
+              import base64
+              obj=get(base+"/contents/monitor/task_0005_jules_active_session.json?ref=feature/TASK-0005-movie-studio-core")
+              state=json.loads(base64.b64decode(obj["content"]))
+              if state.get("active_session_id") and state.get("state") not in ("COMPLETED","FAILED","CANCELLED"):
+                  allowed=False
+                  reason="active Jules checkpoint"
+              if allowed:
+                  prs=get(base+"/pulls?state=open&per_page=100")
+                  for pr in prs:
+                      if pr["base"]["ref"]=="feature/TASK-0005-movie-studio-core":
+                          allowed=False
+                          reason="candidate PR awaiting review"
+                          break
+          except Exception as e:
+              allowed=False
+              reason="preflight check failed: "+str(e)[:160]
+          print("Dispatch gate:",reason)
+          with open(os.environ["GITHUB_OUTPUT"],"a") as out:
+              out.write("proceed="+str(allowed).lower()+"\n")
+          PY
+
+      - name:Checkout TASK-0005 control branch
         uses: actions/checkout@v4
         with:
           ref: feature/TASK-0005-movie-studio-core
           fetch-depth: 0
 
-      - name: Validate Jules zero-incremental-spend contract
+      - name:Validate Jules zero-incremental-spend contract
         shell: bash
         run: |
           set -euo pipefail
@@ -49,7 +88,7 @@ jobs:
           print("Jules worker contract verified.")
           PY
 
-      - name: Create and monitor Jules coding session
+      - name:Create and monitor Jules coding session
         id: jules
         shell: bash
         run: |
@@ -81,7 +120,7 @@ jobs:
               req=urllib.request.Request(GH_API,data=json.dumps(payload).encode(),headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json","Content-Type":"application/json"},method="PUT")
               with urllib.request.urlopen(req,timeout=30) as response: return json.load(response)
           saved,_=read_checkpoint()
-          resume_sid=str(trigger.get("resume_jules_session_id") or saved.get("active_session_id") or "").strip()
+          resume_sid=str(saved.get("active_session_id") or "").strip() if saved.get("state") not in ("COMPLETED","FAILED","CANCELLED") else ""
           resume_prompt=str(trigger.get("resume_prompt") or "").strip()
           fresh_prompt=str(trigger.get("fresh_jules_prompt") or "").strip()
           fresh_title=str(trigger.get("fresh_jules_title") or "TASK-0005 Movie Studio verified implementation increment").strip()
@@ -330,7 +369,7 @@ jobs:
           sys.exit(0)
           PY
 
-      - name: Upload Jules session evidence
+      - name:Upload Jules session evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -341,7 +380,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Publish Jules worker summary
+      - name:Publish Jules worker summary
         if: always()
         shell: bash
         run: |
