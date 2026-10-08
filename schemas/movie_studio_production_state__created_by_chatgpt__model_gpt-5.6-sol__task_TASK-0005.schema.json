@@ -8,6 +8,8 @@
     "project_id",
     "episode_id",
     "episode_status",
+    "plan_revision",
+    "plan_frozen",
     "spend_limit_usd_micros",
     "production",
     "movie_bible",
@@ -40,6 +42,13 @@
         "COMPLETED",
         "BLOCKED"
       ]
+    },
+    "plan_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "plan_frozen": {
+      "type": "boolean"
     },
     "spend_limit_usd_micros": {
       "type": "integer",
