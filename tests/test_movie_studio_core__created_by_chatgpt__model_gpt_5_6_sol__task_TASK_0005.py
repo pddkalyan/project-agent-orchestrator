@@ -1111,10 +1111,10 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_lifecycle_status_roundtrip_non_default(self):
         from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
         ledger = ProductionLedger("movie")
-        ledger.episode_status = EpisodeStatus.IN_PRODUCTION
         scene = Scene("SC1")
         scene.status = SceneStatus.GENERATING
         ledger.add_scene(scene)
+        ledger.episode_status = EpisodeStatus.IN_PRODUCTION
         payload = ledger.to_dict()
         restored = ProductionLedger.from_dict(payload)
         self.assertEqual(restored.episode_status, EpisodeStatus.IN_PRODUCTION)
@@ -1385,6 +1385,79 @@ class MovieStudioCoreTests(unittest.TestCase):
         # Empty prompt fingerprint
         with self.assertRaisesRegex(ProductionPolicyError, "non-empty string"):
             ledger.add_shot_plan(ShotPlan("sht1", "scn1", 0, 1000, "", True))
+
+
+    def test_planning_freeze_rejects_mutation_without_explicit_revision(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
+            ProductionLedger, Scene, Shot, ShotPlan, SceneStatus, EpisodeStatus, ShotStatus, ProductionPolicyError
+        )
+        ledger = ProductionLedger("proj1")
+        ledger.add_scene(Scene("sc1"))
+        ledger.add_shot(Shot("sh1", scene_id="sc1"))
+        ledger.add_shot_plan(ShotPlan("sh1", "sc1", 0, 1000, "abc", False))
+
+        ledger.episode_status = EpisodeStatus.IN_PRODUCTION
+        with self.assertRaises(ProductionPolicyError):
+            ledger.add_scene(Scene("sc2"))
+
+        ledger.add_scene(Scene("sc2"), episode_plan_revision=2)
+        self.assertEqual(ledger.episode_plan_revision, 2)
+
+        ledger.scenes["sc2"].status = SceneStatus.REVIEW
+        with self.assertRaises(ProductionPolicyError):
+            ledger.add_shot(Shot("sh2", scene_id="sc2"))
+
+        ledger.add_shot(Shot("sh2", scene_id="sc2"), episode_plan_revision=3, scene_plan_revision=2)
+        self.assertEqual(ledger.episode_plan_revision, 3)
+        self.assertEqual(ledger.scenes["sc2"].scene_plan_revision, 2)
+
+        ledger.shots["sh2"].status = ShotStatus.GENERATING
+        with self.assertRaises(ProductionPolicyError):
+            ledger.add_shot_plan(ShotPlan("sh2", "sc2", 0, 1000, "def", False))
+
+        ledger.add_shot_plan(ShotPlan("sh2", "sc2", 0, 1000, "def", False), episode_plan_revision=4, scene_plan_revision=3, shot_plan_revision=2)
+        self.assertEqual(ledger.episode_plan_revision, 4)
+        self.assertEqual(ledger.scenes["sc2"].scene_plan_revision, 3)
+        self.assertEqual(ledger.shots["sh2"].shot_plan_revision, 2)
+
+    def test_planning_freeze_restores_from_checkpoint(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
+            ProductionLedger, Scene, Shot, ShotPlan
+        )
+        ledger = ProductionLedger("proj1", episode_plan_revision=5)
+        ledger.add_scene(Scene("sc1", scene_plan_revision=3))
+        ledger.add_shot(Shot("sh1", scene_id="sc1", shot_plan_revision=2))
+        data = ledger.to_dict()
+        restored = ProductionLedger.from_dict(data)
+        self.assertEqual(restored.episode_plan_revision, 5)
+        self.assertEqual(restored.scenes["sc1"].scene_plan_revision, 3)
+        self.assertEqual(restored.shots["sh1"].shot_plan_revision, 2)
+
+
+    def test_planning_freeze_rejects_corrupted_revision(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
+            ProductionLedger, Scene, Shot, ShotPlan, SceneStatus, EpisodeStatus, ShotStatus, ProductionPolicyError
+        )
+        ledger = ProductionLedger("proj1")
+        ledger.add_scene(Scene("sc1"))
+        ledger.add_shot(Shot("sh1", scene_id="sc1"))
+        ledger.add_shot_plan(ShotPlan("sh1", "sc1", 0, 1000, "abc", False))
+
+        data = ledger.to_dict()
+        data["episode_plan_revision"] = 0
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(data)
+
+        data = ledger.to_dict()
+        data["scenes"]["sc1"]["scene_plan_revision"] = -1
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(data)
+
+        data = ledger.to_dict()
+        data["shots"]["sh1"]["shot_plan_revision"] = 0
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(data)
+
 
     def test_shot_plan_digest_stability(self):
         plan = ShotPlan("sht1", "scn1", 0, 1000, "prompt", True)
