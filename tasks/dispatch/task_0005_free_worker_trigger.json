@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "sequence": 19,
+  "sequence": 20,
   "batch_cycle": 1,
   "batch_size": 4,
   "mode": "jules_primary_worker",
   "requested_by": "ChatGPT Movie Studio Supervisor",
-  "reason": "Supervisor correction for PR #19 state-integrity gaps.",
+  "reason": "Recovery from Jules run 37711116741: stale completed continuity-binding task caused four identical feedback requests and JULES_FEEDBACK_LOOP_EXHAUSTED. Advance to Phase 2 planning freeze/versioning.",
   "spend_limit_usd": 0,
   "paid_fallback_allowed": false,
   "resume_jules_session_id": "",
   "resume_prompt": "",
-  "fresh_jules_title": "TASK-0005 continuity-binding correction",
-  "fresh_jules_prompt": "Correct continuity-binding candidate PR #19. Require restored ShotContinuityBinding.bible_revision to exactly equal the restored MovieBible.revision; add tests for stale and future mismatches. Enforce the declared immutable collection representation at runtime for character_ids, voice_ids, costume_ids, prop_ids, and reference_asset_versions; reject mutable/wrong collection types and duplicate entries; add deterministic tests. Preserve all existing correct continuity behavior and prior tests. Modify only the existing TASK-0005 core Python file, its test file, and production-state schema. Run py_compile, parse schema JSON, and complete verbose Movie Studio tests; confirm new tests are discovered. Publish a focused candidate PR targeting feature/TASK-0005-movie-studio-core. Do not merge. Keep zero-spend and existing safety boundaries."
+  "fresh_jules_title": "TASK-0005 Phase 2 planning freeze and explicit revisions",
+  "fresh_jules_prompt": "TASK-0005 Phase 2 ONLY. The continuity-binding correction is ALREADY PROMOTED on the starting branch and its 76 deterministic tests passed in GitHub run 37711116773. DO NOT redo continuity binding, episode-scene-shot referential integrity, or completed work. Implement the next missing narrow increment: durable planning freeze/versioning for approved episode, scene and shot plans, rejecting mutation after freeze unless an explicit new revision/version is created. Preserve stable ordering, digests, existing checkpoint roundtrips and migration-safe defaults; fail closed on corrupt revisions. Restrict edits to the existing Movie Studio core Python file, its tests and production-state JSON schema. Add focused positive, negative, corruption and checkpoint roundtrip tests; run all deterministic tests and schema parse/py_compile. Do not add helper/scratch files. If already implemented, inspect and identify the next truly missing Phase 2 invariant instead of asking repeatedly about completed requirements; make a concrete safe improvement or report NO_SAFE_CHANGE with evidence. Create a focused candidate PR against feature/TASK-0005-movie-studio-core, never merge. USD 0, no provider activation, no local inference, no TASK-0004, no unrelated changes."
 }
