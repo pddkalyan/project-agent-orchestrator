@@ -109,6 +109,7 @@ class Review:
 class Scene:
     scene_id: str
     status: SceneStatus = SceneStatus.PLANNED
+    scene_plan_revision: int = 1
 
 
 @dataclass(frozen=True)
@@ -166,6 +167,7 @@ class Shot:
     asset_version: str = ""
     has_dialogue_or_audio: bool = False
     status: ShotStatus = ShotStatus.PLANNED
+    shot_plan_revision: int = 1
     reviews: Dict[Gate, Review] = field(default_factory=dict)
     canonical: bool = False
     upscale_allowed: bool = False
@@ -458,6 +460,7 @@ class ProductionLedger:
     project_id: str
     episode_id: str = ""
     episode_status: EpisodeStatus = EpisodeStatus.PLANNED
+    episode_plan_revision: int = 1
     bible: MovieBible = field(default_factory=MovieBible)
     scenes: Dict[str, Scene] = field(default_factory=dict)
     shots: Dict[str, Shot] = field(default_factory=dict)
@@ -501,19 +504,52 @@ class ProductionLedger:
                 raise ProductionPolicyError("conflicting provider adapter registration")
         self.provider_adapters[key] = adapter
 
-    def add_scene(self, scene: Scene) -> None:
-        if not scene.scene_id or scene.scene_id in self.scenes:
-            raise ProductionPolicyError("scene id must be non-empty and unique")
+    def add_scene(self, scene: Scene, *, episode_plan_revision: Optional[int] = None) -> None:
+        if not scene.scene_id:
+            raise ProductionPolicyError("scene id must be non-empty")
+        if scene.scene_id in self.scenes:
+            raise ProductionPolicyError("scene id must be unique")
+        if self.episode_status is not EpisodeStatus.PLANNED:
+            if episode_plan_revision is None or episode_plan_revision != self.episode_plan_revision + 1:
+                raise ProductionPolicyError("modifying a frozen episode plan requires an explicit, exact revision increment")
+            self.episode_plan_revision = episode_plan_revision
         self.scenes[scene.scene_id] = scene
 
-    def add_shot(self, shot: Shot) -> None:
-        if not shot.shot_id or shot.shot_id in self.shots:
-            raise ProductionPolicyError("shot id must be non-empty and unique")
+    def add_shot(self, shot: Shot, *, episode_plan_revision: Optional[int] = None, scene_plan_revision: Optional[int] = None) -> None:
+        if not shot.shot_id:
+            raise ProductionPolicyError("shot id must be non-empty")
+        if shot.shot_id in self.shots:
+            raise ProductionPolicyError("shot id must be unique")
         if shot.scene_id and shot.scene_id not in self.scenes:
             raise ProductionPolicyError("shot references unknown scene")
+
+        # Validate atomicity before mutating state
+        if self.episode_status is not EpisodeStatus.PLANNED:
+            if episode_plan_revision is None or episode_plan_revision != self.episode_plan_revision + 1:
+                raise ProductionPolicyError("modifying a frozen episode plan requires an explicit, exact revision increment")
+        if shot.scene_id:
+            scene = self.scenes[shot.scene_id]
+            if scene.status is not SceneStatus.PLANNED:
+                if scene_plan_revision is None or scene_plan_revision != scene.scene_plan_revision + 1:
+                    raise ProductionPolicyError("modifying a frozen scene plan requires an explicit, exact revision increment")
+
+        if self.episode_status is not EpisodeStatus.PLANNED:
+            self.episode_plan_revision = episode_plan_revision
+        if shot.scene_id:
+            scene = self.scenes[shot.scene_id]
+            if scene.status is not SceneStatus.PLANNED:
+                scene.scene_plan_revision = scene_plan_revision
+
         self.shots[shot.shot_id] = shot
 
-    def add_shot_plan(self, plan: ShotPlan) -> None:
+    def add_shot_plan(
+        self,
+        plan: ShotPlan,
+        *,
+        episode_plan_revision: Optional[int] = None,
+        scene_plan_revision: Optional[int] = None,
+        shot_plan_revision: Optional[int] = None,
+    ) -> None:
         if type(plan) is not ShotPlan:
             raise ProductionPolicyError("plan must be a ShotPlan instance")
         if not plan.shot_id or plan.shot_id not in self.shots:
@@ -545,6 +581,28 @@ class ProductionLedger:
             if existing != plan:
                 raise ProductionPolicyError("conflicting shot plan replacement is not allowed")
             return
+
+        # Validate atomicity before mutating state
+        if self.episode_status is not EpisodeStatus.PLANNED:
+            if episode_plan_revision is None or episode_plan_revision != self.episode_plan_revision + 1:
+                raise ProductionPolicyError("modifying a frozen episode plan requires an explicit, exact revision increment")
+
+        scene = self.scenes[plan.scene_id]
+        if scene.status is not SceneStatus.PLANNED:
+            if scene_plan_revision is None or scene_plan_revision != scene.scene_plan_revision + 1:
+                raise ProductionPolicyError("modifying a frozen scene plan requires an explicit, exact revision increment")
+
+        if shot.status is not ShotStatus.PLANNED:
+            if shot_plan_revision is None or shot_plan_revision != shot.shot_plan_revision + 1:
+                raise ProductionPolicyError("modifying a frozen shot plan requires an explicit, exact revision increment")
+
+        # Validation passed, apply mutations
+        if self.episode_status is not EpisodeStatus.PLANNED:
+            self.episode_plan_revision = episode_plan_revision
+        if scene.status is not SceneStatus.PLANNED:
+            scene.scene_plan_revision = scene_plan_revision
+        if shot.status is not ShotStatus.PLANNED:
+            shot.shot_plan_revision = shot_plan_revision
 
         self.shot_plans[plan.shot_id] = plan
 
@@ -955,6 +1013,7 @@ class ProductionLedger:
             "project_id": raw["project_id"],
             "episode_id": raw["episode_id"],
             "episode_status": raw["episode_status"],
+            "episode_plan_revision": raw["episode_plan_revision"],
             "spend_limit_usd_micros": 0,
             "production": dict(PRODUCTION_CONTRACT),
             "movie_bible": raw["bible"],
@@ -983,6 +1042,7 @@ class ProductionLedger:
         data = dict(data)
         data.setdefault("episode_id", "")
         data.setdefault("episode_status", EpisodeStatus.PLANNED.value)
+        data.setdefault("episode_plan_revision", 1)
         data.setdefault("scenes", {})
         data.setdefault("shot_plans", {})
         data.setdefault("shot_continuity_bindings", {})
@@ -992,6 +1052,7 @@ class ProductionLedger:
             "project_id",
             "episode_id",
             "episode_status",
+            "episode_plan_revision",
             "spend_limit_usd_micros",
             "production",
             "movie_bible",
@@ -1078,23 +1139,30 @@ class ProductionLedger:
             raise ProductionPolicyError("authorization index must be a mapping")
         if not isinstance(data["provider_request_index"], Mapping):
             raise ProductionPolicyError("provider request index must be a mapping")
+        if type(data.get("episode_plan_revision")) is not int or data.get("episode_plan_revision") < 1:
+            raise ProductionPolicyError("invalid episode plan revision")
+
         ledger = cls(
             project_id=data["project_id"],
             episode_id=data["episode_id"],
             episode_status=episode_status,
+            episode_plan_revision=data["episode_plan_revision"],
             bible=MovieBible(**bible_raw),
         )
         for scene_id, raw in data.get("scenes", {}).items():
             raw = dict(raw)
             raw.setdefault("status", SceneStatus.PLANNED.value)
-            scene_fields = {"scene_id", "status"}
+            raw.setdefault("scene_plan_revision", 1)
+            scene_fields = {"scene_id", "status", "scene_plan_revision"}
             if not isinstance(raw, Mapping) or set(raw) != scene_fields:
                 raise ProductionPolicyError("scene fields mismatch")
             try:
                 scene_status = SceneStatus(raw["status"])
             except ValueError as exc:
                 raise ProductionPolicyError("invalid scene status") from exc
-            ledger.scenes[scene_id] = Scene(scene_id=raw["scene_id"], status=scene_status)
+            if type(raw["scene_plan_revision"]) is not int or raw["scene_plan_revision"] < 1:
+                raise ProductionPolicyError("invalid scene plan revision")
+            ledger.scenes[scene_id] = Scene(scene_id=raw["scene_id"], status=scene_status, scene_plan_revision=raw["scene_plan_revision"])
         for shot_id, raw in data.get("shot_continuity_bindings", {}).items():
             raw = dict(raw)
             binding_fields = {
@@ -1128,6 +1196,7 @@ class ProductionLedger:
         for shot_id, raw in data.get("shots", {}).items():
             raw = dict(raw)
             raw.setdefault("scene_id", "")
+            raw.setdefault("shot_plan_revision", 1)
 
             shot_fields = {
                 "shot_id",
@@ -1135,6 +1204,7 @@ class ProductionLedger:
                 "asset_version",
                 "has_dialogue_or_audio",
                 "status",
+                "shot_plan_revision",
                 "reviews",
                 "canonical",
                 "upscale_allowed",
@@ -1143,6 +1213,8 @@ class ProductionLedger:
             }
             if not isinstance(raw, Mapping) or set(raw) != shot_fields:
                 raise ProductionPolicyError("shot fields mismatch")
+            if type(raw["shot_plan_revision"]) is not int or raw["shot_plan_revision"] < 1:
+                raise ProductionPolicyError("invalid shot plan revision")
             if not isinstance(raw["reviews"], Mapping):
                 raise ProductionPolicyError("shot reviews must be a mapping")
             reviews = {
@@ -1163,6 +1235,7 @@ class ProductionLedger:
                 asset_version=raw["asset_version"],
                 has_dialogue_or_audio=raw["has_dialogue_or_audio"],
                 status=ShotStatus(raw["status"]),
+                shot_plan_revision=raw["shot_plan_revision"],
                 reviews=reviews,
                 canonical=raw["canonical"],
                 upscale_allowed=raw["upscale_allowed"],
