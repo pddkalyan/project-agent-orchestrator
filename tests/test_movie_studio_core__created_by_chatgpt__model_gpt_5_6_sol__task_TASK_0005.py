@@ -103,6 +103,57 @@ class MovieStudioCoreTests(unittest.TestCase):
         )
         return attempt
 
+    def test_freeze_plan(self):
+        ledger = ProductionLedger("movie")
+        self.assertFalse(ledger.plan_frozen)
+        self.assertEqual(ledger.plan_revision, 1)
+        ledger.freeze_plan()
+        self.assertTrue(ledger.plan_frozen)
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is already frozen"):
+            ledger.freeze_plan()
+
+    def test_mutation_rejected_when_frozen(self):
+        ledger = ProductionLedger("movie")
+        ledger.freeze_plan()
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
+            ledger.add_scene(Scene("SC1"))
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
+            ledger.add_shot(Shot("S1", scene_id="SC1"))
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
+            ledger.add_shot_plan(ShotPlan("S1", "SC1", 0, 1000, "prompt", False))
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
+            ledger.add_shot_continuity_binding(
+                ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset())
+            )
+
+    def test_create_new_plan_revision(self):
+        ledger = ProductionLedger("movie")
+        ledger.freeze_plan()
+        self.assertTrue(ledger.plan_frozen)
+        self.assertEqual(ledger.plan_revision, 1)
+        ledger.create_new_plan_revision()
+        self.assertFalse(ledger.plan_frozen)
+        self.assertEqual(ledger.plan_revision, 2)
+
+    def test_frozen_plan_checkpoint_roundtrip(self):
+        ledger = ProductionLedger("movie")
+        ledger.freeze_plan()
+        data = ledger.to_dict()
+        self.assertEqual(data["plan_revision"], 1)
+        self.assertEqual(data["plan_frozen"], True)
+        restored = ProductionLedger.from_dict(data)
+        self.assertEqual(restored.plan_revision, 1)
+        self.assertEqual(restored.plan_frozen, True)
+
+    def test_frozen_plan_migration_safe_default(self):
+        ledger = ProductionLedger("movie")
+        data = ledger.to_dict()
+        del data["plan_revision"]
+        del data["plan_frozen"]
+        restored = ProductionLedger.from_dict(data)
+        self.assertEqual(restored.plan_revision, 1)
+        self.assertEqual(restored.plan_frozen, False)
+
     def test_add_scene_rejects_blank_and_duplicate_ids(self):
         ledger = ProductionLedger("movie")
         ledger.add_scene(Scene("SC1"))
