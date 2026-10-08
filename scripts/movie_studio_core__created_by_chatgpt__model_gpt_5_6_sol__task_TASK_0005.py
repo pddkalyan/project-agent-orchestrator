@@ -142,7 +142,7 @@ class ShotContinuityBinding:
             if type(val) is not frozenset:
                 raise ProductionPolicyError(f"{field_name} must be a frozenset")
             for item in val:
-                if type(item) is not str or not item:
+                if type(item) is not str or not item.strip():
                     raise ProductionPolicyError(f"{field_name} must contain non-empty strings")
         if type(self.bible_revision) is not int:
             raise ProductionPolicyError("bible_revision must be an int")
@@ -174,7 +174,7 @@ class Shot:
     scene_id: str = ""
 
     def bind_generated_asset(self, asset_version: str) -> None:
-        if not asset_version:
+        if not asset_version or not asset_version.strip():
             raise ProductionPolicyError("asset version must not be empty")
         if asset_version != self.asset_version:
             self.reviews.clear()
@@ -373,7 +373,7 @@ class GenerationJob:
         self, attempt_number: int, provider_job_id: str, asset_version: str
     ) -> None:
         current = self._matching_running_attempt(attempt_number, provider_job_id)
-        if not isinstance(asset_version, str) or not asset_version:
+        if not isinstance(asset_version, str) or not asset_version.strip():
             raise ProductionPolicyError("asset version must not be empty")
         self.attempt_history = self.attempt_history[:-1] + (
             replace(
@@ -619,7 +619,7 @@ class ProductionLedger:
         if type(binding.reference_asset_versions) is not frozenset:
             raise ProductionPolicyError("reference_asset_versions must be a frozenset")
         for asset_version in binding.reference_asset_versions:
-            if not isinstance(asset_version, str) or not asset_version:
+            if not isinstance(asset_version, str) or not asset_version.strip():
                 raise ProductionPolicyError("reference_asset_versions must contain non-empty strings")
 
         if binding.shot_id in self.shot_continuity_bindings:
@@ -1386,7 +1386,7 @@ class ProductionLedger:
             if type(binding.reference_asset_versions) is not frozenset:
                 raise ProductionPolicyError("reference_asset_versions must be a frozenset")
             for asset_version in binding.reference_asset_versions:
-                if not isinstance(asset_version, str) or not asset_version:
+                if not isinstance(asset_version, str) or not asset_version.strip():
                     raise ProductionPolicyError("invalid reference asset version in binding")
 
         sequence_indices_by_scene = {}
@@ -1882,7 +1882,7 @@ def validate_review_binding(shot: Shot, *, allow_empty: bool = False) -> None:
             or type(review.gate) is not Gate
             or type(review.verdict) is not Verdict
             or not isinstance(review.asset_version, str)
-            or not review.asset_version
+            or not review.asset_version.strip()
         ):
             raise ProductionPolicyError("invalid review evidence type")
         if review.gate != gate:
