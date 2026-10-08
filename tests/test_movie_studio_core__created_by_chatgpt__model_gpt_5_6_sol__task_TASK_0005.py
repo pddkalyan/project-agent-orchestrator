@@ -396,6 +396,75 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertIs(restored.jobs["J1"].status, JobStatus.RUNNING)
         self.assertEqual({}, restored.shots["S1"].reviews)
 
+    def test_corrupted_generation_job_map_rejects_key_mismatch(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        data = ledger.to_dict()
+        data["generation_jobs"]["J2"] = data["generation_jobs"].pop("J1")
+        with self.assertRaisesRegex(ProductionPolicyError, "job key/id mismatch"):
+            ProductionLedger.from_dict(data)
+
+    def test_corrupted_generation_job_map_rejects_unknown_shot(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        data = ledger.to_dict()
+        data["generation_jobs"]["J1"]["shot_id"] = "nonexistent"
+        with self.assertRaisesRegex(ProductionPolicyError, "job references unknown shot"):
+            ProductionLedger.from_dict(data)
+
+    def test_corrupted_generation_job_map_rejects_duplicate_idempotency_key(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.add_shot(Shot("S2"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        ledger.submit_generation(
+            job_id="J2",
+            shot_id="S2",
+            idempotency_key="K2",
+            input_fingerprint="F2",
+        )
+        data = ledger.to_dict()
+        data["generation_jobs"]["J2"]["idempotency_key"] = "K1"
+        del data["idempotency_index"]["K2"]
+        with self.assertRaisesRegex(ProductionPolicyError, "duplicate job idempotency key"):
+            ProductionLedger.from_dict(data)
+    def test_corrupted_generation_job_map_rejects_invalid_attempt_count(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1",
+            shot_id="S1",
+            idempotency_key="K1",
+            input_fingerprint="F1",
+        )
+        data = ledger.to_dict()
+        data["generation_jobs"]["J1"]["attempts"] = 1
+        with self.assertRaisesRegex(ProductionPolicyError, "attempt counter/history mismatch"):
+            ProductionLedger.from_dict(data)
+
+        data = ledger.to_dict()
+        data["generation_jobs"]["J1"]["attempts"] = 5
+        data["generation_jobs"]["J1"]["max_attempts"] = 3
+        with self.assertRaisesRegex(ProductionPolicyError, "invalid job attempt count"):
+            ProductionLedger.from_dict(data)
+
     def test_corrupt_resume_state_is_rejected(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
