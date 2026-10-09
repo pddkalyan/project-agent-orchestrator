@@ -46,10 +46,11 @@ jobs:
               import base64
               obj=get(base+"/contents/monitor/task_0005_jules_active_session.json?ref=automation/TASK-0005-runtime-state")
               state=json.loads(base64.b64decode(obj["content"]))
-              if state.get("active_session_id") and state.get("state") not in ("COMPLETED","FAILED","CANCELLED"):
-                  allowed=False
-                  reason="active Jules checkpoint"
-              if allowed:
+              active=bool(state.get("active_session_id")) and state.get("state") not in ("COMPLETED","FAILED","CANCELLED")
+              if active:
+                  # The worker resumes this exact Jules session, never creates a duplicate.
+                  reason="resume existing Jules session"
+              else:
                   prs=get(base+"/pulls?state=open&per_page=100")
                   for pr in prs:
                       # PRs <= 28 are legacy candidates predating reviewed PR #28 promotion.
