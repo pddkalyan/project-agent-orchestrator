@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0005",
+  "active_pr": 8,
+  "branch": "feature/TASK-0005-movie-studio-core",
+  "execution_state": "IDLE",
+  "primary_agent": {
+    "name": "ChatGPT Movie Studio Builder",
+    "model": "gpt-5.6-sol",
+    "role": "primary implementation and orchestration"
+  },
+  "supporting_review_roles": [
+    "architecture_implementation_review",
+    "qa_regression_state_integrity_review",
+    "zero_spend_security_continuity_review"
+  ],
+  "current_phase": "HANDOFF_TO_FREE_WORKER",
+  "current_work_item": "Supervisor status was stale after the free worker waited 15 minutes; handing routine implementation to the Gemini free cloud worker.",
+  "last_evidence_sha": "b593ebe4f61b782a5ef8d3441a087ec6dd3a45ca",
+  "note": "TASK-0005 GitHub connector write diagnostic requested by user on 2026-10-08; previous note superseded. No Jules implementation, test, or phase approval is asserted by this diagnostic.",
+  "last_cycle": {
+    "outcome": "ACTIVE",
+    "started_at_utc": "2026-10-07T03:41:50Z",
+    "finished_at_utc": null,
+    "duration_seconds": null,
+    "tests": {
+      "passed": 54,
+      "failed": 0
+    },
+    "review_summary": "Four independent review lanes are actively challenging the tested schema-v3 Movie Bible candidate."
+  },
+  "work_log": [
+    {
+      "phase": "REVIEWING",
+      "action": "Recorded architecture, state-integrity, QA, and zero-spend/security approvals for the provider increment.",
+      "evidence": "Provider authorization review packet and successful Movie Studio monitor run."
+    },
+    {
+      "phase": "CYCLE_COMPLETE",
+      "action": "Returned agent to IDLE after publishing and verification.",
+      "evidence": "Head b7a70657977c441dafec91386797f85bc8274189 completed monitor run 37567456623."
+    },
+    {
+      "phase": "REVIEW_PREVIOUS_WORK",
+      "action": "Started a new immediate cycle and revalidated exact-head tests, review packet, schema, and invariants.",
+      "evidence": "49 passed, 0 failed; four fresh independent pre-gate approvals."
+    },
+    {
+      "phase": "IMPLEMENTING",
+      "action": "Implemented controlled construction-phase Movie Bible memory.",
+      "evidence": "Schema v3 candidate adds atomic CAS mutations, canonical SHA-256 digest/history, costumes/props, strict opaque references, relationship closure, and planning freeze."
+    },
+    {
+      "phase": "TESTING",
+      "action": "Completed regression, compilation, schema, corruption, and secret-pattern verification.",
+      "evidence": "54 passed, 0 failed; py_compile and JSON parse passed; secret-pattern scan clean."
+    },
+    {
+      "phase": "REVIEWING",
+      "action": "Submitted the quiescent candidate to four independent adversarial review lanes.",
+      "evidence": "Architecture, state integrity, QA, and zero-spend/security reviewers are active."
+    },
+    {
+      "phase": "HANDOFF_TO_FREE_WORKER",
+      "action": "Cleared stale supervisor ACTIVE marker after the free worker waited 15 minutes with no supervisor state transition.",
+      "evidence": "Movie Studio Free Worker run 37569977876 ended BLOCKED_SUPERVISOR_STILL_ACTIVE after 30 checks; no TASK-0005 workflow remained in progress on the current PR head."
+    }
+  ]
+}

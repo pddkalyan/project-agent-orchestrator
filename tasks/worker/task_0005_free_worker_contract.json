@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0005",
+  "purpose": "Use Jules as the primary cloud coding agent for routine Movie Studio implementation, with deterministic GitHub CI and Jules CI auto-fix, while reserving OpenAI models for supervision and milestone review.",
+  "primary_worker_family": "Google Jules coding agent",
+  "preferred_worker_models": [
+    "Jules account-included coding model"
+  ],
+  "spend_limit_usd": 0,
+  "provider_billing_allowed": false,
+  "openai_routine_worker_allowed": false,
+  "supervisor": {
+    "agent": "ChatGPT Movie Studio Supervisor",
+    "model": "gpt-5.6-sol",
+    "use_for": [
+      "review worker evidence",
+      "architecture decisions",
+      "correction packages",
+      "blocker handling"
+    ],
+    "avoid_for": [
+      "routine implementation when free worker is available"
+    ]
+  },
+  "milestone_reviewer": {
+    "preferred_model": "gpt-6-astra",
+    "use_when": [
+      "major architecture milestone",
+      "final review-ready gate",
+      "free worker repeatedly fails a correction"
+    ],
+    "note": "Use only when genuinely available and evidence-backed; do not fabricate an Astra review."
+  },
+  "allowed_paths": [
+    "scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py",
+    "tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py",
+    "schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json",
+    "docs/movie_studio_core_architecture__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.md",
+    "reviews/task_0005_state_contract_review__created_by_chatgpt__model_gpt-5.6-sol__run_20261007.md",
+    "review_packets/task_0005_free_worker_review.json",
+    "PROVENANCE_REGISTRY.jsonl"
+  ],
+  "forbidden": [
+    "paid API fallback",
+    "OpenAI API billing",
+    "provider billing",
+    "real media generation before provider authorization",
+    "local video inference",
+    "TASK-0004 changes",
+    "merge or auto-merge",
+    "secrets in repository/logs",
+    "per-use Jules billing or paid API fallback",
+    "automatic merge of Jules pull requests"
+  ],
+  "next_work_priority": [
+    "finish durable Movie Bible and episode/scene/shot state contracts",
+    "provider-neutral adapter interfaces and lifecycle",
+    "timeline/editor/render contracts",
+    "audio/subtitle/final-QC contracts",
+    "Google Drive archival verification contract",
+    "monitoring, handover, exhaustive deterministic tests"
+  ],
+  "fallback_worker_family": "Gemini API free-tier Flash",
+  "fallback_worker_models": [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite"
+  ]
+}

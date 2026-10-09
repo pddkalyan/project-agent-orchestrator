@@ -1,0 +1,306 @@
+name: Movie Studio TASK-0005 Monitor
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - "monitor/task_0005_agent_status.json"
+      - "scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py"
+      - "tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py"
+      - "schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json"
+      - "tasks/queue/task_0005_movie_studio_core__created_by_chatgpt__model_gpt-5.6-sol__run_20261006.json"
+      - "docs/movie_studio_core_architecture__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.md"
+      - "reviews/task_0005_*"
+      - "PROVENANCE_REGISTRY.jsonl"
+      - ".github/workflows/movie_studio_task_0005_monitor__created_by_chatgpt__model_gpt-5.6-sol.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: movie-studio-task-0005-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent_identity:
+    name: "0 · Agent: ChatGPT · gpt-5.6-sol"
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'feature/TASK-0005-movie-studio-core' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      execution_state: ${{ steps.status.outputs.execution_state }}
+      current_phase: ${{ steps.status.outputs.current_phase }}
+      agent_name: ${{ steps.status.outputs.agent_name }}
+      agent_model: ${{ steps.status.outputs.agent_model }}
+      current_work_item: ${{ steps.status.outputs.current_work_item }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+
+      - name: Read observable agent status
+        id: status
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("monitor/task_0005_agent_status.json").read_text(encoding="utf-8"))
+          assert data["task_id"] == "TASK-0005"
+          assert data["active_pr"] == 8
+          assert data["primary_agent"]["model"] == "gpt-5.6-sol"
+          def out(key, value):
+              value = str(value).replace("\\n", " ").replace("\\r", " ")
+              print(f"{key}={value}")
+          out("execution_state", data["execution_state"])
+          out("current_phase", data["current_phase"])
+          out("agent_name", data["primary_agent"]["name"])
+          out("agent_model", data["primary_agent"]["model"])
+          out("current_work_item", data["current_work_item"])
+          PY
+
+      - name: Show who is working
+        shell: bash
+        run: |
+          {
+            echo "## Active Movie Studio agent"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Agent | ${{ steps.status.outputs.agent_name }} |"
+            echo "| Model | ${{ steps.status.outputs.agent_model }} |"
+            echo "| Execution state | ${{ steps.status.outputs.execution_state }} |"
+            echo "| Current phase | ${{ steps.status.outputs.current_phase }} |"
+            echo "| Work item | ${{ steps.status.outputs.current_work_item }} |"
+            echo
+            echo "Observable execution state only; private model chain-of-thought is not exposed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show observable agent work log
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("monitor/task_0005_agent_status.json").read_text(encoding="utf-8"))
+          cycle = data.get("last_cycle") or {}
+          print()
+          print("## Observable agent work log")
+          print()
+          print(f"**Last cycle outcome:** {cycle.get('outcome', 'not recorded')}  ")
+          duration = cycle.get("duration_seconds")
+          if isinstance(duration, int) and duration >= 0:
+              mins, secs = divmod(duration, 60)
+              print(f"**Last cycle duration:** {mins}m {secs}s  ")
+          else:
+              print(f"**Last cycle duration:** {cycle.get('duration_note', 'not recorded')}  ")
+          tests = cycle.get("tests") or {}
+          print(f"**Tests:** {tests.get('passed', '?')} passed / {tests.get('failed', '?')} failed  ")
+          print(f"**Reviews:** {cycle.get('review_summary', 'not recorded')}")
+          print()
+          print("| Phase | Observable action | Evidence |")
+          print("| --- | --- | --- |")
+          for item in data.get("work_log", []):
+              phase = str(item.get("phase", "")).replace("|", "\\|")
+              action = str(item.get("action", "")).replace("|", "\\|")
+              evidence = str(item.get("evidence", "")).replace("|", "\\|")
+              print(f"| {phase} | {action} | {evidence} |")
+          print()
+          print("This is an evidence-backed work/decision summary, not private chain-of-thought.")
+          PY
+
+  preflight:
+    name: 1 · Verify TASK-0005 scope
+    needs: agent_identity
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'feature/TASK-0005-movie-studio-core' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify production contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("tasks/queue/task_0005_movie_studio_core__created_by_chatgpt__model_gpt-5.6-sol__run_20261006.json")
+          task = json.loads(path.read_text(encoding="utf-8"))
+          assert task["task_id"] == "TASK-0005"
+          assert task["spend_limit_usd"] == 0
+          assert task["production_contract"]["aspect_ratio"] == "16:9"
+          assert task["production_contract"]["target_episode_minutes"] == 20
+          assert task["production_contract"]["local_video_inference"] is False
+          assert task["production_contract"]["final_master_storage"] == "Google Drive"
+          assert "no merge or auto-merge" in task["hard_gates"]
+          print("TASK-0005 production contract verified.")
+          PY
+
+      - name: Compile Movie Studio core
+        run: python -m py_compile scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py
+
+  architecture_review:
+    name: 2 · Architecture / state review
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+
+      - name: Validate durable-state schema and required state model
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          schema = json.loads(Path(
+              "schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json"
+          ).read_text(encoding="utf-8"))
+          text = Path(
+              "scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py"
+          ).read_text(encoding="utf-8")
+
+          assert schema.get("$schema", "").startswith("https://json-schema.org/")
+          assert "ProductionLedger" in text
+          assert "GenerationJob" in text
+          assert "idempotency" in text.lower()
+          assert "canonical" in text.lower()
+          assert "review" in text.lower()
+          assert "to_dict" in text and "from_dict" in text
+          print("Architecture/state contract review passed.")
+          PY
+
+  policy_review:
+    name: 3 · Zero-spend / safety review
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+
+      - name: Verify fail-closed policy markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          core = Path(
+              "scripts/movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py"
+          ).read_text(encoding="utf-8")
+          task = Path(
+              "tasks/queue/task_0005_movie_studio_core__created_by_chatgpt__model_gpt-5.6-sol__run_20261006.json"
+          ).read_text(encoding="utf-8")
+
+          required_core = (
+              "choose_zero_cost_provider",
+              "BLOCKED_ZERO_COST_PROVIDER_UNAVAILABLE",
+              "episode_can_complete",
+          )
+          for marker in required_core:
+              assert marker in core, marker
+
+          for marker in (
+              '"spend_limit_usd": 0',
+              '"local_video_inference": false',
+              '"no merge or auto-merge"',
+          ):
+              assert marker in task, marker
+
+          print("Zero-spend/safety policy review passed.")
+          PY
+
+  regression:
+    name: 4 · Deterministic regression tests
+    needs:
+      - architecture_review
+      - policy_review
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run TASK-0005 tests with visible logs
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: python tests/test_movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005.py -v
+
+  integration_gate:
+    name: 5 · Integration evidence gate
+    if: ${{ always() }}
+    needs:
+      - agent_identity
+      - preflight
+      - architecture_review
+      - policy_review
+      - regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish monitor summary
+        shell: bash
+        env:
+          AGENT: ${{ needs.agent_identity.outputs.agent_name }}
+          MODEL: ${{ needs.agent_identity.outputs.agent_model }}
+          EXECUTION_STATE: ${{ needs.agent_identity.outputs.execution_state }}
+          PHASE: ${{ needs.agent_identity.outputs.current_phase }}
+          WORK_ITEM: ${{ needs.agent_identity.outputs.current_work_item }}
+          PREFLIGHT: ${{ needs.preflight.result }}
+          ARCHITECTURE: ${{ needs.architecture_review.result }}
+          POLICY: ${{ needs.policy_review.result }}
+          REGRESSION: ${{ needs.regression.result }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          {
+            echo "## TASK-0005 Movie Studio monitor"
+            echo
+            echo "**Agent:** ${AGENT}"
+            echo "**Model:** ${MODEL}"
+            echo "**Observable state:** ${EXECUTION_STATE}"
+            echo "**Current phase:** ${PHASE}"
+            echo "**Work item:** ${WORK_ITEM}"
+            echo
+            echo "| Gate | Result |"
+            echo "| --- | --- |"
+            echo "| Scope / contract | ${PREFLIGHT} |"
+            echo "| Architecture / state | ${ARCHITECTURE} |"
+            echo "| Zero-spend / safety | ${POLICY} |"
+            echo "| Deterministic regression | ${REGRESSION} |"
+            echo
+            echo "Candidate SHA: \`${SHA}\`"
+            echo
+            echo "This workflow exposes observable execution evidence only; it does not expose model private chain-of-thought."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          test "$PREFLIGHT" = "success"
+          test "$ARCHITECTURE" = "success"
+          test "$POLICY" = "success"
+          test "$REGRESSION" = "success"

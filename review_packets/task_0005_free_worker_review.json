@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0005",
+  "issue": 35,
+  "stage": "PHASE_2_CANDIDATE_PENDING_INDEPENDENT_ASTRA_REVIEW",
+  "base_sha": "3a97d0a7e5e4965e6a432373ffd15a6a12085a7b",
+  "worker": "ChatGPT Work Mode",
+  "worker_model": "gpt-6-sol",
+  "source": {
+    "jules_latest_activity": 87,
+    "jules_patch": "latest two-file artifact examined as an untrusted candidate; not applied verbatim",
+    "coding": "gpt-6-sol revised the implementation and added focused tests"
+  },
+  "change": "A frozen plan rejects public planning-map and structural scene/shot mutation. A frozen-to-new-revision transition permits validated changed shot plans and continuity bindings only for untouched shots without any generation job history. A prior-revision digest ledger rejects simple revision metadata downgrades on restore. The correction rejects deletion of ledger fields and scene/shot dataclass fields, preventing class-default fallback from disabling the freeze or required audio gate. Scene-only frozen checkpoints now reject missing plan metadata or missing scenes.",
+  "test_evidence": {
+    "movie_studio": "93 tests passed, 0 failures (Astra correction candidate)",
+    "test_discovery": "93 tests passed, 0 failures (Astra correction candidate)",
+    "python_compile": "passed for core and test module",
+    "json_schema_parse": "passed",
+    "git_diff_check": "passed",
+    "controller_regression": "34 tests passed at base per supervisor",
+    "reviewer_bridge_regression": "68 tests passed at base per supervisor",
+    "controller_production_fixtures": "5 passed at base per supervisor",
+    "windows_regression": "not run on this candidate; baseline GitHub run 37887621921 passed before this change"
+  },
+  "boundaries": {
+    "spend_usd": 0,
+    "media_generation": false,
+    "provider_activation": false,
+    "merge": false,
+    "movie_bible": "independent revisioned fact store; frozen planning guards apply to scene/shot structure and plan/binding maps, not arbitrary fact edits or runtime shot state",
+    "checkpoint_digest": "deterministic integrity/accounting aid, not an authenticated signature against an adversary who rewrites the entire checkpoint",
+    "usage_metrics": "model/account usage unavailable; no usage estimate asserted"
+  },
+  "phase_2_gap_assessment": "This candidate addresses the controlled-plan-revision and deletion bypass only. Astra withheld overall Phase 2 approval: existing MovieBible entity maps/nested dictionaries can change without revision or digest while a frozen ledger still validates, and generation input fingerprints/attempt authorizations are not automatically bound to the exact plan and continuity digest. Controlled Bible mutation and generation binding require separate reviewed increments. No authoritative complete A-H checklist was found in this checkout; Phase 3 remains unauthorized.",
+  "review_status": "ASTRA_REJECTED_622F6A9_CORRECTIONS_SELF_TESTED_PENDING_REREVIEW",
+  "reviewed_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",
+  "tests": {
+    "passed": 93,
+    "failed": 0
+  },
+  "corrections": [
+    {
+      "reviewed_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",
+      "finding": "Astra rejected: deleting plan_frozen or has_dialogue_or_audio falls back to class defaults, bypassing frozen plan and AUDIO_QA",
+      "resolution": "__delattr__ guards for ledger dataclass fields and scene/shot dataclass fields plus ownership; direct and checkpoint-restored deletion tests retain unchanged serialization and AUDIO_QA",
+      "status": "SELF_TESTED_PENDING_ASTRA_REREVIEW"
+    },
+    {
+      "reviewed_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",
+      "finding": "Astra rejected: frozen scene-only checkpoint missing plan metadata or scenes silently restores as unfrozen or empty",
+      "resolution": "Default missing plan fields only on truly empty legacy ledgers; require scenes on frozen/revised/job checkpoints; corruption and exact roundtrip tests",
+      "status": "SELF_TESTED_PENDING_ASTRA_REREVIEW"
+    }
+  ]
+}

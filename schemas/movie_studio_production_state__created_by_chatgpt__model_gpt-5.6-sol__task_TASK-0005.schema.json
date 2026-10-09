@@ -1,0 +1,696 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Movie Studio Production Checkpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "episode_id",
+    "episode_status",
+    "plan_revision",
+    "plan_frozen",
+    "spend_limit_usd_micros",
+    "production",
+    "movie_bible",
+    "scenes",
+    "shots",
+    "shot_continuity_bindings",
+    "generation_jobs",
+    "idempotency_index",
+    "authorization_index",
+    "provider_request_index"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "episode_id": {
+      "type": "string"
+    },
+    "episode_status": {
+      "enum": [
+        "PLANNED",
+        "IN_PRODUCTION",
+        "ASSEMBLING",
+        "FINAL_QC",
+        "ARCHIVING",
+        "COMPLETED",
+        "BLOCKED"
+      ]
+    },
+    "plan_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "plan_frozen": {
+      "type": "boolean"
+    },
+    "plan_revision_history": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
+    "spend_limit_usd_micros": {
+      "type": "integer",
+      "const": 0
+    },
+    "production": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "aspect_ratio",
+        "target_episode_minutes",
+        "local_video_inference",
+        "final_storage_provider"
+      ],
+      "properties": {
+        "aspect_ratio": {
+          "const": "16:9"
+        },
+        "target_episode_minutes": {
+          "const": 20
+        },
+        "local_video_inference": {
+          "const": false
+        },
+        "final_storage_provider": {
+          "const": "Google Drive"
+        }
+      }
+    },
+    "movie_bible": {
+      "$ref": "#/$defs/movie_bible"
+    },
+    "scenes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/scene"
+      }
+    },
+    "shots": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/shot"
+      }
+    },
+    "generation_jobs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/generation_job"
+      }
+    },
+    "idempotency_index": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "authorization_index": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "provider_request_index": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "provider_adapters": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/provider_adapter_registration"
+      }
+    },
+    "shot_plans": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/shot_plan"
+      }
+    },
+    "shot_continuity_bindings": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/shot_continuity_binding"
+      }
+    }
+  },
+  "$defs": {
+    "string_map": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "entity_map": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/string_map"
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scene_id",
+        "status"
+      ],
+      "properties": {
+        "scene_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "PLANNED",
+            "GENERATING",
+            "REVIEW",
+            "APPROVED",
+            "BLOCKED"
+          ]
+        }
+      }
+    },
+    "movie_bible": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "story_rules",
+        "characters",
+        "voices",
+        "locations",
+        "costumes",
+        "props",
+        "continuity_facts"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "story_rules": {
+          "$ref": "#/$defs/string_map"
+        },
+        "characters": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "voices": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "locations": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "costumes": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "props": {
+          "$ref": "#/$defs/entity_map"
+        },
+        "continuity_facts": {
+          "$ref": "#/$defs/string_map"
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate",
+        "asset_version",
+        "verdict"
+      ],
+      "properties": {
+        "gate": {
+          "enum": [
+            "VISUAL_QA",
+            "CONTINUITY_QA",
+            "AUDIO_QA",
+            "TECHNICAL_QA"
+          ]
+        },
+        "asset_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "enum": [
+            "PENDING",
+            "PASS",
+            "FAIL",
+            "BLOCKED"
+          ]
+        }
+      }
+    },
+    "shot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shot_id",
+        "scene_id",
+        "asset_version",
+        "has_dialogue_or_audio",
+        "status",
+        "reviews",
+        "canonical",
+        "upscale_allowed",
+        "generation_epoch",
+        "generation_owner_job_id"
+      ],
+      "properties": {
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scene_id": {
+          "type": "string"
+        },
+        "asset_version": {
+          "type": "string"
+        },
+        "has_dialogue_or_audio": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "PLANNED",
+            "GENERATING",
+            "GENERATED",
+            "APPROVED",
+            "CANONICAL",
+            "REJECTED",
+            "BLOCKED"
+          ]
+        },
+        "reviews": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/review"
+          }
+        },
+        "canonical": {
+          "type": "boolean"
+        },
+        "upscale_allowed": {
+          "type": "boolean"
+        },
+        "generation_epoch": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "generation_owner_job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "attempt_authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorization_id",
+        "job_id",
+        "shot_id",
+        "generation_epoch",
+        "attempt_number",
+        "provider_id",
+        "adapter_id",
+        "adapter_version",
+        "quote_id",
+        "input_fingerprint",
+        "provider_request_key",
+        "maximum_cost_usd_micros",
+        "cloud_execution",
+        "charge_cap_enforced"
+      ],
+      "properties": {
+        "authorization_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generation_epoch": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "provider_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quote_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider_request_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "maximum_cost_usd_micros": {
+          "type": "integer",
+          "const": 0
+        },
+        "cloud_execution": {
+          "const": true
+        },
+        "charge_cap_enforced": {
+          "const": true
+        }
+      }
+    },
+    "generation_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_number",
+        "authorization",
+        "status",
+        "provider_job_id",
+        "output_asset_version",
+        "failure_class",
+        "failure_reason"
+      ],
+      "properties": {
+        "attempt_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "authorization": {
+          "$ref": "#/$defs/attempt_authorization"
+        },
+        "status": {
+          "enum": [
+            "AUTHORIZED",
+            "RUNNING",
+            "SUCCEEDED",
+            "FAILED"
+          ]
+        },
+        "provider_job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_asset_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failure_class": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "RETRYABLE_PROVIDER",
+            "NON_RETRYABLE_PROVIDER",
+            "POLICY",
+            "INVALID_INPUT",
+            null
+          ]
+        },
+        "failure_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "generation_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "shot_id",
+        "idempotency_key",
+        "input_fingerprint",
+        "max_attempts",
+        "attempts",
+        "status",
+        "provider_job_id",
+        "output_asset_version",
+        "last_error",
+        "generation_epoch",
+        "attempt_history"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "enum": [
+            "QUEUED",
+            "AUTHORIZED",
+            "RUNNING",
+            "SUCCEEDED",
+            "RETRYABLE",
+            "EXHAUSTED"
+          ]
+        },
+        "provider_job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_asset_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generation_epoch": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "attempt_history": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/generation_attempt"
+          }
+        }
+      }
+    },
+    "provider_adapter_registration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "adapter_id",
+        "adapter_version",
+        "capabilities",
+        "cloud_execution",
+        "charge_cap_enforced",
+        "maximum_cost_usd_micros"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "TEXT",
+              "IMAGE",
+              "VIDEO",
+              "AUDIO",
+              "LIP_SYNC",
+              "UPSCALE"
+            ]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "cloud_execution": {
+          "const": true
+        },
+        "charge_cap_enforced": {
+          "const": true
+        },
+        "maximum_cost_usd_micros": {
+          "const": 0
+        }
+      }
+    },
+    "shot_continuity_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shot_id",
+        "bible_revision",
+        "character_ids",
+        "voice_ids",
+        "location_id",
+        "costume_ids",
+        "prop_ids",
+        "reference_asset_versions"
+      ],
+      "properties": {
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "bible_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "character_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "voice_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "location_id": {
+          "type": "string"
+        },
+        "costume_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "prop_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "reference_asset_versions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "shot_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "shot_id",
+        "scene_id",
+        "sequence_index",
+        "planned_duration_ms",
+        "prompt_fingerprint",
+        "has_dialogue_or_audio"
+      ],
+      "properties": {
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scene_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sequence_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "planned_duration_ms": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "prompt_fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "has_dialogue_or_audio": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

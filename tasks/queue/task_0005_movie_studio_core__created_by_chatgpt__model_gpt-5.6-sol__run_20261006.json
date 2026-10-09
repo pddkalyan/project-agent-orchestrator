@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0005",
+  "issue_number": 7,
+  "objective": "Create the provider-neutral Movie Studio core orchestration scaffold for durable cinematic episode production without activating any real media provider.",
+  "created_by": "chatgpt",
+  "created_by_model": "gpt-5.6-sol",
+  "created_run": "20261006_TASK_0005_BOOTSTRAP",
+  "spend_limit_usd": 0,
+  "astra_review_required": true,
+  "production_contract": {
+    "aspect_ratio": "16:9",
+    "target_episode_minutes": 20,
+    "final_master_storage": "Google Drive",
+    "local_video_inference": false
+  },
+  "agents": [
+    "executive_producer",
+    "director",
+    "continuity",
+    "character",
+    "voice_dialogue",
+    "generation",
+    "visual_qa",
+    "continuity_qa",
+    "audio_qa",
+    "editor",
+    "upscale_restoration",
+    "final_qc",
+    "learning_failure_memory",
+    "monitor_quota",
+    "drive_archivist"
+  ],
+  "hard_gates": [
+    "USD 0.00 fail-closed spend guard",
+    "provider-neutral adapters only",
+    "no local AI/video inference",
+    "no canonical shot before required QA gates pass",
+    "no upscale before semantic and continuity approval",
+    "no final episode before timeline/audio/continuity/technical QC",
+    "no cleanup before verified final master storage",
+    "no secrets or private movie assets in the public repository",
+    "no merge or auto-merge"
+  ],
+  "state_model": {
+    "episode": [
+      "PLANNED",
+      "IN_PRODUCTION",
+      "ASSEMBLING",
+      "FINAL_QC",
+      "ARCHIVING",
+      "COMPLETED",
+      "BLOCKED"
+    ],
+    "scene": [
+      "PLANNED",
+      "GENERATING",
+      "REVIEW",
+      "APPROVED",
+      "BLOCKED"
+    ],
+    "shot": [
+      "PLANNED",
+      "GENERATING",
+      "GENERATED",
+      "VISUAL_QA",
+      "CONTINUITY_QA",
+      "AUDIO_QA",
+      "APPROVED",
+      "UPSCALING",
+      "CANONICAL",
+      "REJECTED",
+      "BLOCKED"
+    ]
+  },
+  "canonicalization_rule": "A generated asset becomes canonical only after every applicable hard QA gate passes and the Executive Producer validates the immutable review evidence.",
+  "activation_excluded": [
+    "real provider authorization",
+    "real media generation",
+    "Google Drive upload",
+    "paid resources",
+    "TASK-0004 changes",
+    "PR #6 changes"
+  ]
+}
