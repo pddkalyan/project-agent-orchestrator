@@ -13,7 +13,7 @@
   "jules_fallback_enabled": false,
   "jules_existing_session_resume_enabled": false,
   "jules_session_preserved": "12184075764881634418",
-  "codex_sol_session_state": "ACTIVE_WORK_MODE",
+  "codex_sol_session_state": "CANDIDATE_PUBLISHED_PENDING_PHASE_GATE",
   "sol_handoff_issue_url": "https://github.com/pddkalyan/project-agent-orchestrator/issues/35",
   "usage_source": "ChatGPT/Codex Settings > Usage",
   "usage_access": "UNAVAILABLE — USER SETTINGS REQUIRED",
@@ -28,27 +28,40 @@
   "phase3_requires_astra_approval": true,
   "no_auto_merge": true,
   "no_duplicate_sessions": true,
-  "warning": "Do not infer ChatGPT usage from GitHub Actions minutes. Only enable Jules fallback if the Sol access/allowance issue is explicitly verified and one-worker safety confirmed.",
+  "warning": "Usage balances are unavailable; do not infer capacity from successful execution or GitHub Actions minutes. No Jules launch/resume, credits, banked reset, reload, paid API or automatic merge is authorized.",
   "active_worker": {
     "model": "gpt-6.1-sol",
     "effort": "medium",
     "surface": "ChatGPT Work delegated coding agent",
     "base_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870",
-    "scope": "Resume 05ae0fc Bible/generation binding candidate and preserved Astra correction",
+    "scope": "Recovered Bible/generation binding and atomic checkpoint corrections; candidate PR38",
     "local_worktree": "resumed-phase2",
-    "preserved_source_sha": "05ae0fc88260e7f5a35461313297185adc23243a"
+    "preserved_source_sha": "05ae0fc88260e7f5a35461313297185adc23243a",
+    "status": "COMPLETED_SCOPED_INCREMENT"
   },
-  "last_verified_at_utc": "2026-10-09T12:09:27.386Z",
-  "phase2_approval": "WITHHELD",
+  "last_verified_at_utc": "2026-10-09T12:21:35.468Z",
+  "phase2_approval": "WITHHELD_AUTHORITATIVE_A_H_CHECKLIST_MISSING",
   "latest_validation": {
-    "movie_studio_tests_passed": 93,
+    "movie_studio_tests_passed": 107,
     "controller_tests_passed": 34,
     "reviewer_tests_passed": 68,
     "controller_production_fixtures_passed": 5,
     "windows_candidate_regression": "NOT_RUN_NO_POWERSHELL",
     "actual_astra_narrow_review": "APPROVED_SOURCE_b277292_TREE_IDENTICAL",
-    "additional_spend_usd": 0
+    "additional_spend_usd": 0,
+    "actual_astra_binding_review": "APPROVED_SOURCE_953e72e_TREE_IDENTICAL",
+    "schema_meta_validation": "UNAVAILABLE_LOCAL_DEPENDENCY",
+    "astra_malformed_map_restore_probes_passed": 98
   },
   "no_banked_resets": true,
-  "automatic_reload_enabled": false
+  "automatic_reload_enabled": false,
+  "latest_candidate": {
+    "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/38",
+    "head_sha": "9e09d3ff54c3bf76f2aeb20e08f30b2e37cce7f7",
+    "source_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
+    "tree_sha": "74e47c905c1d018ca61e60bc98435b5fef1eeb87",
+    "astra_scope_review": "APPROVED",
+    "full_phase_review": "WITHHELD_MISSING_A_H_DEFINITION",
+    "github_ci": "IN_PROGRESS_37929451170"
+  }
 }
