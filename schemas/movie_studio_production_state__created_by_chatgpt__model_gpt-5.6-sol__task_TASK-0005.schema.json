@@ -184,6 +184,8 @@
       "additionalProperties": false,
       "required": [
         "revision",
+        "content_digest",
+        "revision_history",
         "story_rules",
         "characters",
         "voices",
@@ -196,6 +198,14 @@
         "revision": {
           "type": "integer",
           "minimum": 1
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "revision_history": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
         },
         "story_rules": {
           "$ref": "#/$defs/string_map"
@@ -329,6 +339,7 @@
         "adapter_version",
         "quote_id",
         "input_fingerprint",
+        "plan_state_digest",
         "provider_request_key",
         "maximum_cost_usd_micros",
         "cloud_execution",
@@ -374,6 +385,10 @@
         "input_fingerprint": {
           "type": "string",
           "minLength": 1
+        },
+        "plan_state_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "provider_request_key": {
           "type": "string",
@@ -460,6 +475,7 @@
         "shot_id",
         "idempotency_key",
         "input_fingerprint",
+        "plan_state_digest",
         "max_attempts",
         "attempts",
         "status",
@@ -485,6 +501,10 @@
         "input_fingerprint": {
           "type": "string",
           "minLength": 1
+        },
+        "plan_state_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "max_attempts": {
           "type": "integer",
@@ -599,7 +619,8 @@
         "location_id",
         "costume_ids",
         "prop_ids",
-        "reference_asset_versions"
+        "reference_asset_versions",
+        "bible_digest"
       ],
       "properties": {
         "shot_id": {
@@ -609,6 +630,10 @@
         "bible_revision": {
           "type": "integer",
           "minimum": 1
+        },
+        "bible_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "character_ids": {
           "type": "array",

@@ -1,6 +1,7 @@
 import copy
 import json
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
@@ -147,13 +148,13 @@ class MovieStudioCoreTests(unittest.TestCase):
         other = ShotPlan("S2", "SC", 1, 2000, "prompt-b", False)
         ledger.add_shot_plan(old)
         ledger.add_shot_plan(other)
-        initial = ShotContinuityBinding("S1", 1, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset({"asset:1"}))
+        initial = ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset({"asset:1"}))
         ledger.add_shot_continuity_binding(initial)
         ledger.freeze_plan()
         ledger.create_new_plan_revision()
         self.assertEqual(len(ledger.plan_revision_history), 1)
         revised = ShotPlan("S1", "SC", 0, 3000, "prompt-c", False)
-        replacement = ShotContinuityBinding("S1", 1, frozenset({"A", "B"}), frozenset(), "", frozenset(), frozenset(), frozenset({"asset:2"}))
+        replacement = ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A", "B"}), frozenset(), "", frozenset(), frozenset(), frozenset({"asset:2"}))
         ledger.add_shot_plan(revised)
         ledger.add_shot_plan(revised)  # Exact replay has no further effect.
         ledger.add_shot_continuity_binding(replacement)
@@ -187,11 +188,11 @@ class MovieStudioCoreTests(unittest.TestCase):
             ledger.add_shot_plan(ShotPlan("S2", "SC", 0, 1000, "p", False))
         with self.assertRaisesRegex(ProductionPolicyError, "planned_duration_ms"):
             ledger.add_shot_plan(ShotPlan("S1", "SC", 0, -1, "p2", False))
+        binding = ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset())
+        ledger.add_shot_continuity_binding(binding)
         ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="p1")
         with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement"):
             ledger.add_shot_plan(ShotPlan("S1", "SC", 0, 2000, "p2", False))
-        binding = ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset())
-        ledger.add_shot_continuity_binding(binding)
         with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement"):
             ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset({"new-reference"})))
         with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement"):
@@ -554,6 +555,348 @@ class MovieStudioCoreTests(unittest.TestCase):
         bible.update_fact("continuity_facts", "amulet", "worn on left wrist")
         self.assertEqual(2, bible.revision)
         self.assertEqual("worn on left wrist", bible.continuity_facts["amulet"])
+
+    def test_bible_entities_are_copy_on_read_revisioned_and_frozen(self):
+        ledger = ProductionLedger("movie")
+        original = {"name": "Alice"}
+        ledger.bible.characters["A"] = original
+        original["name"] = "external mutation"
+        self.assertEqual(ledger.bible.characters["A"]["name"], "Alice")
+        self.assertEqual(ledger.bible.revision, 2)
+        old_digest = ledger.bible.content_digest
+        with self.assertRaises(TypeError):
+            ledger.bible.characters["A"]["name"] = "nested mutation"
+        self.assertEqual(ledger.bible.content_digest, old_digest)
+        with self.assertRaisesRegex(ProductionPolicyError, "stale movie-bible revision"):
+            ledger.bible.update_entity("characters", "A", {"name": "Alicia"}, expected_revision=1)
+        ledger.bible.update_entity("characters", "A", {"name": "Alicia"}, expected_revision=2)
+        self.assertEqual(ledger.bible.revision, 3)
+        self.assertEqual(len(ledger.bible.revision_history), 2)
+        self.assertEqual(ledger.bible.revision_history[-1], old_digest)
+        self.assertNotEqual(ledger.bible.content_digest, old_digest)
+        ledger.freeze_plan()
+        before = ledger.to_dict()
+        for mutate in (
+            lambda: ledger.bible.characters.__setitem__("A", {"name": "changed"}),
+            lambda: ledger.bible.characters.__delitem__("A"),
+            lambda: ledger.bible.update_fact("story_rules", "rule", "changed"),
+            lambda: setattr(ledger.bible, "revision", 1),
+            lambda: delattr(ledger.bible, "content_digest"),
+        ):
+            with self.assertRaises(ProductionPolicyError):
+                mutate()
+            self.assertEqual(ledger.to_dict(), before)
+
+    def test_bible_batch_is_atomic_and_cannot_launder_corruption(self):
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        before = ledger.to_dict()
+        with self.assertRaisesRegex(ProductionPolicyError, "entity"):
+            ledger.bible.characters.update({"B": {"name": "Bob"}, "bad": {"": "invalid"}})
+        self.assertEqual(ledger.to_dict(), before)
+        ledger.bible.characters._data["A"]["name"] = "private tamper"
+        with self.assertRaisesRegex(ProductionPolicyError, "revision/digest mismatch"):
+            ledger.bible.characters["B"] = {"name": "Bob"}
+        with self.assertRaisesRegex(ProductionPolicyError, "revision/digest mismatch"):
+            ledger.to_dict()
+
+    def test_bible_unicode_writes_reject_atomically_and_accept_valid_unicode(self):
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        before = ledger.to_dict()
+        invalid = chr(0xD800)
+        mutations = (
+            lambda: ledger.bible.update_fact("story_rules", "rule", invalid),
+            lambda: ledger.bible.update_fact("story_rules", invalid, "value"),
+            lambda: ledger.bible.characters.__setitem__(invalid, {"name": "Bob"}),
+            lambda: ledger.bible.characters.__setitem__("B", {invalid: "Bob"}),
+            lambda: ledger.bible.characters.__setitem__("B", {"name": invalid}),
+            lambda: ledger.bible.update_entity("characters", "A", {"name": invalid}, expected_revision=ledger.bible.revision),
+            lambda: ledger.bible.characters.update({"B": {"name": "Bob"}, "C": {"name": invalid}}),
+            lambda: ledger.bible.story_rules.update({"valid": "value", "invalid": invalid}),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with self.assertRaisesRegex(ProductionPolicyError, "UTF-8"):
+                    mutation()
+                self.assertEqual(ledger.to_dict(), before)
+                self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+        for namespace in MovieBible.MAP_NAMES:
+            value = invalid if namespace in {"story_rules", "continuity_facts"} else {"name": invalid}
+            with self.subTest(constructor_namespace=namespace):
+                with self.assertRaisesRegex(ProductionPolicyError, "UTF-8"):
+                    MovieBible(**{namespace: {"key": value}})
+                corrupt = copy.deepcopy(before)
+                corrupt["movie_bible"][namespace]["key"] = value
+                with self.assertRaisesRegex(ProductionPolicyError, "UTF-8"):
+                    ProductionLedger.from_dict(corrupt)
+        ledger.bible.update_fact("story_rules", "règle", "雪 🌙 café")
+        ledger.bible.update_entity("characters", "英雄", {"名前": "Élodie 🐈"}, expected_revision=ledger.bible.revision)
+        checkpoint = ledger.to_dict()
+        self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(checkpoint)).to_dict(), checkpoint)
+
+    def test_bible_digest_failure_cannot_publish_partial_mutation(self):
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        before = ledger.to_dict()
+        original_digest = MovieBible._digest
+        def fail_proposed(bible, replacement_name=None, replacement_values=None):
+            if replacement_name is not None:
+                raise ProductionPolicyError("injected candidate digest failure")
+            return original_digest(bible)
+        mutations = (
+            lambda: ledger.bible.characters.__setitem__("B", {"name": "Bob"}),
+            lambda: ledger.bible.characters.update({"B": {"name": "Bob"}}),
+            lambda: ledger.bible.characters.__delitem__("A"),
+            lambda: ledger.bible.characters.clear(),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with patch.object(MovieBible, "_digest", fail_proposed):
+                    with self.assertRaisesRegex(ProductionPolicyError, "candidate digest failure"):
+                        mutation()
+                self.assertEqual(ledger.to_dict(), before)
+                self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+        # A failed write must not prevent a subsequent legal repair/update.
+        ledger.bible.characters["B"] = {"name": "Bob"}
+        ledger.validate()
+
+    def test_bible_namespace_restore_and_constructor_require_mapping(self):
+        for populated in (False, True):
+            ledger = ProductionLedger("movie")
+            if populated:
+                ledger.bible.characters["A"] = {"name": "Alice"}
+            checkpoint = ledger.to_dict()
+            for namespace in MovieBible.MAP_NAMES:
+                for invalid in ([], [("duplicate", {}), ("duplicate", {})], "", 0, None):
+                    with self.subTest(populated=populated, namespace=namespace, invalid=invalid):
+                        corrupt = copy.deepcopy(checkpoint)
+                        corrupt["movie_bible"][namespace] = invalid
+                        with self.assertRaisesRegex(ProductionPolicyError, "mapping"):
+                            ProductionLedger.from_dict(corrupt)
+                        with self.assertRaisesRegex(ProductionPolicyError, "mapping"):
+                            MovieBible(**{namespace: invalid})
+            if populated:
+                corrupt = copy.deepcopy(checkpoint)
+                corrupt["movie_bible"]["characters"] = [("A", {"name": "discarded"}), ("A", {"name": "Alice"})]
+                with self.assertRaisesRegex(ProductionPolicyError, "mapping"):
+                    ProductionLedger.from_dict(corrupt)
+
+    def test_bible_checkpoint_integrity_and_legacy_boundary(self):
+        empty = ProductionLedger("movie").to_dict()
+        for field in ("content_digest", "revision_history"):
+            empty["movie_bible"].pop(field)
+        restored = ProductionLedger.from_dict(empty)
+        self.assertEqual(restored.bible.revision, 1)
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        checkpoint = ledger.to_dict()
+        self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(checkpoint)).to_dict(), checkpoint)
+        for change in (
+            lambda d: d["movie_bible"]["characters"]["A"].__setitem__("name", "Mallory"),
+            lambda d: d["movie_bible"].__setitem__("revision", 1),
+            lambda d: d["movie_bible"]["revision_history"].clear(),
+            lambda d: d["movie_bible"].pop("content_digest"),
+            lambda d: d["movie_bible"].pop("revision_history"),
+            lambda d: d["movie_bible"].__setitem__("content_digest", ""),
+            lambda d: d["movie_bible"].__setitem__("content_digest", None),
+        ):
+            corrupt = copy.deepcopy(checkpoint)
+            change(corrupt)
+            with self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(corrupt)
+        constructed = ProductionLedger("movie", bible=MovieBible(characters={"A": {"name": "Alice"}})).to_dict()
+        self.assertEqual(constructed["movie_bible"]["revision"], 1)
+        del constructed["movie_bible"]["content_digest"]
+        with self.assertRaisesRegex(ProductionPolicyError, "lacks integrity evidence"):
+            ProductionLedger.from_dict(constructed)
+
+    def test_revised_binding_tracks_exact_bible_digest(self):
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        ledger.add_shot(Shot("S1"))
+        binding = ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset())
+        ledger.add_shot_continuity_binding(binding)
+        first_digest = ledger.shot_continuity_bindings["S1"].bible_digest
+        before = ledger.to_dict()
+        with self.assertRaisesRegex(ProductionPolicyError, "freeze the plan and create a new revision"):
+            ledger.bible.update_entity("characters", "A", {"name": "Alicia"}, expected_revision=ledger.bible.revision)
+        self.assertEqual(ledger.to_dict(), before)
+        ledger.bible.update_entity("characters", "A", {"name": "Alice"}, expected_revision=ledger.bible.revision)
+        ledger.bible.characters.update({"A": {"name": "Alice"}})
+        self.assertEqual(ledger.to_dict(), before)  # Exact replay does not advance revision.
+        ledger.freeze_plan()
+        ledger.create_new_plan_revision()
+        ledger.bible.update_entity("characters", "A", {"name": "Alicia"}, expected_revision=2)
+        with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision"):
+            ledger.validate()
+        revised = ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset())
+        ledger.add_shot_continuity_binding(revised)
+        self.assertNotEqual(ledger.shot_continuity_bindings["S1"].bible_digest, first_digest)
+        ledger.freeze_plan()
+        self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(ledger.to_dict())).to_dict(), ledger.to_dict())
+
+    def test_bible_change_rejects_unreplaceable_binding_before_mutation(self):
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        ledger.add_shot(Shot("S1"))
+        ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset()))
+        ledger.freeze_plan()
+        ledger.create_new_plan_revision()
+        ledger.shots["S1"].bind_generated_asset("v1")
+        before = ledger.to_dict()
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement"):
+            ledger.bible.update_entity("characters", "A", {"name": "Alicia"}, expected_revision=ledger.bible.revision)
+        self.assertEqual(ledger.to_dict(), before)
+
+    def test_bible_mutation_preflights_every_binding_and_public_write_path(self):
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        for shot_id in ("S1", "S2"):
+            ledger.add_shot(Shot(shot_id))
+            ledger.add_shot_continuity_binding(ShotContinuityBinding(shot_id, ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset()))
+        ledger.freeze_plan()
+        ledger.create_new_plan_revision()
+        # The first binding is replaceable; the second must block the whole write.
+        ledger.shots["S2"].bind_generated_asset("v2")
+        before = ledger.to_dict()
+        mutations = (
+            lambda: ledger.bible.characters.__setitem__("B", {"name": "Bob"}),
+            lambda: ledger.bible.characters.update({"B": {"name": "Bob"}, "A": {"name": "Alicia"}}),
+            lambda: ledger.bible.characters.__delitem__("A"),
+            lambda: ledger.bible.characters.clear(),
+            lambda: ledger.bible.characters.pop("A"),
+            lambda: ledger.bible.update_fact("story_rules", "rule", "changed"),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement"):
+                    mutation()
+                self.assertEqual(ledger.to_dict(), before)
+                self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+        # Exact no-ops remain valid even when a meaningful change is prohibited.
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        ledger.bible.characters.update({"A": {"name": "Alice"}})
+        ledger.bible.story_rules.clear()
+        self.assertEqual(ledger.to_dict(), before)
+
+    def test_generation_authorization_binds_actual_plan_and_bible_content(self):
+        authorizations = []
+        for duration, name in ((1000, "Alice"), (2000, "Alice"), (1000, "Alicia")):
+            ledger = ProductionLedger("movie")
+            ledger.bible.characters["A"] = {"name": name}
+            ledger.add_scene(Scene("SC"))
+            ledger.add_shot(Shot("S1", scene_id="SC"))
+            ledger.add_shot_plan(ShotPlan("S1", "SC", 0, duration, "same-prompt", False))
+            ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset()))
+            ledger.freeze_plan()
+            job = ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+            quote = self.register_provider(ledger)
+            auth = ledger.authorize_attempt("J1", quote)
+            self.assertEqual(job.plan_state_digest, auth.plan_state_digest)
+            self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(ledger.to_dict())).to_dict(), ledger.to_dict())
+            authorizations.append(auth)
+        self.assertNotEqual(authorizations[0].plan_state_digest, authorizations[1].plan_state_digest)
+        self.assertNotEqual(authorizations[0].provider_request_key, authorizations[1].provider_request_key)
+        self.assertNotEqual(authorizations[0].plan_state_digest, authorizations[2].plan_state_digest)
+        self.assertNotEqual(authorizations[0].provider_request_key, authorizations[2].provider_request_key)
+
+    def test_generation_rejects_stale_planning_and_bible_callbacks(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC"))
+        ledger.add_shot(Shot("S1", scene_id="SC"))
+        plan = ShotPlan("S1", "SC", 0, 1000, "prompt", False)
+        ledger.add_shot_plan(plan)
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+        with self.assertRaisesRegex(ProductionPolicyError, "generation history"):
+            ledger.bible.update_fact("story_rules", "new", "not while queued")
+        with self.assertRaisesRegex(ProductionPolicyError, "after generation job submission"):
+            ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", ledger.bible.revision, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset()))
+        self.assertIs(ledger.submit_generation(job_id="ignored", shot_id="S1", idempotency_key="I1", input_fingerprint="F1"), ledger.jobs["J1"])
+        ledger.shot_plans._data["S1"] = ShotPlan("S1", "SC", 0, 2000, "prompt", False)
+        quote = self.register_provider(ledger)
+        with self.assertRaisesRegex(ProductionPolicyError, "stale plan"):
+            ledger.authorize_attempt("J1", quote)
+        self.assertEqual(ledger.jobs["J1"].status, JobStatus.QUEUED)
+        ledger.shot_plans._data["S1"] = plan
+        self.authorize_and_start(ledger)
+        before = ledger.jobs["J1"].status
+        ledger.bible.story_rules._data["rule"] = "private tamper"
+        with self.assertRaisesRegex(ProductionPolicyError, "revision/digest mismatch"):
+            ledger.finish_generation("J1", 1, "provider-1", "v1")
+        self.assertIs(ledger.jobs["J1"].status, before)
+
+    def test_generation_checkpoint_requires_plan_state_binding(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+        self.authorize_and_start(ledger)
+        checkpoint = ledger.to_dict()
+        for path in ("job_missing", "job_changed", "authorization_missing", "authorization_changed"):
+            corrupt = copy.deepcopy(checkpoint)
+            job = corrupt["generation_jobs"]["J1"]
+            auth = job["attempt_history"][0]["authorization"]
+            if path == "job_missing":
+                del job["plan_state_digest"]
+            elif path == "job_changed":
+                job["plan_state_digest"] = "0" * 64
+            elif path == "authorization_missing":
+                del auth["plan_state_digest"]
+            else:
+                auth["plan_state_digest"] = "0" * 64
+            with self.subTest(path=path), self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(corrupt)
+
+    def test_new_integrity_fields_match_published_checkpoint_schema(self):
+        schema_path = Path("schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json")
+        schema = json.loads(schema_path.read_text())
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        ledger.add_shot(Shot("S1"))
+        ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset()))
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+        self.authorize_and_start(ledger)
+        data = ledger.to_dict()
+        samples = (
+            ("movie_bible", data["movie_bible"], {"content_digest", "revision_history"}),
+            ("shot_continuity_binding", data["shot_continuity_bindings"]["S1"], {"bible_digest"}),
+            ("generation_job", data["generation_jobs"]["J1"], {"plan_state_digest"}),
+            ("attempt_authorization", data["generation_jobs"]["J1"]["attempt_history"][0]["authorization"], {"plan_state_digest"}),
+        )
+        for definition, sample, new_fields in samples:
+            contract = schema["$defs"][definition]
+            self.assertTrue(new_fields.issubset(contract["properties"]))
+            self.assertTrue(new_fields.issubset(contract["required"]))
+            self.assertEqual(set(sample), set(contract["required"]))
+
+    def test_terminal_generation_history_blocks_bible_and_structure_rewrite(self):
+        for succeeded in (True, False):
+            ledger = ProductionLedger("movie")
+            ledger.add_scene(Scene("SC"))
+            ledger.add_shot(Shot("S1", scene_id="SC"))
+            ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+            self.authorize_and_start(ledger)
+            if succeeded:
+                ledger.finish_generation("J1", 1, "provider-1", "v1")
+            else:
+                ledger.fail_generation("J1", 1, "provider-1", FailureClass.NON_RETRYABLE_PROVIDER, "failed")
+            ledger.validate()
+            before = ledger.to_dict()
+            for mutate in (
+                lambda: ledger.bible.update_fact("story_rules", "new", "blocked"),
+                lambda: setattr(ledger.scenes["SC"], "scene_id", "OTHER"),
+                lambda: setattr(ledger.shots["S1"], "scene_id", "OTHER"),
+                lambda: setattr(ledger.shots["S1"], "has_dialogue_or_audio", True),
+                lambda: setattr(ledger, "project_id", "other-movie"),
+            ):
+                with self.subTest(succeeded=succeeded, mutate=mutate), self.assertRaisesRegex(ProductionPolicyError, "generation history"):
+                    mutate()
+                self.assertEqual(ledger.to_dict(), before)
+            self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+            corrupt = copy.deepcopy(before)
+            corrupt["project_id"] = "other-movie"
+            with self.assertRaisesRegex(ProductionPolicyError, "stale plan"):
+                ProductionLedger.from_dict(corrupt)
 
     def test_ledger_round_trip_preserves_resume_state(self):
         ledger = ProductionLedger("movie")
@@ -1816,19 +2159,21 @@ class MovieStudioCoreTests(unittest.TestCase):
 
         data = ledger.to_dict()
 
-        # Modify movie bible to bump revision
+        # Explicit plan revision is required before a bound Bible can change.
+        ledger.freeze_plan()
+        ledger.create_new_plan_revision()
         ledger.bible.update_fact("story_rules", "rule1", "value1")
-        self.assertEqual(ledger.bible.revision, 2)
+        self.assertEqual(ledger.bible.revision, 3)
 
-        # Try to restore with stale revision (1 instead of 2)
-        data["movie_bible"]["revision"] = 2
+        # Try to restore with stale revision (2 instead of 3)
+        data["movie_bible"]["revision"] = 3
         data["movie_bible"]["story_rules"]["rule1"] = "value1"
-        data["shot_continuity_bindings"]["shot-1"]["bible_revision"] = 1
+        data["shot_continuity_bindings"]["shot-1"]["bible_revision"] = 2
         with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision must match current movie-bible revision exactly"):
             ProductionLedger.from_dict(data)
 
-        # Try to restore with future revision (3 instead of 2)
-        data["shot_continuity_bindings"]["shot-1"]["bible_revision"] = 3
+        # Try to restore with future revision (4 instead of 3)
+        data["shot_continuity_bindings"]["shot-1"]["bible_revision"] = 4
         with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision must match current movie-bible revision exactly"):
             ProductionLedger.from_dict(data)
 
@@ -1947,7 +2292,8 @@ class MovieStudioCoreTests(unittest.TestCase):
         restored = ProductionLedger.from_dict(ledger_dict)
         self.assertIn("shot-1", restored.shot_continuity_bindings)
         restored_binding = restored.shot_continuity_bindings["shot-1"]
-        self.assertEqual(restored_binding, binding)
+        self.assertEqual(restored_binding, ledger.shot_continuity_bindings["shot-1"])
+        self.assertEqual(restored_binding.bible_digest, ledger.bible.content_digest)
         self.assertEqual(restored_binding.character_ids, frozenset(["char-1"]))
 
     def test_start_generation_idempotent_after_success(self):

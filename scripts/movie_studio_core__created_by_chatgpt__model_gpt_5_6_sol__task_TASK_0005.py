@@ -7,6 +7,7 @@ No provider/network calls belong in this module.
 """
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from collections.abc import MutableMapping
+from types import MappingProxyType
 from enum import Enum
 from hashlib import sha256
 import json
@@ -116,6 +117,12 @@ class Scene:
             raise ProductionPolicyError("plan ownership cannot be changed directly")
         if name == "scene_id" and getattr(getattr(self, "_plan_owner", None), "plan_frozen", False):
             raise ProductionPolicyError("plan is frozen")
+        owner = getattr(self, "_plan_owner", None)
+        if name == "scene_id" and owner is not None and any(
+            job.shot_id in owner.shots and owner.shots[job.shot_id].scene_id == self.scene_id
+            for job in owner.jobs.values()
+        ):
+            raise ProductionPolicyError("scene structure is referenced by generation history")
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name):
@@ -148,6 +155,7 @@ class ShotContinuityBinding:
     costume_ids: FrozenSet[str]
     prop_ids: FrozenSet[str]
     reference_asset_versions: FrozenSet[str]
+    bible_digest: str = ""
 
     def __post_init__(self):
         for field_name in ["character_ids", "voice_ids", "costume_ids", "prop_ids", "reference_asset_versions"]:
@@ -163,6 +171,10 @@ class ShotContinuityBinding:
             raise ProductionPolicyError("shot_id must be a non-empty string")
         if type(self.location_id) is not str:
             raise ProductionPolicyError("location_id must be a string")
+        if type(self.bible_digest) is not str or (self.bible_digest and (
+            len(self.bible_digest) != 64 or any(c not in "0123456789abcdef" for c in self.bible_digest)
+        )):
+            raise ProductionPolicyError("invalid binding movie-bible digest")
 
 
 def continuity_binding_digest(binding: ShotContinuityBinding) -> str:
@@ -193,6 +205,11 @@ class Shot:
             getattr(self, "_plan_owner", None), "plan_frozen", False
         ):
             raise ProductionPolicyError("plan is frozen")
+        owner = getattr(self, "_plan_owner", None)
+        if name in {"shot_id", "scene_id", "has_dialogue_or_audio"} and owner is not None and any(
+            job.shot_id == self.shot_id for job in owner.jobs.values()
+        ):
+            raise ProductionPolicyError("shot structure is referenced by generation history")
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name):
@@ -252,6 +269,7 @@ class AttemptAuthorization:
     maximum_cost_usd_micros: int
     cloud_execution: bool
     charge_cap_enforced: bool
+    plan_state_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -305,6 +323,7 @@ class GenerationJob:
     last_error: Optional[str] = None
     generation_epoch: Optional[int] = None
     attempt_history: Tuple[GenerationAttempt, ...] = ()
+    plan_state_digest: str = ""
 
     def _authorize(self, authorization: AttemptAuthorization) -> None:
         if type(self.max_attempts) is not int or self.max_attempts < 1:
@@ -318,6 +337,7 @@ class GenerationJob:
             authorization.job_id != self.job_id
             or authorization.shot_id != self.shot_id
             or authorization.input_fingerprint != self.input_fingerprint
+            or authorization.plan_state_digest != self.plan_state_digest
             or authorization.attempt_number != expected_attempt
             or (
                 self.generation_epoch is not None
@@ -465,6 +485,8 @@ class GenerationJob:
 @dataclass
 class MovieBible:
     revision: int = 1
+    content_digest: str = ""
+    revision_history: Tuple[str, ...] = ()
     story_rules: Dict[str, str] = field(default_factory=dict)
     characters: Dict[str, Dict[str, str]] = field(default_factory=dict)
     voices: Dict[str, Dict[str, str]] = field(default_factory=dict)
@@ -472,6 +494,53 @@ class MovieBible:
     costumes: Dict[str, Dict[str, str]] = field(default_factory=dict)
     props: Dict[str, Dict[str, str]] = field(default_factory=dict)
     continuity_facts: Dict[str, str] = field(default_factory=dict)
+
+    MAP_NAMES = ("story_rules", "characters", "voices", "locations", "costumes", "props", "continuity_facts")
+
+    def __post_init__(self):
+        for name in self.MAP_NAMES:
+            object.__setattr__(self, name, BibleStateDict(self, name, getattr(self, name)))
+        computed = self._digest()
+        if not self.content_digest:
+            object.__setattr__(self, "content_digest", computed)
+
+    def __setattr__(self, name, value):
+        if name == "_ledger" and getattr(self, "_ledger", None) is not None:
+            raise ProductionPolicyError("movie-bible ownership cannot be changed directly")
+        if name in {"revision", "content_digest", "revision_history", *self.MAP_NAMES} and name in self.__dict__:
+            if name in self.MAP_NAMES and value is self.__dict__[name]:
+                return
+            raise ProductionPolicyError("movie-bible changes require a controlled mutation")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name):
+        if name in type(self).__dataclass_fields__ or name == "_ledger":
+            raise ProductionPolicyError("movie-bible fields cannot be deleted")
+        object.__delattr__(self, name)
+
+    def _digest(self, replacement_name=None, replacement_values=None) -> str:
+        try:
+            content = {
+                name: {key: dict(value) if isinstance(value, Mapping) else value for key, value in
+                       (replacement_values if name == replacement_name else getattr(self, name)).items()}
+                for name in self.MAP_NAMES
+            }
+            encoded = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            return sha256(encoded).hexdigest()
+        except (TypeError, ValueError) as exc:
+            raise ProductionPolicyError("invalid movie-bible content encoding") from exc
+
+    def validate_digest(self):
+        try:
+            actual_digest = self._digest()
+        except (TypeError, ValueError) as exc:
+            raise ProductionPolicyError("invalid movie-bible content") from exc
+        if (type(self.revision) is not int or self.revision < 1
+            or type(self.revision_history) is not tuple
+            or len(self.revision_history) != self.revision - 1
+            or any(type(item) is not str or len(item) != 64 or any(c not in "0123456789abcdef" for c in item) for item in self.revision_history)
+            or self.content_digest != actual_digest):
+            raise ProductionPolicyError("movie-bible revision/digest mismatch")
 
     def update_fact(self, namespace: str, key: str, value: str) -> None:
         stores = {
@@ -483,7 +552,117 @@ class MovieBible:
         if not key or not value:
             raise ProductionPolicyError("movie-bible fact key and value are required")
         stores[namespace][key] = value
-        self.revision += 1
+
+    def update_entity(self, namespace: str, entity_id: str, fields: Mapping[str, str], *, expected_revision: int) -> None:
+        if namespace not in {"characters", "voices", "locations", "costumes", "props"}:
+            raise ProductionPolicyError("unsupported entity movie-bible namespace")
+        if type(expected_revision) is not int or expected_revision != self.revision:
+            raise ProductionPolicyError("stale movie-bible revision")
+        getattr(self, namespace)[entity_id] = fields
+
+
+class BibleStateDict(MutableMapping):
+    """Copy-on-read entity map; every public mutation advances Bible revision."""
+
+    def __init__(self, bible: MovieBible, name: str, values):
+        self._bible, self._name = bible, name
+        self._data = {}
+        if not isinstance(values, Mapping):
+            raise ProductionPolicyError("movie-bible namespace must be a mapping")
+        for key, value in values.items():
+            self._data[key] = self._validated(key, value)
+
+    @staticmethod
+    def _validate_utf8(value):
+        try:
+            value.encode("utf-8")
+        except UnicodeError as exc:
+            raise ProductionPolicyError("movie-bible strings must be valid UTF-8") from exc
+
+    def _validated(self, key, value):
+        if type(key) is not str or not key:
+            raise ProductionPolicyError("movie-bible key must be a non-empty string")
+        self._validate_utf8(key)
+        if self._name in {"story_rules", "continuity_facts"}:
+            if type(value) is not str or not value:
+                raise ProductionPolicyError("movie-bible fact value must be a non-empty string")
+            self._validate_utf8(value)
+            return value
+        if not isinstance(value, Mapping) or any(type(k) is not str or not k or type(v) is not str for k, v in value.items()):
+            raise ProductionPolicyError("movie-bible entity must map non-empty fields to strings")
+        copied = dict(value)
+        for field, content in copied.items():
+            self._validate_utf8(field)
+            self._validate_utf8(content)
+        return copied
+
+    def _commit(self, proposed):
+        # Every operation that can fail completes before publishing any state.
+        digest = self._bible._digest(self._name, proposed)
+        history = self._bible.revision_history + (self._bible.content_digest,)
+        revision = self._bible.revision + 1
+        self._data = proposed
+        object.__setattr__(self._bible, "revision_history", history)
+        object.__setattr__(self._bible, "revision", revision)
+        object.__setattr__(self._bible, "content_digest", digest)
+
+    def _check(self):
+        self._bible.validate_digest()
+        if getattr(getattr(self._bible, "_ledger", None), "plan_frozen", False):
+            raise ProductionPolicyError("plan is frozen")
+        ledger = getattr(self._bible, "_ledger", None)
+        if ledger is not None and ledger.jobs:
+            raise ProductionPolicyError("movie-bible mutation conflicts with generation history")
+        if ledger is not None and ledger.shot_continuity_bindings:
+            if ledger.plan_revision == 1:
+                raise ProductionPolicyError("freeze the plan and create a new revision before changing a bound movie-bible")
+            for shot_id in ledger.shot_continuity_bindings:
+                ledger._require_safe_replacement(shot_id, "continuity binding")
+
+    def __getitem__(self, key):
+        value = self._data[key]
+        return MappingProxyType(value) if isinstance(value, dict) else value
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __setitem__(self, key, value):
+        self._bible.validate_digest()
+        value = self._validated(key, value)
+        if key in self._data and self._data[key] == value:
+            return
+        self._check()
+        proposed = dict(self._data)
+        proposed[key] = value
+        self._commit(proposed)
+
+    def __delitem__(self, key):
+        self._check()
+        proposed = dict(self._data)
+        del proposed[key]
+        self._commit(proposed)
+
+    def update(self, *args, **kwargs):
+        self._bible.validate_digest()
+        proposed = {key: self._validated(key, value) for key, value in dict(*args, **kwargs).items()}
+        if any(key not in self._data or self._data[key] != value for key, value in proposed.items()):
+            self._check()
+            candidate = dict(self._data)
+            candidate.update(proposed)
+            self._commit(candidate)
+
+    def clear(self):
+        self._bible.validate_digest()
+        if self._data:
+            self._check()
+            self._commit({})
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
 
 
 class PlanStateDict(MutableMapping):
@@ -584,6 +763,10 @@ class ProductionLedger:
     def __post_init__(self):
         frozen = self.plan_frozen
         object.__setattr__(self, "plan_frozen", False)
+        previous = getattr(self.bible, "_ledger", None)
+        if previous is not None and previous is not self:
+            raise ProductionPolicyError("movie-bible belongs to another ledger")
+        object.__setattr__(self.bible, "_ledger", self)
         for name in ("scenes", "shots", "shot_plans", "shot_continuity_bindings"):
             object.__setattr__(self, name, PlanStateDict(self, name, getattr(self, name)))
         object.__setattr__(self, "plan_frozen", frozen)
@@ -595,8 +778,10 @@ class ProductionLedger:
             if value is self.__dict__[name] and not self.plan_frozen:
                 return
             raise ProductionPolicyError("planning maps cannot be replaced directly")
-        if name == "bible" and name in self.__dict__ and getattr(self, "plan_frozen", False):
-            raise ProductionPolicyError("plan is frozen")
+        if name == "bible" and name in self.__dict__:
+            raise ProductionPolicyError("movie-bible replacement requires an explicit operation")
+        if name == "project_id" and name in self.__dict__ and getattr(self, "jobs", {}):
+            raise ProductionPolicyError("project identity is referenced by generation history")
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name):
@@ -730,6 +915,8 @@ class ProductionLedger:
                 self._require_safe_replacement(plan.shot_id, "shot plan")
             else:
                 return
+        elif any(job.shot_id == plan.shot_id for job in self.jobs.values()):
+            raise ProductionPolicyError("shot plan cannot be added after generation job submission")
 
         self.shot_plans._put(plan.shot_id, plan)
 
@@ -744,6 +931,9 @@ class ProductionLedger:
             raise ProductionPolicyError("binding must reference an existing shot")
         if type(binding.bible_revision) is not int or binding.bible_revision != self.bible.revision:
             raise ProductionPolicyError("binding bible_revision must match current movie-bible revision exactly")
+        if binding.bible_digest and binding.bible_digest != self.bible.content_digest:
+            raise ProductionPolicyError("binding movie-bible digest mismatch")
+        binding = replace(binding, bible_digest=self.bible.content_digest)
 
         if type(binding.character_ids) is not frozenset:
             raise ProductionPolicyError("character_ids must be a frozenset")
@@ -795,6 +985,8 @@ class ProductionLedger:
                 self._require_safe_replacement(binding.shot_id, "continuity binding")
             else:
                 return
+        elif any(job.shot_id == binding.shot_id for job in self.jobs.values()):
+            raise ProductionPolicyError("continuity binding cannot be added after generation job submission")
 
         self.shot_continuity_bindings._put(binding.shot_id, binding)
 
@@ -811,12 +1003,14 @@ class ProductionLedger:
             raise ProductionPolicyError("unknown shot")
         if not job_id or not idempotency_key or not input_fingerprint:
             raise ProductionPolicyError("job id, idempotency key and fingerprint are required")
+        state_digest = self._shot_plan_state_digest(shot_id)
         existing_job_id = self.idempotency_index.get(idempotency_key)
         if existing_job_id:
             existing = self.jobs[existing_job_id]
             if (
                 existing.shot_id != shot_id
                 or existing.input_fingerprint != input_fingerprint
+                or existing.plan_state_digest != state_digest
                 or existing.max_attempts != max_attempts
             ):
                 raise ProductionPolicyError("idempotency key reused with different input")
@@ -842,6 +1036,7 @@ class ProductionLedger:
             shot_id=shot_id,
             idempotency_key=idempotency_key,
             input_fingerprint=input_fingerprint,
+            plan_state_digest=state_digest,
             max_attempts=max_attempts,
         )
         self.jobs[job_id] = job
@@ -854,6 +1049,7 @@ class ProductionLedger:
         quote: ProviderQuote,
     ) -> AttemptAuthorization:
         job = self._job(job_id)
+        self._validate_job_plan_state(job)
         shot = self.shots[job.shot_id]
         self._validate_quote(job, quote)
 
@@ -880,6 +1076,7 @@ class ProductionLedger:
                 or auth.job_id != job.job_id
                 or auth.shot_id != job.shot_id
                 or auth.input_fingerprint != job.input_fingerprint
+                or auth.plan_state_digest != job.plan_state_digest
                 or auth.provider_request_key != provider_request_key
                 or auth.provider_id != quote.provider_id
                 or auth.adapter_id != quote.adapter_id
@@ -921,6 +1118,7 @@ class ProductionLedger:
             adapter_version=quote.adapter_version,
             quote_id=quote.quote_id,
             input_fingerprint=job.input_fingerprint,
+            plan_state_digest=job.plan_state_digest,
             provider_request_key=provider_request_key,
             maximum_cost_usd_micros=0,
             cloud_execution=True,
@@ -944,6 +1142,7 @@ class ProductionLedger:
         self, job_id: str, receipt: ProviderSubmissionReceipt
     ) -> None:
         job = self._job(job_id)
+        self._validate_job_plan_state(job)
         if not job.attempt_history:
             raise ProductionPolicyError("generation job lacks authorization history")
         attempt = job.attempt_history[-1]
@@ -976,6 +1175,7 @@ class ProductionLedger:
         asset_version: str,
     ) -> None:
         job = self._job(job_id)
+        self._validate_job_plan_state(job)
         if job.status is JobStatus.SUCCEEDED and job.attempt_history:
             latest = job.attempt_history[-1]
             if (
@@ -998,6 +1198,7 @@ class ProductionLedger:
         reason: str,
     ) -> None:
         job = self._job(job_id)
+        self._validate_job_plan_state(job)
         if job.status in {JobStatus.RETRYABLE, JobStatus.EXHAUSTED} and job.attempt_history:
             latest = job.attempt_history[-1]
             if (
@@ -1023,6 +1224,33 @@ class ProductionLedger:
             or shot.generation_owner_job_id != job.job_id
         ):
             raise ProductionPolicyError("stale generation owner")
+
+    def _shot_plan_state_digest(self, shot_id: str) -> str:
+        if shot_id not in self.shots:
+            raise ProductionPolicyError("unknown shot")
+        self.bible.validate_digest()
+        shot = self.shots[shot_id]
+        plan = self.shot_plans.get(shot_id)
+        binding = self.shot_continuity_bindings.get(shot_id)
+        if binding and (
+            binding.bible_revision != self.bible.revision
+            or binding.bible_digest != self.bible.content_digest
+        ):
+            raise ProductionPolicyError("stale movie-bible continuity binding")
+        if plan and (plan.shot_id != shot_id or plan.scene_id != shot.scene_id
+                     or plan.has_dialogue_or_audio != shot.has_dialogue_or_audio):
+            raise ProductionPolicyError("shot plan does not match runtime shot")
+        material = [
+            self.project_id, shot_id, shot.scene_id, shot.has_dialogue_or_audio,
+            self.bible.content_digest,
+            plan_digest(plan) if plan else None,
+            continuity_binding_digest(binding) if binding else None,
+        ]
+        return sha256(json.dumps(material, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def _validate_job_plan_state(self, job: GenerationJob) -> None:
+        if job.plan_state_digest != self._shot_plan_state_digest(job.shot_id):
+            raise ProductionPolicyError("generation job references stale plan or continuity content")
 
     @staticmethod
     def _validate_quote(job: GenerationJob, quote: ProviderQuote) -> None:
@@ -1074,6 +1302,7 @@ class ProductionLedger:
                 quote.adapter_id,
                 quote.adapter_version,
                 job.input_fingerprint,
+                job.plan_state_digest,
             ],
             ensure_ascii=False,
             separators=(",", ":"),
@@ -1094,6 +1323,7 @@ class ProductionLedger:
                 authorization.adapter_id,
                 authorization.adapter_version,
                 authorization.input_fingerprint,
+                authorization.plan_state_digest,
             ],
             ensure_ascii=False,
             separators=(",", ":"),
@@ -1272,6 +1502,8 @@ class ProductionLedger:
         bible_raw = data["movie_bible"]
         bible_fields = {
             "revision",
+            "content_digest",
+            "revision_history",
             "story_rules",
             "characters",
             "voices",
@@ -1282,13 +1514,30 @@ class ProductionLedger:
         }
         if not isinstance(bible_raw, Mapping):
             raise ProductionPolicyError("movie-bible must be a mapping")
+        bible_raw = dict(bible_raw)
         if not set(bible_fields).issuperset(set(bible_raw)):
             raise ProductionPolicyError("movie-bible fields mismatch")
         # Ensure older checkpoints without costumes and props will work
         bible_raw.setdefault("costumes", {})
         bible_raw.setdefault("props", {})
+        digest_present = "content_digest" in bible_raw
+        legacy_bible = not digest_present or "revision_history" not in bible_raw
+        if legacy_bible:
+            if bible_raw.get("revision") != 1 or any(bible_raw.get(name) for name in MovieBible.MAP_NAMES):
+                raise ProductionPolicyError("movie-bible checkpoint lacks integrity evidence")
+            bible_raw.setdefault("content_digest", "")
+            bible_raw.setdefault("revision_history", [])
         if set(bible_raw) != bible_fields:
             raise ProductionPolicyError("movie-bible fields mismatch")
+        if digest_present and (
+            type(bible_raw["content_digest"]) is not str
+            or len(bible_raw["content_digest"]) != 64
+            or any(c not in "0123456789abcdef" for c in bible_raw["content_digest"])
+        ):
+            raise ProductionPolicyError("invalid movie-bible checkpoint digest")
+        if not isinstance(bible_raw["revision_history"], list):
+            raise ProductionPolicyError("invalid movie-bible revision history")
+        bible_raw["revision_history"] = tuple(bible_raw["revision_history"])
         if not isinstance(data["scenes"], Mapping):
             raise ProductionPolicyError("scenes must be a mapping")
         if not isinstance(data["shots"], Mapping):
@@ -1336,6 +1585,7 @@ class ProductionLedger:
                 "costume_ids",
                 "prop_ids",
                 "reference_asset_versions",
+            "bible_digest",
             }
             if not isinstance(raw, Mapping) or set(raw) != binding_fields:
                 raise ProductionPolicyError("shot continuity binding fields mismatch")
@@ -1424,6 +1674,7 @@ class ProductionLedger:
                 "shot_id",
                 "idempotency_key",
                 "input_fingerprint",
+                "plan_state_digest",
                 "max_attempts",
                 "attempts",
                 "status",
@@ -1461,6 +1712,7 @@ class ProductionLedger:
                     "adapter_version",
                     "quote_id",
                     "input_fingerprint",
+                    "plan_state_digest",
                     "provider_request_key",
                     "maximum_cost_usd_micros",
                     "cloud_execution",
@@ -1533,6 +1785,7 @@ class ProductionLedger:
         if type(self.bible.revision) is not int or self.bible.revision < 1:
             raise ProductionPolicyError("invalid movie-bible revision")
         self._validate_bible_maps()
+        self.bible.validate_digest()
         for scene_key, scene in self.scenes.items():
             if not isinstance(scene_key, str) or not scene_key:
                 raise ProductionPolicyError("scene id must not be empty")
@@ -1561,6 +1814,8 @@ class ProductionLedger:
                 raise ProductionPolicyError("shot continuity binding has dangling shot reference")
             if type(binding.bible_revision) is not int or binding.bible_revision != self.bible.revision:
                 raise ProductionPolicyError("binding bible_revision must match current movie-bible revision exactly")
+            if binding.bible_digest != self.bible.content_digest:
+                raise ProductionPolicyError("binding movie-bible digest mismatch")
             if type(binding.character_ids) is not frozenset:
                 raise ProductionPolicyError("character_ids must be a frozenset")
             for char_id in binding.character_ids:
@@ -1723,6 +1978,10 @@ class ProductionLedger:
                 raise ProductionPolicyError("invalid generation evidence type")
             if job.shot_id not in self.shots:
                 raise ProductionPolicyError("job references unknown shot")
+            if (type(job.plan_state_digest) is not str or len(job.plan_state_digest) != 64
+                or any(c not in "0123456789abcdef" for c in job.plan_state_digest)):
+                raise ProductionPolicyError("invalid generation plan-state digest")
+            self._validate_job_plan_state(job)
             if type(job.max_attempts) is not int or job.max_attempts < 1:
                 raise ProductionPolicyError("invalid job retry ceiling")
             if (
@@ -1893,6 +2152,8 @@ class ProductionLedger:
             or auth.job_id != job.job_id
             or auth.shot_id != job.shot_id
             or auth.input_fingerprint != job.input_fingerprint
+            or auth.plan_state_digest != job.plan_state_digest
+            or type(auth.plan_state_digest) is not str
             or auth.generation_epoch != job.generation_epoch
             or type(auth.maximum_cost_usd_micros) is not int
             or auth.maximum_cost_usd_micros != 0
@@ -1966,7 +2227,7 @@ class ProductionLedger:
             self.bible.props,
         )
         if any(
-            not isinstance(mapping, dict)
+            not isinstance(mapping, Mapping)
             or any(
                 not isinstance(key, str)
                 or not key
@@ -1977,11 +2238,11 @@ class ProductionLedger:
         ):
             raise ProductionPolicyError("invalid scalar movie-bible map")
         if any(
-            not isinstance(mapping, dict)
+            not isinstance(mapping, Mapping)
             or any(
                 not isinstance(key, str)
                 or not key
-                or not isinstance(value, dict)
+                or not isinstance(value, Mapping)
                 or any(
                     not isinstance(field, str)
                     or not field
