@@ -25,9 +25,17 @@ The Executive Producer is the deterministic authority. Specialist agents propose
 
 The Movie Bible persists revisioned story rules, character identity, voice identity, locations, and continuity facts outside conversational memory. Episode, scene, and shot ledgers refer to this durable baseline. A later increment will add reference-asset digests and explicit council evidence without weakening these bindings.
 
+Entity and fact map writes now advance the Bible revision and SHA-256 content digest. Entity values are copied on write and exposed as read-only mappings, so nested edits cannot silently alter the persisted identity. Batch map updates validate before committing one revision. An explicit entity update can compare an expected revision. Frozen plans reject Bible writes; after any generation job exists, Bible and referenced shot structure remain fixed because historical jobs have no independent full-content snapshot. A later historical-snapshot contract would be needed to safely permit post-generation Bible edits.
+
+Before any meaningful Bible change with continuity bindings, the ledger requires an explicit unfrozen new plan revision and preflights every bound shot for safe replacement. Revision-1 bindings, generated assets, reviews, ownership, epochs, or generation history reject the change before maps, revision, digest, or history change. Exact map assignment/update and an empty clear remain idempotent. After a permitted change, replace every stale binding before validating or freezing the plan.
+
+Continuity bindings persist the exact Bible content digest as well as its revision. A new plan revision can replace a binding for an untouched shot after the Bible changes; stale bindings fail validation. The old empty revision-1 Bible checkpoint may receive a deterministic empty digest on restore. A populated or revisioned checkpoint lacking digest/history, and any old job or binding checkpoint lacking the new exact-content evidence, fails closed instead of receiving invented history.
+
 ## Resumable generation jobs
 
 Generation jobs store stable job IDs, idempotency keys, input fingerprints, provider job identifiers, output versions, attempt counts, retry ceilings, and failure reasons. Resubmission returns the existing job only when shot, fingerprint, and retry policy match exactly. Key reuse with changed input is rejected.
+
+Each job also records a deterministic digest of its actual shot structure, ShotPlan, continuity binding, and Bible content. The authorization and provider request key carry this digest alongside the caller's input fingerprint. Authorization, receipt replay, provider callbacks, and checkpoint restore reject changed content; terminal job history remains verifiable because the referenced content cannot be publicly rewritten. These digests are deterministic integrity records, not authenticated signatures against an attacker who can rewrite an entire checkpoint.
 
 Retryable failures return a shot to planned state. Exhaustion blocks it. Restored ledgers fail closed when a job references an unknown shot, an idempotency index references a missing job, or attempts exceed the ceiling.
 
