@@ -127,6 +127,7 @@ def plan_digest(plan: ShotPlan) -> str:
 
 @dataclass(frozen=True)
 class ShotContinuityBinding:
+    """Binds continuity elements (characters, voices, costumes, props, refs) to a shot idempotently."""
     shot_id: str
     bible_revision: int
     character_ids: FrozenSet[str]
