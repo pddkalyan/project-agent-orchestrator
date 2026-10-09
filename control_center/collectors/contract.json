@@ -1,0 +1,31 @@
+{
+  "collector": "GitHubPublicActivityCollector",
+  "repo": "Google-Jules/project-agent-orchestrator",
+  "collected_at": "2026-10-10T00:00:00.000000+00:00",
+  "status": "success",
+  "rate_limit": {
+    "limit": 60,
+    "remaining": 59,
+    "reset": 1700000000
+  },
+  "events_count": 1,
+  "events": [
+    {
+      "event_id": "action_run_123456",
+      "event_type": "action_run",
+      "timestamp": "2026-10-10T00:00:00Z",
+      "source": "Google-Jules/project-agent-orchestrator",
+      "title": "CI Workflow",
+      "status": "completed",
+      "url": "https://github.com/Google-Jules/project-agent-orchestrator/actions/runs/123456",
+      "author": "google-jules",
+      "metadata": {
+        "model": "unknown",
+        "quota": "unknown",
+        "think": "unknown",
+        "activity": "unknown"
+      }
+    }
+  ],
+  "errors": []
+}
