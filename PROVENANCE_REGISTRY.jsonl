@@ -106,3 +106,11 @@
 {"file":"memory/NEXT_ACTIONS.json","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
 {"file":"docs/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.md","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
 {"file":"PROVENANCE_REGISTRY.jsonl","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
+{"file":"control_center/handoff/__init__.py","created_by":"Google Jules","model":"Google Jules","task":"CONTROL_CENTER_HANDOFF","kind":"generated"}
+{"file":"control_center/handoff/schema.py","created_by":"Google Jules","model":"Google Jules","task":"CONTROL_CENTER_HANDOFF","kind":"generated"}
+{"file":"control_center/handoff/packet.py","created_by":"Google Jules","model":"Google Jules","task":"CONTROL_CENTER_HANDOFF","kind":"generated"}
+{"file":"control_center/handoff/store.py","created_by":"Google Jules","model":"Google Jules","task":"CONTROL_CENTER_HANDOFF","kind":"generated"}
+{"file":"control_center/handoff/docs/antigravity_sidecar_spec.md","created_by":"Google Jules","model":"Google Jules","task":"CONTROL_CENTER_HANDOFF","kind":"generated"}
+{"file":"control_center/handoff/fixtures/valid_handoff_packet.json","created_by":"Google Jules","model":"Google Jules","task":"CONTROL_CENTER_HANDOFF","kind":"generated"}
+{"file":"control_center/handoff/fixtures/invalid_handoff_packet.json","created_by":"Google Jules","model":"Google Jules","task":"CONTROL_CENTER_HANDOFF","kind":"generated"}
+{"file":"tests/test_control_center_handoff.py","created_by":"Google Jules","model":"Google Jules","task":"CONTROL_CENTER_HANDOFF","kind":"generated"}
