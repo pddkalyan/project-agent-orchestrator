@@ -1773,5 +1773,67 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertEqual(restored_binding, binding)
         self.assertEqual(restored_binding.character_ids, frozenset(["char-1"]))
 
+    def test_start_generation_idempotent_after_success(self):
+        ledger = ProductionLedger(project_id="test-idem-success")
+        ledger.add_shot(Shot(shot_id="shot-1"))
+        ledger.submit_generation(job_id="job-1", shot_id="shot-1", idempotency_key="ik1", input_fingerprint="f1")
+        quote = ProviderQuote(
+            quote_id="Q1", provider_id="P1", adapter_id="A1", adapter_version="V1",
+            request_fingerprint="f1", estimated_cost_usd_micros=0, maximum_cost_usd_micros=0,
+            available=True, cloud_execution=True, charge_cap_enforced=True
+        )
+        ledger.register_provider_adapter(ProviderAdapterRegistration(
+            provider_id="P1", adapter_id="A1", adapter_version="V1",
+            capabilities=frozenset([ProviderCapability.VIDEO]),
+            cloud_execution=True, charge_cap_enforced=True, maximum_cost_usd_micros=0
+        ))
+        auth = ledger.authorize_attempt("job-1", quote)
+        receipt = ProviderSubmissionReceipt(
+            authorization_id=auth.authorization_id,
+            job_id="job-1",
+            attempt_number=1,
+            provider_id="P1",
+            adapter_id="A1",
+            adapter_version="V1",
+            provider_request_key=auth.provider_request_key,
+            provider_job_id="prov-job-1"
+        )
+        ledger.start_generation("job-1", receipt)
+        ledger.finish_generation("job-1", 1, "prov-job-1", "asset-1")
+
+        ledger.start_generation("job-1", receipt)
+        self.assertEqual(ledger.jobs["job-1"].status, JobStatus.SUCCEEDED)
+
+    def test_start_generation_idempotent_after_failure(self):
+        ledger = ProductionLedger(project_id="test-idem-fail")
+        ledger.add_shot(Shot(shot_id="shot-1"))
+        ledger.submit_generation(job_id="job-1", shot_id="shot-1", idempotency_key="ik1", input_fingerprint="f1")
+        quote = ProviderQuote(
+            quote_id="Q1", provider_id="P1", adapter_id="A1", adapter_version="V1",
+            request_fingerprint="f1", estimated_cost_usd_micros=0, maximum_cost_usd_micros=0,
+            available=True, cloud_execution=True, charge_cap_enforced=True
+        )
+        ledger.register_provider_adapter(ProviderAdapterRegistration(
+            provider_id="P1", adapter_id="A1", adapter_version="V1",
+            capabilities=frozenset([ProviderCapability.VIDEO]),
+            cloud_execution=True, charge_cap_enforced=True, maximum_cost_usd_micros=0
+        ))
+        auth = ledger.authorize_attempt("job-1", quote)
+        receipt = ProviderSubmissionReceipt(
+            authorization_id=auth.authorization_id,
+            job_id="job-1",
+            attempt_number=1,
+            provider_id="P1",
+            adapter_id="A1",
+            adapter_version="V1",
+            provider_request_key=auth.provider_request_key,
+            provider_job_id="prov-job-1"
+        )
+        ledger.start_generation("job-1", receipt)
+        ledger.fail_generation("job-1", 1, "prov-job-1", FailureClass.RETRYABLE_PROVIDER, "failure")
+
+        ledger.start_generation("job-1", receipt)
+        self.assertEqual(ledger.jobs["job-1"].status, JobStatus.RETRYABLE)
+
 if __name__ == "__main__":
     unittest.main()
