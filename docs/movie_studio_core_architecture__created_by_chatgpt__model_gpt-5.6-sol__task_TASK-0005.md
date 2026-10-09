@@ -58,3 +58,16 @@ Google Drive is the intended permanent master store. An episode reaches complete
 ## Activation boundary
 
 This core performs no provider calls, media generation, Drive upload, purchase, local inference, merge, auto-merge, or TASK-0004/PR #6 change.
+
+
+## Guarded episode and scene lifecycle — package 1
+
+New episodes and scenes start PLANNED. Lifecycle fields and histories reject direct assignment; public constructors cannot fabricate advanced states. `transition_episode` permits PLANNED → IN_PRODUCTION → ASSEMBLING → FINAL_QC, or BLOCKED from an intermediate state. `transition_scene` permits PLANNED → GENERATING → REVIEW → APPROVED, or BLOCKED before approval. Exact transition replay is idempotent. Episode production requires nonempty scene-bound shots; scene generation requires an episode in production. Scene review requires generated assets and no active jobs. Scene approval, episode assembly and entry into final QC require current canonical shots with applicable QA. Entering FINAL_QC does not claim that master-level QC has passed.
+
+ARCHIVING and COMPLETED are explicitly unsupported until typed timeline/master QC and archive verification contracts exist. The deprecated `episode_can_complete` boolean API always returns False: caller booleans cannot establish completion evidence. This intentional safety change removes the former false certification path.
+
+`resume_episode` and `resume_scene` recover BLOCKED state only to the immediately preceding status, rechecking its current evidence; generating scenes require episode recovery first. Resume replay is idempotent. Prior-status tuples persist every transition including BLOCKED and resume; restore rejects missing, skipped or impossible history. These histories are deterministic records, not authenticated signatures against an actor rewriting the entire checkpoint.
+
+Reviewed/approved scene content and assembling/final-QC episode content reject incompatible asset replacement, new generation authorization/submission and public planning changes before mutation. Exact historic callback and canonical-asset replay remain harmless. Existing in-flight callbacks may settle blocked production without advancing its lifecycle. No controlled re-edit of an approved scene is implemented; that requires a future revision/invalidation contract rather than silently discarding approvals.
+
+Legacy PLANNED checkpoints may default empty lifecycle histories. Advanced legacy checkpoints without histories reject instead of acquiring invented transitions. This is an unreleased offline schema-version-2 extension, without a live checkpoint migration. Provider activation, durable file writing, typed timeline/QC/archive evidence and full Phase 2 approval remain unfinished.

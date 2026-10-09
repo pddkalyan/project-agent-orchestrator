@@ -439,7 +439,7 @@ class MovieStudioCoreTests(unittest.TestCase):
                 drive_master_verified=False,
             )
         )
-        self.assertTrue(
+        self.assertFalse(
             episode_can_complete(
                 all_shots_canonical=True,
                 final_qc_passed=True,
@@ -1751,14 +1751,223 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_lifecycle_status_roundtrip_non_default(self):
         from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
         ledger = ProductionLedger("movie")
-        ledger.episode_status = EpisodeStatus.IN_PRODUCTION
-        scene = Scene("SC1")
-        scene.status = SceneStatus.GENERATING
-        ledger.add_scene(scene)
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        ledger.transition_scene("SC1", SceneStatus.GENERATING)
         payload = ledger.to_dict()
         restored = ProductionLedger.from_dict(payload)
         self.assertEqual(restored.episode_status, EpisodeStatus.IN_PRODUCTION)
         self.assertEqual(restored.scenes["SC1"].status, SceneStatus.GENERATING)
+
+    def test_guarded_lifecycle_positive_transitions_replay_and_recovery(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        ledger.transition_scene("SC1", SceneStatus.GENERATING)
+        ledger.shots["S1"].bind_generated_asset("v1")
+        ledger.transition_scene("SC1", SceneStatus.REVIEW)
+        shot = ledger.shots["S1"]
+        for gate in required_gates(shot):
+            shot.reviews[gate] = Review(gate, "v1", Verdict.PASS)
+        canonicalize(shot)
+        ledger.transition_scene("SC1", SceneStatus.APPROVED)
+        ledger.transition_episode(EpisodeStatus.ASSEMBLING)
+        ledger.transition_episode(EpisodeStatus.FINAL_QC)
+        before = ledger.to_dict()
+        ledger.transition_episode(EpisodeStatus.FINAL_QC)
+        ledger.transition_scene("SC1", SceneStatus.APPROVED)
+        self.assertEqual(ledger.to_dict(), before)
+        restored = ProductionLedger.from_dict(copy.deepcopy(before))
+        self.assertEqual(restored.to_dict(), before)
+        self.assertEqual(restored.episode_status_history, (EpisodeStatus.PLANNED, EpisodeStatus.IN_PRODUCTION, EpisodeStatus.ASSEMBLING))
+        self.assertEqual(restored.scenes["SC1"].status_history, (SceneStatus.PLANNED, SceneStatus.GENERATING, SceneStatus.REVIEW))
+        for target in (EpisodeStatus.ARCHIVING, EpisodeStatus.COMPLETED):
+            with self.assertRaisesRegex(ProductionPolicyError, "unsupported"):
+                restored.transition_episode(target)
+            self.assertEqual(restored.to_dict(), before)
+
+    def test_lifecycle_public_writes_and_constructor_bypasses_reject(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        before = ledger.to_dict()
+        for mutation in (
+            lambda: setattr(ledger, "episode_status", EpisodeStatus.COMPLETED),
+            lambda: setattr(ledger, "episode_status_history", (EpisodeStatus.PLANNED,)),
+            lambda: setattr(ledger.scenes["SC1"], "status", SceneStatus.APPROVED),
+            lambda: setattr(ledger.scenes["SC1"], "status_history", (SceneStatus.PLANNED,)),
+        ):
+            with self.assertRaises(ProductionPolicyError):
+                mutation()
+            self.assertEqual(ledger.to_dict(), before)
+        for status in EpisodeStatus:
+            if status is not EpisodeStatus.PLANNED:
+                with self.assertRaises(ProductionPolicyError):
+                    ProductionLedger("movie", episode_status=status)
+        for status in SceneStatus:
+            if status is not SceneStatus.PLANNED:
+                with self.assertRaises(ProductionPolicyError):
+                    Scene("SC1", status=status)
+
+    def test_lifecycle_empty_skipped_unreviewed_and_active_job_states_reject(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("movie")
+        with self.assertRaises(ProductionPolicyError):
+            ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        before = ledger.to_dict()
+        for mutation in (
+            lambda: ledger.transition_episode(EpisodeStatus.ASSEMBLING),
+            lambda: ledger.transition_scene("SC1", SceneStatus.GENERATING),
+            lambda: ledger.transition_episode(EpisodeStatus.COMPLETED),
+        ):
+            with self.assertRaises(ProductionPolicyError):
+                mutation()
+            self.assertEqual(ledger.to_dict(), before)
+        ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        ledger.transition_scene("SC1", SceneStatus.GENERATING)
+        with self.assertRaises(ProductionPolicyError):
+            ledger.transition_scene("SC1", SceneStatus.REVIEW)
+        ledger.shots["S1"].bind_generated_asset("v1")
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        before = ledger.to_dict()
+        with self.assertRaisesRegex(ProductionPolicyError, "active jobs"):
+            ledger.transition_scene("SC1", SceneStatus.REVIEW)
+        self.assertEqual(ledger.to_dict(), before)
+        # Separate unreviewed asset: REVIEW is allowed, APPROVED and ASSEMBLING are not.
+        clean = ProductionLedger("clean")
+        clean.add_scene(Scene("SC1"))
+        clean.add_shot(Shot("S1", scene_id="SC1"))
+        clean.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        clean.transition_scene("SC1", SceneStatus.GENERATING)
+        clean.shots["S1"].bind_generated_asset("v1")
+        clean.transition_scene("SC1", SceneStatus.REVIEW)
+        before = clean.to_dict()
+        with self.assertRaises(ProductionPolicyError):
+            clean.transition_scene("SC1", SceneStatus.APPROVED)
+        with self.assertRaises(ProductionPolicyError):
+            clean.transition_episode(EpisodeStatus.ASSEMBLING)
+        with self.assertRaisesRegex(ProductionPolicyError, "lifecycle"):
+            clean.submit_generation(job_id="J2", shot_id="S1", idempotency_key="K2", input_fingerprint="F2")
+        self.assertEqual(clean.to_dict(), before)
+
+    def test_lifecycle_restore_rejects_skips_missing_history_and_false_completion(self):
+        schema = json.loads((Path(__file__).resolve().parents[1] / "schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json").read_text())
+        for spec in (schema["properties"]["episode_status"], schema["properties"]["episode_status_history"]["items"]):
+            self.assertNotIn("ARCHIVING", spec["enum"])
+            self.assertNotIn("COMPLETED", spec["enum"])
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        before = ledger.to_dict()
+        corruptions = (
+            lambda d: d.__setitem__("episode_status", "COMPLETED"),
+            lambda d: d.__setitem__("episode_status", "ARCHIVING"),
+            lambda d: d.__setitem__("episode_status", "ASSEMBLING"),
+            lambda d: d["scenes"]["SC1"].__setitem__("status", "APPROVED"),
+            lambda d: d.__setitem__("episode_status_history", ["IN_PRODUCTION"]),
+            lambda d: d["scenes"]["SC1"].__setitem__("status_history", ["GENERATING"]),
+        )
+        for corrupt in corruptions:
+            data = copy.deepcopy(before)
+            corrupt(data)
+            with self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(data)
+        legacy = copy.deepcopy(before)
+        legacy.pop("episode_status_history")
+        legacy["scenes"]["SC1"].pop("status_history")
+        self.assertEqual(ProductionLedger.from_dict(legacy).to_dict(), before)
+        for corrupt in (
+            lambda d: d.__setitem__("episode_status", "IN_PRODUCTION"),
+            lambda d: d["scenes"]["SC1"].__setitem__("status", "GENERATING"),
+        ):
+            data = copy.deepcopy(legacy)
+            corrupt(data)
+            with self.assertRaisesRegex(ProductionPolicyError, "requires lifecycle history"):
+                ProductionLedger.from_dict(data)
+
+    def test_lifecycle_blocked_checkpoint_guarded_resume_and_roundtrips(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        ledger.transition_scene("SC1", SceneStatus.GENERATING)
+        ledger.transition_episode(EpisodeStatus.BLOCKED)
+        ledger.transition_scene("SC1", SceneStatus.BLOCKED)
+        before = ledger.to_dict()
+        restored = ProductionLedger.from_dict(copy.deepcopy(before))
+        self.assertEqual(restored.to_dict(), before)
+        with self.assertRaises(ProductionPolicyError):
+            restored.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        with self.assertRaises(ProductionPolicyError):
+            restored.transition_scene("SC1", SceneStatus.GENERATING)
+        self.assertEqual(restored.to_dict(), before)
+        with self.assertRaises(ProductionPolicyError):
+            restored.resume_scene("SC1")  # Episode must resume before GENERATING.
+        self.assertEqual(restored.to_dict(), before)
+        restored.resume_episode()
+        restored.resume_scene("SC1")
+        self.assertIs(restored.episode_status, EpisodeStatus.IN_PRODUCTION)
+        self.assertIs(restored.scenes["SC1"].status, SceneStatus.GENERATING)
+        resumed = restored.to_dict()
+        restored.resume_episode()
+        restored.resume_scene("SC1")
+        self.assertEqual(restored.to_dict(), resumed)
+        self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(resumed)).to_dict(), resumed)
+        corrupt = copy.deepcopy(resumed)
+        corrupt["scenes"]["SC1"]["status"] = "APPROVED"
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(corrupt)
+
+    def test_approved_lifecycle_rejects_regeneration_and_planning_atomically(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        ledger.transition_scene("SC1", SceneStatus.GENERATING)
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        self.authorize_and_start(ledger)
+        ledger.finish_generation("J1", 1, "provider-1", "v1")
+        ledger.transition_scene("SC1", SceneStatus.REVIEW)
+        shot = ledger.shots["S1"]
+        for gate in required_gates(shot):
+            shot.reviews[gate] = Review(gate, "v1", Verdict.PASS)
+        canonicalize(shot)
+        ledger.transition_scene("SC1", SceneStatus.APPROVED)
+        for stage in (EpisodeStatus.IN_PRODUCTION, EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC):
+            if stage is not ledger.episode_status:
+                ledger.transition_episode(stage)
+            before = ledger.to_dict()
+            mutations = (
+                lambda: shot.bind_generated_asset("v2"),
+                lambda: ledger.authorize_attempt("J1", self.quote()),
+                lambda: ledger.submit_generation(job_id="J2", shot_id="S1", idempotency_key="K2", input_fingerprint="F2"),
+                lambda: ledger.add_shot(Shot("S2", scene_id="SC1")),
+                lambda: setattr(shot, "scene_id", ""),
+                lambda: setattr(ledger.scenes["SC1"], "scene_id", "changed"),
+                lambda: ledger.shots.__setitem__("S2", Shot("S2", scene_id="SC1")),
+            )
+            for mutation in mutations:
+                with self.subTest(stage=stage, mutation=mutation):
+                    with self.assertRaises(ProductionPolicyError):
+                        mutation()
+                    self.assertEqual(ledger.to_dict(), before)
+                    self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+            # Exact historic callbacks and asset replay remain harmless after approval.
+            shot.bind_generated_asset("v1")
+            ledger.finish_generation("J1", 1, "provider-1", "v1")
+            self.assertEqual(ledger.to_dict(), before)
+            if stage in {EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC}:
+                with self.assertRaises(ProductionPolicyError):
+                    ledger.scenes["SC2"] = Scene("SC2")
+                with self.assertRaises(ProductionPolicyError):
+                    ledger.bible.update_fact("story_rules", "changed", "value")
+                self.assertEqual(ledger.to_dict(), before)
 
     def test_unknown_lifecycle_status_fails_closed(self):
         ledger = ProductionLedger("movie")
@@ -1909,13 +2118,17 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_corrupted_in_memory_enum_values_fail_validation(self):
         ledger = ProductionLedger("movie")
         ledger.add_scene(Scene("SC1"))
-        ledger.episode_status = "NOT_AN_ENUM"
+        with self.assertRaises(ProductionPolicyError):
+            ledger.episode_status = "NOT_AN_ENUM"
+        object.__setattr__(ledger, "episode_status", "NOT_AN_ENUM")
         with self.assertRaises(ProductionPolicyError):
             ledger.validate()
 
         ledger2 = ProductionLedger("movie")
         scene = Scene("SC1")
-        scene.status = "NOT_AN_ENUM"
+        with self.assertRaises(ProductionPolicyError):
+            scene.status = "NOT_AN_ENUM"
+        object.__setattr__(scene, "status", "NOT_AN_ENUM")
         ledger2.add_scene(scene)
         with self.assertRaises(ProductionPolicyError):
             ledger2.validate()

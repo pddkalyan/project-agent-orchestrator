@@ -19,7 +19,8 @@
     "generation_jobs",
     "idempotency_index",
     "authorization_index",
-    "provider_request_index"
+    "provider_request_index",
+    "episode_status_history"
   ],
   "properties": {
     "schema_version": {
@@ -38,10 +39,9 @@
         "IN_PRODUCTION",
         "ASSEMBLING",
         "FINAL_QC",
-        "ARCHIVING",
-        "COMPLETED",
         "BLOCKED"
-      ]
+      ],
+      "description": "Intermediate offline lifecycle only; ARCHIVING and COMPLETED require a future typed timeline/archive evidence contract."
     },
     "plan_revision": {
       "type": "integer",
@@ -52,7 +52,10 @@
     },
     "plan_revision_history": {
       "type": "array",
-      "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
     },
     "spend_limit_usd_micros": {
       "type": "integer",
@@ -141,6 +144,18 @@
       "additionalProperties": {
         "$ref": "#/$defs/shot_continuity_binding"
       }
+    },
+    "episode_status_history": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "PLANNED",
+          "IN_PRODUCTION",
+          "ASSEMBLING",
+          "FINAL_QC",
+          "BLOCKED"
+        ]
+      }
     }
   },
   "$defs": {
@@ -161,7 +176,8 @@
       "additionalProperties": false,
       "required": [
         "scene_id",
-        "status"
+        "status",
+        "status_history"
       ],
       "properties": {
         "scene_id": {
@@ -176,6 +192,18 @@
             "APPROVED",
             "BLOCKED"
           ]
+        },
+        "status_history": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "PLANNED",
+              "GENERATING",
+              "REVIEW",
+              "APPROVED",
+              "BLOCKED"
+            ]
+          }
         }
       }
     },
@@ -205,7 +233,10 @@
         },
         "revision_history": {
           "type": "array",
-          "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
         },
         "story_rules": {
           "$ref": "#/$defs/string_map"

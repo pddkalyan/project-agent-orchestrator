@@ -2,8 +2,8 @@
   "schema_version": 1,
   "task_id": "TASK-0005",
   "issue": 35,
-  "stage": "PHASE_2_DEPENDENT_BIBLE_AND_GENERATION_BINDING_CANDIDATE",
-  "base_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870",
+  "stage": "PHASE_2_PACKAGE_1_GUARDED_LIFECYCLE_CANDIDATE",
+  "base_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
   "worker": "ChatGPT Work Mode",
   "worker_model": "gpt-6.1-sol",
   "source": {
@@ -12,19 +12,20 @@
     "coding": "gpt-6-sol created dependent Bible/binding candidate 05ae0fc88260e7f5a35461313297185adc23243a; gpt-6.1-sol medium preserved it and completed Astra correction without redoing the narrow baseline",
     "preserved_worktree": "Original feature/TASK-0005-phase2-bible-binding and its uncommitted correction preserved; net diff reapplied to new feature baseline in separate worktree",
     "narrow_approved_sha": "b2772922f8b39a0be7b6ae1787fa5477ed064f0d",
-    "narrow_approval": "Actual independent Astra approval reported by supervisor; upstream PR37 merged to becf9dc; dependent candidate remains unapproved"
+    "narrow_approval": "Actual independent Astra approval reported by supervisor; upstream PR37 merged to becf9dc; dependent candidate remains unapproved",
+    "package_1": "gpt-6.1-sol medium; isolated candidate branch from preserved953e source; PR38 remote remains unchanged"
   },
-  "change": "Controlled MovieBible map writes advance revision, canonical content digest and prior-digest history; nested entity values are read-only. Frozen planning and all generation history prevent unsafe public Bible or referenced-structure changes. Continuity bindings store the exact Bible digest. Jobs and immutable attempt authorizations store a deterministic digest of actual shot structure, ShotPlan, continuity binding and Bible content; provider request keys, replay, callbacks and restore validate it.",
+  "change": "Package1 adds guarded legal episode/scene lifecycle transitions and immutable prior-status history, rejects direct lifecycle writes/advanced constructors, validates restored histories and current state evidence, and enables BLOCKED resume only to the immediately preceding legal state. Nonempty scene-bound shots are required to enter production; scene review requires assets/no active jobs; approval, assembly and final-QC entry require current canonical reviewed shots. ARCHIVING/COMPLETED remain unsupported until typed timeline/archive evidence exists. Reviewed/approved lifecycle content rejects incompatible regeneration and planning changes before mutation; historic exact callback/asset replay remains idempotent. Legacy boolean completion helper now always returns False and cannot certify completion.",
   "test_evidence": {
-    "movie_studio": "107 tests passed, 0 failures (93 narrow baseline + 9 dependent candidate + 5 correction methods)",
-    "test_discovery": "107 tests passed, 0 failures",
+    "movie_studio": "113 tests passed, 0 failures (preserved107 +6 lifecycle methods)",
+    "test_discovery": "113 tests passed, 0 failures",
     "python_compile": "passed for core and tests",
     "json_schema_parse": "passed; runtime/schema shape tests passed; jsonschema package unavailable in both installed Python runtimes, so no independent JSON Schema meta-validation claimed",
     "git_diff_check": "passed",
-    "controller_regression": "34 tests passed on corrected worktree",
-    "reviewer_bridge_regression": "68 tests passed on corrected worktree",
-    "controller_production_fixtures": "5 passed on corrected worktree; existing workflow fixture block executed unchanged with isolated temporary local Git repositories",
-    "windows_regression": "not run on candidate; supervisor verified baseline becf9dc GitHub run 37895969395 passed",
+    "controller_regression": "34 passed on lifecycle worktree independently by coordinator",
+    "reviewer_bridge_regression": "68 passed on lifecycle worktree independently by coordinator",
+    "controller_production_fixtures": "5 existing workflow fixtures passed on lifecycle worktree independently by coordinator; dependency files unchanged",
+    "windows_regression": "not run on package1 candidate; remote source/base evidence retained, no new Windows run claimed",
     "narrow_ci": "PR37 narrow candidate run 37892960500 SUCCESS per supervisor; dependent candidate not yet published",
     "safety_provenance": "passed changed-path worker allowlist, all changed artifact provenance, JSONL parse, zero-spend/cloud-only/no-merge boundaries and changed-file CI secret pattern; no provider calls or external workflow launches"
   },
@@ -37,11 +38,11 @@
     "checkpoint_digest": "deterministic integrity/accounting aid, not an authenticated signature against an adversary who rewrites the entire checkpoint",
     "usage_metrics": "model/account usage unavailable; no usage estimate asserted"
   },
-  "phase_2_gap_assessment": "No authoritative full Phase 2 A-H checklist found in repository task, dispatch, worker, docs, reviews or packets. Explicit Phase 2 D acceptance and offline story/continuity/planning contracts have deterministic coverage; dependent candidate closes controlled Bible revision/digest and exact job/authorization bindings plus the actual Astra mutation-deadlock finding. No independent approval or overall Phase 2 completion claimed. Story facts are string maps, reference versions are identifiers rather than authenticated media provenance, and generation reconciliation is a protocol/receipt contract without a live adapter. Timeline/master QC and verified Drive archive remain broader production work, not evidence of generated media or grounds to start Phase 3.",
-  "review_status": "ASTRA_REJECTED_F9B206_CORRECTIONS_SELF_TESTED_PENDING_REREVIEW",
-  "reviewed_sha": "f9b20670a723cdcb226163fff5fb27d51b9bad05",
+  "phase_2_gap_assessment": "Package1 addresses legal guarded episode/scene transitions, false completion and recoverable BLOCKED lifecycle. Exact source/base generation contracts remain covered. Complete frozen planning at dispatch, executable reconcile/durable writer, typed timeline/master QC, authenticated archive/cleanup evidence and accepted story/reference provenance remain separate unfinished packages. Reconstructed matrix maintained separately; no full Phase2 pass or Phase3 authorization claimed.",
+  "review_status": "PACKAGE_1_SELF_TESTED_PENDING_ASTRA_REVIEW",
+  "reviewed_sha": null,
   "tests": {
-    "passed": 107,
+    "passed": 113,
     "failed": 0
   },
   "corrections": [
@@ -71,18 +72,26 @@
       "reviewed_sha": "f9b20670a723cdcb226163fff5fb27d51b9bad05",
       "finding": "Actual final Astra P2 finding: unpaired Unicode surrogate in scalar Bible update raises UnicodeEncodeError after map, revision and history publication, leaving an invalid checkpoint and blocking subsequent writes.",
       "resolution": "Validate UTF-8 for each namespace key, scalar value, entity field key and value; wrap digest encoding/serialization failures in ProductionPolicyError. Compute proposed full content digest and next revision/history before publishing map or metadata for assignment, update, deletion and clear.",
-      "status": "SELF_TESTED_PENDING_ASTRA_REREVIEW",
-      "regression_evidence": "Invalid scalar/entity/update_entity/batch writes preserve exact checkpoint and restore; invalid constructor/restore Unicode fails closed, valid Unicode roundtrips; injected candidate digest failure preserves all state and subsequent legal update works."
+      "status": "RESOLVED_ASTRA_SOURCE_APPROVED_PER_SUPERVISOR",
+      "regression_evidence": "Invalid scalar/entity/update_entity/batch writes preserve exact checkpoint and restore; invalid constructor/restore Unicode fails closed, valid Unicode roundtrips; injected candidate digest failure preserves all state and subsequent legal update works.",
+      "approved_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64"
     },
     {
       "reviewed_sha": "f9b20670a723cdcb226163fff5fb27d51b9bad05",
       "finding": "Actual final Astra P2 finding: Bible namespace constructor coerces checkpoint lists/pairs through dict(values), accepting [] as {} and collapsing duplicate identifiers if the final digest matches, contrary to strict schema objects and prior behavior.",
       "resolution": "Require Mapping before reading namespace entries at construction, including restore; public update retains its intentional iterable-pair API.",
-      "status": "SELF_TESTED_PENDING_ASTRA_REREVIEW",
-      "regression_evidence": "All seven namespaces reject empty lists, duplicate pairs, strings, integers and None on empty/populated restore and construction; digest-matching duplicate character pairs reject."
+      "status": "RESOLVED_ASTRA_SOURCE_APPROVED_PER_SUPERVISOR",
+      "regression_evidence": "All seven namespaces reject empty lists, duplicate pairs, strings, integers and None on empty/populated restore and construction; digest-matching duplicate character pairs reject.",
+      "approved_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64"
+    },
+    {
+      "finding": "Verified Astra phase probes: bare/empty ledger accepted COMPLETED via direct assignment and restore; three caller booleans could certify completion; lifecycle enums alone did not enforce legal transitions or evidence. Coordinator additionally identified regeneration/advanced-planning invalidation risk.",
+      "resolution": "Package1 adds guarded legal episode/scene lifecycle transitions and immutable prior-status history, rejects direct lifecycle writes/advanced constructors, validates restored histories and current state evidence, and enables BLOCKED resume only to the immediately preceding legal state. Nonempty scene-bound shots are required to enter production; scene review requires assets/no active jobs; approval, assembly and final-QC entry require current canonical reviewed shots. ARCHIVING/COMPLETED remain unsupported until typed timeline/archive evidence exists. Reviewed/approved lifecycle content rejects incompatible regeneration and planning changes before mutation; historic exact callback/asset replay remains idempotent. Legacy boolean completion helper now always returns False and cannot certify completion.",
+      "status": "SELF_TESTED_PENDING_ASTRA_REVIEW",
+      "regression_evidence": "113 tests with legal intermediate transition/history roundtrip, illegal/direct/constructor/restore/empty/unreviewed/no-archive rejection, BLOCKED resume/replay and atomic lifecycle-preserving generation/planning checks"
     }
   ],
-  "migration": "Only old empty revision-1 Bible checkpoints may reconstruct the deterministic empty digest. Populated/revisioned Bible checkpoints without digest/history, and generation jobs or continuity bindings without the new content binding, fail closed.",
+  "migration": "New episode_status_history and per-scene status_history checkpoint arrays. Only PLANNED legacy lifecycle records may default empty histories; advanced legacy statuses without history reject rather than fabricating transitions. Advanced public constructors reject; controlled restore validates the full history and current evidence. ARCHIVING/COMPLETED checkpoints fail closed. Schema version remains2 for this unreleased offline scaffold; no live checkpoint migration is claimed.",
   "worker_reasoning_effort": "medium",
   "prior_review_history": {
     "narrow_rejected_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",
@@ -102,11 +111,17 @@
         "Bible namespace checkpoint type coercion"
       ],
       "reviewer_tests": "104 Movie Studio + 34 controller + 68 reviewer bridge passed; additional probes found blockers"
+    },
+    "source_953e": {
+      "sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
+      "status": "ASTRA_SOURCE_APPROVED_PER_SUPERVISOR",
+      "scope": "Bible/content binding correction source; no overall Phase 2 completion"
     }
   },
   "next_actions": [
-    "Independent Astra review of corrected exact candidate and Phase 2 exit assessment; apply concrete corrections before promotion.",
-    "Publish candidate against feature/TASK-0005-movie-studio-core and run required exact-head CI through supervisor; keep PR8 draft and do not merge automatically.",
-    "Recover authoritative A-H criteria before claiming complete Phase 2; do not substitute invented requirements."
+    "Publish package1 as explicit dependent candidate through coordinator; do not push/merge automatically.",
+    "Independent milestone review of exact package1 commit; apply concrete corrections.",
+    "After publication checkpoint proceed sequentially to package2 complete planning and reference/association integrity within accepted scope.",
+    "Keep ARCHIVING/COMPLETED unsupported until typed evidence package safely enables them."
   ]
 }

@@ -111,13 +111,22 @@ class Review:
 class Scene:
     scene_id: str
     status: SceneStatus = SceneStatus.PLANNED
+    status_history: Tuple[SceneStatus, ...] = ()
+
+    def __post_init__(self):
+        if self.status is not SceneStatus.PLANNED or self.status_history != ():
+            raise ProductionPolicyError("new scenes must start planned without lifecycle history")
 
     def __setattr__(self, name, value):
+        if name in {"status", "status_history"} and name in self.__dict__:
+            raise ProductionPolicyError("scene status requires a guarded transition")
         if name == "_plan_owner" and getattr(self, "_plan_owner", None) is not None:
             raise ProductionPolicyError("plan ownership cannot be changed directly")
         if name == "scene_id" and getattr(getattr(self, "_plan_owner", None), "plan_frozen", False):
             raise ProductionPolicyError("plan is frozen")
         owner = getattr(self, "_plan_owner", None)
+        if name == "scene_id" and owner is not None:
+            owner._require_lifecycle_mutable(self.scene_id)
         if name == "scene_id" and owner is not None and any(
             job.shot_id in owner.shots and owner.shots[job.shot_id].scene_id == self.scene_id
             for job in owner.jobs.values()
@@ -206,6 +215,10 @@ class Shot:
         ):
             raise ProductionPolicyError("plan is frozen")
         owner = getattr(self, "_plan_owner", None)
+        if name in {"shot_id", "scene_id", "has_dialogue_or_audio"} and owner is not None:
+            owner._require_lifecycle_mutable(self.scene_id)
+            if name == "scene_id":
+                owner._require_lifecycle_mutable(value)
         if name in {"shot_id", "scene_id", "has_dialogue_or_audio"} and owner is not None and any(
             job.shot_id == self.shot_id for job in owner.jobs.values()
         ):
@@ -218,6 +231,11 @@ class Shot:
         object.__delattr__(self, name)
 
     def bind_generated_asset(self, asset_version: str) -> None:
+        owner = getattr(self, "_plan_owner", None)
+        if owner is not None:
+            if asset_version == self.asset_version and self.canonical:
+                return
+            owner._require_lifecycle_mutable(self.scene_id, allow_blocked=True)
         if not asset_version:
             raise ProductionPolicyError("asset version must not be empty")
         if asset_version != self.asset_version:
@@ -611,6 +629,8 @@ class BibleStateDict(MutableMapping):
         if getattr(getattr(self._bible, "_ledger", None), "plan_frozen", False):
             raise ProductionPolicyError("plan is frozen")
         ledger = getattr(self._bible, "_ledger", None)
+        if ledger is not None:
+            ledger._require_lifecycle_mutable()
         if ledger is not None and ledger.jobs:
             raise ProductionPolicyError("movie-bible mutation conflicts with generation history")
         if ledger is not None and ledger.shot_continuity_bindings:
@@ -746,6 +766,7 @@ class ProductionLedger:
     project_id: str
     episode_id: str = ""
     episode_status: EpisodeStatus = EpisodeStatus.PLANNED
+    episode_status_history: Tuple[EpisodeStatus, ...] = ()
     plan_revision: int = 1
     plan_frozen: bool = False
     plan_revision_history: Tuple[str, ...] = ()
@@ -761,6 +782,8 @@ class ProductionLedger:
     provider_adapters: Dict[str, ProviderAdapterRegistration] = field(default_factory=dict)
 
     def __post_init__(self):
+        if self.episode_status is not EpisodeStatus.PLANNED or self.episode_status_history != ():
+            raise ProductionPolicyError("new episodes must start planned without lifecycle history")
         frozen = self.plan_frozen
         object.__setattr__(self, "plan_frozen", False)
         previous = getattr(self.bible, "_ledger", None)
@@ -772,6 +795,8 @@ class ProductionLedger:
         object.__setattr__(self, "plan_frozen", frozen)
 
     def __setattr__(self, name, value):
+        if name in {"episode_status", "episode_status_history"} and name in self.__dict__:
+            raise ProductionPolicyError("episode status requires a guarded transition")
         if name in {"plan_revision", "plan_frozen", "plan_revision_history"} and name in self.__dict__:
             raise ProductionPolicyError("plan revision and freeze state require explicit transitions")
         if name in {"scenes", "shots", "shot_plans", "shot_continuity_bindings"} and name in self.__dict__:
@@ -788,6 +813,133 @@ class ProductionLedger:
         if name in type(self).__dataclass_fields__:
             raise ProductionPolicyError("ledger fields cannot be deleted")
         object.__delattr__(self, name)
+
+    def _require_lifecycle_mutable(self, scene_id="", *, allow_blocked=False):
+        episode_allowed = {EpisodeStatus.PLANNED, EpisodeStatus.IN_PRODUCTION}
+        scene_allowed = {SceneStatus.PLANNED, SceneStatus.GENERATING}
+        if allow_blocked:
+            episode_allowed.add(EpisodeStatus.BLOCKED)
+            scene_allowed.add(SceneStatus.BLOCKED)
+        if self.episode_status not in episode_allowed or (scene_id in self.scenes and self.scenes[scene_id].status not in scene_allowed):
+            raise ProductionPolicyError("mutation conflicts with lifecycle state")
+
+    @staticmethod
+    def _validate_status_history(status, history, initial, edges):
+        if type(history) is not tuple or any(type(item) is not type(initial) for item in history):
+            raise ProductionPolicyError("invalid lifecycle history")
+        chain = history + (status,)
+        if chain[0] is not initial:
+            raise ProductionPolicyError("invalid lifecycle transition history")
+        for index, (previous, next_status) in enumerate(zip(chain, chain[1:])):
+            if previous.value == "BLOCKED":
+                if index == 0 or next_status is not chain[index - 1]:
+                    raise ProductionPolicyError("blocked lifecycle may resume only its preceding state")
+            elif next_status not in edges.get(previous, ()):
+                raise ProductionPolicyError("invalid lifecycle transition history")
+
+    @staticmethod
+    def _episode_edges():
+        return {
+            EpisodeStatus.PLANNED: (EpisodeStatus.IN_PRODUCTION, EpisodeStatus.BLOCKED),
+            EpisodeStatus.IN_PRODUCTION: (EpisodeStatus.ASSEMBLING, EpisodeStatus.BLOCKED),
+            EpisodeStatus.ASSEMBLING: (EpisodeStatus.FINAL_QC, EpisodeStatus.BLOCKED),
+            EpisodeStatus.FINAL_QC: (EpisodeStatus.BLOCKED,),
+        }
+
+    @staticmethod
+    def _scene_edges():
+        return {
+            SceneStatus.PLANNED: (SceneStatus.GENERATING, SceneStatus.BLOCKED),
+            SceneStatus.GENERATING: (SceneStatus.REVIEW, SceneStatus.BLOCKED),
+            SceneStatus.REVIEW: (SceneStatus.APPROVED, SceneStatus.BLOCKED),
+        }
+
+    def _require_episode_evidence(self, status):
+        if status in {EpisodeStatus.ARCHIVING, EpisodeStatus.COMPLETED}:
+            raise ProductionPolicyError("archive/completion unsupported until typed timeline and archive evidence exists")
+        if status in {EpisodeStatus.IN_PRODUCTION, EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC}:
+            if not self.scenes or not self.shots or any(not shot.scene_id or shot.scene_id not in self.scenes for shot in self.shots.values()):
+                raise ProductionPolicyError("episode lifecycle requires nonempty scene-bound shots")
+        if status in {EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC}:
+            if any(scene.status is not SceneStatus.APPROVED for scene in self.scenes.values()) or any(not shot.canonical or not all_required_gates_pass(shot) for shot in self.shots.values()):
+                raise ProductionPolicyError("episode assembly/QC requires approved scenes and canonical reviewed shots")
+
+    def _require_scene_evidence(self, scene_id, status):
+        shots = [shot for shot in self.shots.values() if shot.scene_id == scene_id]
+        if status in {SceneStatus.GENERATING, SceneStatus.REVIEW, SceneStatus.APPROVED} and self.episode_status is EpisodeStatus.PLANNED:
+            raise ProductionPolicyError("active scene lifecycle requires active episode")
+        if status in {SceneStatus.GENERATING, SceneStatus.REVIEW, SceneStatus.APPROVED} and not shots:
+            raise ProductionPolicyError("scene lifecycle requires nonempty shots")
+        if status is SceneStatus.GENERATING and self.episode_status not in {EpisodeStatus.IN_PRODUCTION, EpisodeStatus.BLOCKED}:
+            raise ProductionPolicyError("scene generation requires episode in production")
+        if status in {SceneStatus.REVIEW, SceneStatus.APPROVED}:
+            if any(not shot.asset_version for shot in shots) or any(job.shot_id in {shot.shot_id for shot in shots} and job.status in {JobStatus.QUEUED, JobStatus.AUTHORIZED, JobStatus.RUNNING, JobStatus.RETRYABLE} for job in self.jobs.values()):
+                raise ProductionPolicyError("scene review requires generated assets and no active jobs")
+        if status is SceneStatus.APPROVED and any(not shot.canonical or not all_required_gates_pass(shot) for shot in shots):
+            raise ProductionPolicyError("scene approval requires canonical reviewed shots")
+
+    def transition_episode(self, status: EpisodeStatus) -> None:
+        self.validate()
+        if type(status) is not EpisodeStatus:
+            raise ProductionPolicyError("invalid episode status")
+        self._require_episode_evidence(status)
+        if status is self.episode_status:
+            return
+        if status not in self._episode_edges().get(self.episode_status, ()):
+            raise ProductionPolicyError("illegal episode transition")
+        history = self.episode_status_history + (self.episode_status,)
+        object.__setattr__(self, "episode_status_history", history)
+        object.__setattr__(self, "episode_status", status)
+
+    def transition_scene(self, scene_id: str, status: SceneStatus) -> None:
+        self.validate()
+        if scene_id not in self.scenes or type(status) is not SceneStatus:
+            raise ProductionPolicyError("invalid scene transition")
+        scene = self.scenes[scene_id]
+        if status is SceneStatus.GENERATING and self.episode_status is not EpisodeStatus.IN_PRODUCTION:
+            raise ProductionPolicyError("scene generation requires episode in production")
+        self._require_scene_evidence(scene_id, status)
+        if status is scene.status:
+            return
+        if status not in self._scene_edges().get(scene.status, ()):
+            raise ProductionPolicyError("illegal scene transition")
+        history = scene.status_history + (scene.status,)
+        object.__setattr__(scene, "status_history", history)
+        object.__setattr__(scene, "status", status)
+
+    def resume_episode(self) -> None:
+        self.validate()
+        if self.episode_status is not EpisodeStatus.BLOCKED:
+            return  # Exact resume replay does not create another transition.
+        target = self.episode_status_history[-1]
+        self._require_episode_evidence(target)
+        if target is EpisodeStatus.PLANNED and any(scene.status in {SceneStatus.GENERATING, SceneStatus.REVIEW, SceneStatus.APPROVED} for scene in self.scenes.values()):
+            raise ProductionPolicyError("planned episode cannot resume with active scenes")
+        history = self.episode_status_history + (EpisodeStatus.BLOCKED,)
+        object.__setattr__(self, "episode_status_history", history)
+        object.__setattr__(self, "episode_status", target)
+
+    def resume_scene(self, scene_id: str) -> None:
+        self.validate()
+        if scene_id not in self.scenes:
+            raise ProductionPolicyError("unknown scene")
+        scene = self.scenes[scene_id]
+        if scene.status is not SceneStatus.BLOCKED:
+            return
+        target = scene.status_history[-1]
+        if target is SceneStatus.GENERATING and self.episode_status is not EpisodeStatus.IN_PRODUCTION:
+            raise ProductionPolicyError("scene generation resume requires episode in production")
+        self._require_scene_evidence(scene_id, target)
+        history = scene.status_history + (SceneStatus.BLOCKED,)
+        object.__setattr__(scene, "status_history", history)
+        object.__setattr__(scene, "status", target)
+
+    def _validate_lifecycle(self):
+        self._require_episode_evidence(self.episode_status)
+        self._validate_status_history(self.episode_status, self.episode_status_history, EpisodeStatus.PLANNED, self._episode_edges())
+        for scene_id, scene in self.scenes.items():
+            self._validate_status_history(scene.status, scene.status_history, SceneStatus.PLANNED, self._scene_edges())
+            self._require_scene_evidence(scene_id, scene.status)
 
     def register_provider_adapter(self, adapter: ProviderAdapterRegistration) -> None:
         if type(adapter) is not ProviderAdapterRegistration:
@@ -828,6 +980,7 @@ class ProductionLedger:
         object.__setattr__(self, "plan_frozen", True)
 
     def create_new_plan_revision(self) -> None:
+        self._require_lifecycle_mutable()
         if not self.plan_frozen:
             raise ProductionPolicyError("freeze the current plan before creating a new revision")
         self.validate()
@@ -865,6 +1018,7 @@ class ProductionLedger:
             )
 
     def add_scene(self, scene: Scene) -> None:
+        self._require_lifecycle_mutable()
         if self.plan_frozen:
             raise ProductionPolicyError("plan is frozen")
         if not scene.scene_id or scene.scene_id in self.scenes:
@@ -872,6 +1026,7 @@ class ProductionLedger:
         self.scenes._put(scene.scene_id, scene)
 
     def add_shot(self, shot: Shot) -> None:
+        self._require_lifecycle_mutable(shot.scene_id)
         if self.plan_frozen:
             raise ProductionPolicyError("plan is frozen")
         if not shot.shot_id or shot.shot_id in self.shots:
@@ -881,6 +1036,7 @@ class ProductionLedger:
         self.shots._put(shot.shot_id, shot)
 
     def add_shot_plan(self, plan: ShotPlan) -> None:
+        self._require_lifecycle_mutable(getattr(plan, "scene_id", ""))
         if self.plan_frozen:
             raise ProductionPolicyError("plan is frozen")
         if type(plan) is not ShotPlan:
@@ -921,6 +1077,7 @@ class ProductionLedger:
         self.shot_plans._put(plan.shot_id, plan)
 
     def add_shot_continuity_binding(self, binding: ShotContinuityBinding) -> None:
+        self._require_lifecycle_mutable(self.shots[binding.shot_id].scene_id if getattr(binding, "shot_id", None) in self.shots else "")
         if self.plan_frozen:
             raise ProductionPolicyError("plan is frozen")
         if type(binding) is not ShotContinuityBinding:
@@ -1015,6 +1172,8 @@ class ProductionLedger:
             ):
                 raise ProductionPolicyError("idempotency key reused with different input")
             return existing
+        if self.episode_status not in {EpisodeStatus.PLANNED, EpisodeStatus.IN_PRODUCTION} or (self.shots[shot_id].scene_id in self.scenes and self.scenes[self.shots[shot_id].scene_id].status not in {SceneStatus.PLANNED, SceneStatus.GENERATING}):
+            raise ProductionPolicyError("generation submission conflicts with lifecycle state")
         if job_id in self.jobs:
             raise ProductionPolicyError("job id already exists")
         if type(max_attempts) is not int or max_attempts < 1:
@@ -1087,6 +1246,7 @@ class ProductionLedger:
             return auth
         if job.status not in {JobStatus.QUEUED, JobStatus.RETRYABLE}:
             raise ProductionPolicyError("generation job cannot authorize from current status")
+        self._require_lifecycle_mutable(shot.scene_id)
         attempt_number = len(job.attempt_history) + 1
         claims_new_epoch = job.generation_epoch is None
         if claims_new_epoch:
@@ -1186,6 +1346,7 @@ class ProductionLedger:
                 return
             raise ProductionPolicyError("conflicting duplicate success callback")
         self._validate_generation_owner(job)
+        self._require_lifecycle_mutable(self.shots[job.shot_id].scene_id, allow_blocked=True)
         job._succeed(attempt_number, provider_job_id, asset_version)
         self.shots[job.shot_id].bind_generated_asset(asset_version)
 
@@ -1375,6 +1536,7 @@ class ProductionLedger:
             "project_id": raw["project_id"],
             "episode_id": raw["episode_id"],
             "episode_status": raw["episode_status"],
+            "episode_status_history": raw["episode_status_history"],
             "plan_revision": raw["plan_revision"],
             "plan_frozen": raw["plan_frozen"],
             "plan_revision_history": raw["plan_revision_history"],
@@ -1426,6 +1588,10 @@ class ProductionLedger:
             raise ProductionPolicyError("missing plan revision history")
         data.setdefault("episode_id", "")
         data.setdefault("episode_status", EpisodeStatus.PLANNED.value)
+        if "episode_status_history" not in data:
+            if data["episode_status"] != EpisodeStatus.PLANNED.value:
+                raise ProductionPolicyError("advanced episode checkpoint requires lifecycle history")
+            data["episode_status_history"] = []
         data.setdefault("plan_revision", 1)
         data.setdefault("plan_frozen", False)
         data.setdefault("plan_revision_history", [])
@@ -1438,6 +1604,7 @@ class ProductionLedger:
             "project_id",
             "episode_id",
             "episode_status",
+            "episode_status_history",
             "plan_revision",
             "plan_frozen",
             "plan_revision_history",
@@ -1557,23 +1724,37 @@ class ProductionLedger:
         ledger = cls(
             project_id=data["project_id"],
             episode_id=data["episode_id"],
-            episode_status=episode_status,
             plan_revision=data["plan_revision"],
             plan_frozen=False,
             plan_revision_history=tuple(data["plan_revision_history"]),
             bible=MovieBible(**bible_raw),
         )
         for scene_id, raw in data.get("scenes", {}).items():
+            if not isinstance(raw, Mapping):
+                raise ProductionPolicyError("scene must be a mapping")
             raw = dict(raw)
             raw.setdefault("status", SceneStatus.PLANNED.value)
-            scene_fields = {"scene_id", "status"}
+            if "status_history" not in raw:
+                if raw["status"] != SceneStatus.PLANNED.value:
+                    raise ProductionPolicyError("advanced scene checkpoint requires lifecycle history")
+                raw["status_history"] = []
+            scene_fields = {"scene_id", "status", "status_history"}
             if not isinstance(raw, Mapping) or set(raw) != scene_fields:
                 raise ProductionPolicyError("scene fields mismatch")
             try:
                 scene_status = SceneStatus(raw["status"])
             except ValueError as exc:
                 raise ProductionPolicyError("invalid scene status") from exc
-            ledger.scenes._put(scene_id, Scene(scene_id=raw["scene_id"], status=scene_status))
+            if type(raw["status_history"]) is not list:
+                raise ProductionPolicyError("invalid scene lifecycle history")
+            try:
+                scene_history = tuple(SceneStatus(item) for item in raw["status_history"])
+            except (TypeError, ValueError) as exc:
+                raise ProductionPolicyError("invalid scene lifecycle history") from exc
+            scene = Scene(scene_id=raw["scene_id"])
+            object.__setattr__(scene, "status", scene_status)
+            object.__setattr__(scene, "status_history", scene_history)
+            ledger.scenes._put(scene_id, scene)
         for shot_id, raw in data.get("shot_continuity_bindings", {}).items():
             raw = dict(raw)
             binding_fields = {
@@ -1761,6 +1942,14 @@ class ProductionLedger:
             except (KeyError, ValueError, TypeError) as exc:
                 raise ProductionPolicyError("malformed provider adapter registration") from exc
 
+        if type(data["episode_status_history"]) is not list:
+            raise ProductionPolicyError("invalid episode lifecycle history")
+        try:
+            episode_history = tuple(EpisodeStatus(item) for item in data["episode_status_history"])
+        except (TypeError, ValueError) as exc:
+            raise ProductionPolicyError("invalid episode lifecycle history") from exc
+        object.__setattr__(ledger, "episode_status_history", episode_history)
+        object.__setattr__(ledger, "episode_status", episode_status)
         object.__setattr__(ledger, "plan_frozen", data["plan_frozen"])
         ledger.validate()
         return ledger
@@ -1804,6 +1993,8 @@ class ProductionLedger:
                 raise ProductionPolicyError("shot references unknown scene")
             if type(shot.status) is not ShotStatus:
                 raise ProductionPolicyError("invalid shot status")
+
+        self._validate_lifecycle()
 
         for binding_key, binding in self.shot_continuity_bindings.items():
             if type(binding) is not ShotContinuityBinding:
@@ -2425,5 +2616,5 @@ def episode_can_complete(
     final_qc_passed: bool,
     drive_master_verified: bool,
 ) -> bool:
-    values = (all_shots_canonical, final_qc_passed, drive_master_verified)
-    return all(type(value) is bool and value for value in values)
+    """Deprecated advisory API: booleans cannot certify typed completion evidence."""
+    return False
