@@ -13,10 +13,10 @@
   "jules_fallback_enabled": false,
   "jules_existing_session_resume_enabled": false,
   "jules_session_preserved": "12184075764881634418",
-  "codex_sol_session_state": "NOT_LAUNCHED_FROM_THIS_CONNECTOR",
+  "codex_sol_session_state": "ACTIVE_WORK_MODE",
   "sol_handoff_issue_url": "https://github.com/pddkalyan/project-agent-orchestrator/issues/35",
   "usage_source": "ChatGPT/Codex Settings > Usage",
-  "usage_access": "UNAVAILABLE_IN_GITHUB_CONNECTOR",
+  "usage_access": "UNAVAILABLE — USER SETTINGS REQUIRED",
   "five_hour_allowance_remaining": null,
   "weekly_allowance_remaining": null,
   "next_five_hour_reset": null,
@@ -28,5 +28,14 @@
   "phase3_requires_astra_approval": true,
   "no_auto_merge": true,
   "no_duplicate_sessions": true,
-  "warning": "Do not infer ChatGPT usage from GitHub Actions minutes. Only enable Jules fallback if the Sol access/allowance issue is explicitly verified and one-worker safety confirmed."
+  "warning": "Do not infer ChatGPT usage from GitHub Actions minutes. Only enable Jules fallback if the Sol access/allowance issue is explicitly verified and one-worker safety confirmed.",
+  "active_worker": {
+    "model": "gpt-6-sol",
+    "effort": "high",
+    "surface": "ChatGPT Work delegated coding agent",
+    "base_sha": "3a97d0a7e5e4965e6a432373ffd15a6a12085a7b",
+    "scope": "Recover final Jules patch and repair controlled frozen-plan revisions",
+    "published_codex_cloud_environment": "UNAVAILABLE_UNAUTHENTICATED_BROWSER"
+  },
+  "last_verified_at_utc": "2026-10-09T06:07:55.334Z"
 }
