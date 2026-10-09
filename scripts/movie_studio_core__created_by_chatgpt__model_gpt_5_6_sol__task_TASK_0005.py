@@ -459,6 +459,45 @@ class MovieBible:
         self.revision += 1
 
 
+class PlanStateDict(dict):
+    def __init__(self, *args, ledger=None, **kwargs):
+        self._ledger = ledger
+        super().__init__(*args, **kwargs)
+
+    def _check_frozen(self):
+        if self._ledger and getattr(self._ledger, "plan_frozen", False):
+            raise ProductionPolicyError("plan is frozen")
+
+    def __setitem__(self, key, value):
+        self._check_frozen()
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key):
+        self._check_frozen()
+        super().__delitem__(key)
+
+    def update(self, *args, **kwargs):
+        self._check_frozen()
+        super().update(*args, **kwargs)
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self._check_frozen()
+        return super().setdefault(key, default)
+
+    def pop(self, key, default=None):
+        if key in self:
+            self._check_frozen()
+        return super().pop(key, default)
+
+    def popitem(self):
+        self._check_frozen()
+        return super().popitem()
+
+    def clear(self):
+        self._check_frozen()
+        super().clear()
+
 @dataclass
 class ProductionLedger:
     project_id: str
@@ -476,6 +515,12 @@ class ProductionLedger:
     authorization_index: Dict[str, str] = field(default_factory=dict)
     provider_request_index: Dict[str, str] = field(default_factory=dict)
     provider_adapters: Dict[str, ProviderAdapterRegistration] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.scenes = PlanStateDict(self.scenes, ledger=self)
+        self.shots = PlanStateDict(self.shots, ledger=self)
+        self.shot_plans = PlanStateDict(self.shot_plans, ledger=self)
+        self.shot_continuity_bindings = PlanStateDict(self.shot_continuity_bindings, ledger=self)
 
     def register_provider_adapter(self, adapter: ProviderAdapterRegistration) -> None:
         if type(adapter) is not ProviderAdapterRegistration:
@@ -565,9 +610,14 @@ class ProductionLedger:
 
         if plan.shot_id in self.shot_plans:
             existing = self.shot_plans[plan.shot_id]
-            if existing != plan:
+            if existing == plan:
+                return
+            if shot.status != ShotStatus.PLANNED or any(
+                j.shot_id == plan.shot_id and j.status in {
+                    JobStatus.QUEUED, JobStatus.AUTHORIZED, JobStatus.RUNNING, JobStatus.RETRYABLE, JobStatus.SUCCEEDED
+                } for j in self.jobs.values()
+            ):
                 raise ProductionPolicyError("conflicting shot plan replacement is not allowed")
-            return
 
         self.shot_plans[plan.shot_id] = plan
 
@@ -629,9 +679,15 @@ class ProductionLedger:
                 raise ProductionPolicyError("reference_asset_versions must contain non-empty strings")
 
         if binding.shot_id in self.shot_continuity_bindings:
-            if self.shot_continuity_bindings[binding.shot_id] != binding:
+            if self.shot_continuity_bindings[binding.shot_id] == binding:
+                return
+            shot = self.shots[binding.shot_id]
+            if shot.status != ShotStatus.PLANNED or any(
+                j.shot_id == binding.shot_id and j.status in {
+                    JobStatus.QUEUED, JobStatus.AUTHORIZED, JobStatus.RUNNING, JobStatus.RETRYABLE, JobStatus.SUCCEEDED
+                } for j in self.jobs.values()
+            ):
                 raise ProductionPolicyError("conflicting continuity binding replacement is not allowed")
-            return
 
         self.shot_continuity_bindings[binding.shot_id] = binding
 
@@ -966,6 +1022,8 @@ class ProductionLedger:
         def to_json_types(value):
             if isinstance(value, Enum):
                 return value.value
+            if getattr(value, "__dataclass_fields__", None) is not None:
+                return {f: to_json_types(getattr(value, f)) for f in value.__dataclass_fields__}
             if isinstance(value, dict):
                 return {to_json_types(k): to_json_types(v) for k, v in value.items()}
             if isinstance(value, frozenset):
@@ -974,7 +1032,7 @@ class ProductionLedger:
                 return [to_json_types(v) for v in value]
             return value
 
-        raw = to_json_types(asdict(self))
+        raw = to_json_types(self)
         return {
             "schema_version": SCHEMA_VERSION,
             "project_id": raw["project_id"],
@@ -1120,7 +1178,7 @@ class ProductionLedger:
             episode_id=data["episode_id"],
             episode_status=episode_status,
             plan_revision=data["plan_revision"],
-            plan_frozen=data["plan_frozen"],
+            plan_frozen=False,
             bible=MovieBible(**bible_raw),
         )
         for scene_id, raw in data.get("scenes", {}).items():
@@ -1318,6 +1376,7 @@ class ProductionLedger:
             except (KeyError, ValueError, TypeError) as exc:
                 raise ProductionPolicyError("malformed provider adapter registration") from exc
 
+        ledger.plan_frozen = data["plan_frozen"]
         ledger.validate()
         return ledger
 
