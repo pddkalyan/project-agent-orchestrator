@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "reviewed_through_pr": 33,
+  "reviewed_through_pr": 34,
   "feature_branch": "feature/TASK-0005-movie-studio-core",
   "candidate_dispositions": {
     "28": "PROMOTED_PLANNING_FREEZE_INCREMENT; REMAINING_REVISION_GAPS",
@@ -9,9 +9,10 @@
     "30": "DEFERRED; CI_BOUNDARY_FAILURE; WHITESPACE_HARDENING_NOT_PROMOTED",
     "31": "PROMOTED_IDEMPOTENT_RECEIPT_REPLAY_CORE_AND_TESTS",
     "32": "REJECTED_NO_SAFE_CHANGE_NO_IMPLEMENTATION",
-    "33": "REJECTED_FOR_PROMOTION; CHANGES_EXISTING_IDEMPOTENCY_KEY_REPLAY_SEMANTICS"
+    "33": "REJECTED_FOR_PROMOTION; CHANGES_EXISTING_IDEMPOTENCY_KEY_REPLAY_SEMANTICS",
+    "34": "REJECTED_AND_CLOSED_NO_FILES_CI_FAILED; unverified NO_SAFE_CHANGE claim; Phase2 D still incomplete"
   },
-  "verified_feature_commit": "37f965a266e70b399d83bfb2ffea8b64c2cc4da3",
+  "verified_feature_commit": "455be80f115bff34d18c2727bd53467569533ab7",
   "next_phase_2_priority": "Finish controlled planning-freeze/versioned replacement after existing Jules orchestration session and candidate review",
   "policy": "Only PRs above reviewed_through_pr require a new candidate review before a fresh Jules session. Never merge candidates automatically."
 }
