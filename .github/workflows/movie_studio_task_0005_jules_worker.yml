@@ -1,13 +1,8 @@
 name: Movie Studio Jules Worker
 
+# Legacy candidate-branch worker retired: only the trusted launcher on main
+# may create Jules sessions. Do not start workers from pull_request events.
 on:
-  pull_request:
-    branches:
-      - main
-    types:
-      - synchronize
-    paths:
-      - "tasks/dispatch/task_0005_free_worker_trigger.json"
   workflow_dispatch:
 
 permissions:
@@ -20,7 +15,7 @@ concurrency:
 jobs:
   jules_worker:
     name: "PRIMARY WORKER · Jules"
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.ref == 'feature/TASK-0005-movie-studio-core' }}
+    if: false  # Deprecated: use trusted default-branch launcher; prevents duplicate Jules.
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
