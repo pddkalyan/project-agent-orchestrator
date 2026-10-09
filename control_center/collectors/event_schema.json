@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ControlCenterCollectorContract",
+  "description": "JSON contract schema for Movie Studio Control Center GitHub public activity collector.",
+  "type": "object",
+  "properties": {
+    "collector": {
+      "type": "string",
+      "enum": ["GitHubPublicActivityCollector"]
+    },
+    "repo": {
+      "type": "string"
+    },
+    "collected_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["success", "partial_success", "failed", "rate_limited"]
+    },
+    "rate_limit": {
+      "type": "object",
+      "properties": {
+        "limit": { "type": ["integer", "null"] },
+        "remaining": { "type": ["integer", "null"] },
+        "reset": { "type": ["integer", "null"] }
+      },
+      "required": ["limit", "remaining", "reset"]
+    },
+    "events_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "event_id": { "type": "string" },
+          "event_type": {
+            "type": "string",
+            "enum": ["action_run", "action_job", "pull_request", "commit", "task_state"]
+          },
+          "timestamp": { "type": ["string", "null"] },
+          "source": { "type": "string" },
+          "title": { "type": "string" },
+          "status": { "type": "string" },
+          "url": { "type": ["string", "null"] },
+          "author": { "type": ["string", "null"] },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "model": { "type": ["string", "null"] },
+              "quota": { "type": ["string", "null"] },
+              "think": { "type": ["string", "null"] },
+              "activity": { "type": ["string", "null"] }
+            },
+            "required": ["model", "quota", "think", "activity"]
+          }
+        },
+        "required": [
+          "event_id",
+          "event_type",
+          "timestamp",
+          "source",
+          "title",
+          "status",
+          "url",
+          "author",
+          "metadata"
+        ]
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "required": [
+    "collector",
+    "repo",
+    "collected_at",
+    "status",
+    "rate_limit",
+    "events_count",
+    "events",
+    "errors"
+  ]
+}
