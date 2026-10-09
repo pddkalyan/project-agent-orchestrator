@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0005",
+  "last_reviewed_candidate_pr": 33,
+  "reviewed_by": "ChatGPT supervisor (GPT-6); not Astra phase approval",
+  "review_basis": "PR diffs, changed-file allowlists and exact candidate CI evidence. All candidate PRs left unmerged.",
+  "triage": [
+    {
+      "pr": 29,
+      "head_sha": "1d47954cd61025e6d63dc38fcb692e916a2e431e",
+      "result": "PROMOTED",
+      "reason": "Only checkpoint corruption regression tests; CI passed; promoted earlier."
+    },
+    {
+      "pr": 30,
+      "head_sha": "3d8826b775425186091e7d03ba6e1aed031fe3e3",
+      "result": "DEFERRED_CORRECTION",
+      "reason": "Whitespace guard worthwhile but Shot.bind_generated_asset calls .strip on unvalidated truthy nonstrings, causing AttributeError rather than ProductionPolicyError. CI path diff also previously included unrelated moving-base monitor file. Do not promote unchanged."
+    },
+    {
+      "pr": 31,
+      "head_sha": "15f76df5a5f9b3cf5a498650436247afcfa060c3",
+      "result": "PROMOTED",
+      "reason": "Exact receipt replay after terminal generation status; candidate CI passed all steps; core and tests promoted."
+    },
+    {
+      "pr": 32,
+      "head_sha": "6c4d0376de20787b9a626fd9322de66a24148ca0",
+      "result": "REJECTED_NO_SAFE_CHANGE",
+      "reason": "No changed files and CI failed; no implementation to promote."
+    },
+    {
+      "pr": 33,
+      "head_sha": "6d87c95d31c874192fdaa4586e116009ed52f738",
+      "result": "REJECTED_CONTRACT_REGRESSION",
+      "reason": "Changes idempotent resubmission to require same job_id, replacing existing test that explicitly retries with a different job ID. Breaks previous idempotency contract; no promotion."
+    }
+  ],
+  "policy": "Gate future new candidate PRs (>last_reviewed_candidate_pr) for review, but do not block indefinitely on triaged historical PRs. Always resume existing Jules session before creating new. No merges, no secrets, no paid spend."
+}
