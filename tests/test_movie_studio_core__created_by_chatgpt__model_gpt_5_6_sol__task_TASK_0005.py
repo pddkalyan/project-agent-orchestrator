@@ -29,6 +29,7 @@ from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK
     canonicalize,
     choose_zero_cost_provider,
     episode_can_complete,
+    required_gates,
 )
 
 
@@ -135,6 +136,181 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertFalse(ledger.plan_frozen)
         self.assertEqual(ledger.plan_revision, 2)
 
+    def test_revision_replaces_validated_plan_and_binding_and_roundtrips(self):
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "A"}
+        ledger.bible.characters["B"] = {"name": "B"}
+        ledger.add_scene(Scene("SC"))
+        ledger.add_shot(Shot("S1", scene_id="SC"))
+        ledger.add_shot(Shot("S2", scene_id="SC"))
+        old = ShotPlan("S1", "SC", 0, 1000, "prompt-a", False)
+        other = ShotPlan("S2", "SC", 1, 2000, "prompt-b", False)
+        ledger.add_shot_plan(old)
+        ledger.add_shot_plan(other)
+        initial = ShotContinuityBinding("S1", 1, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset({"asset:1"}))
+        ledger.add_shot_continuity_binding(initial)
+        ledger.freeze_plan()
+        ledger.create_new_plan_revision()
+        self.assertEqual(len(ledger.plan_revision_history), 1)
+        revised = ShotPlan("S1", "SC", 0, 3000, "prompt-c", False)
+        replacement = ShotContinuityBinding("S1", 1, frozenset({"A", "B"}), frozenset(), "", frozenset(), frozenset(), frozenset({"asset:2"}))
+        ledger.add_shot_plan(revised)
+        ledger.add_shot_plan(revised)  # Exact replay has no further effect.
+        ledger.add_shot_continuity_binding(replacement)
+        ledger.add_shot_continuity_binding(replacement)
+        ledger.shot_plans["S1"] = revised  # Public map follows the same validation.
+        ledger.shot_continuity_bindings["S1"] = replacement
+        self.assertNotEqual(plan_digest(old), plan_digest(revised))
+        self.assertNotEqual(continuity_binding_digest(initial), continuity_binding_digest(replacement))
+        self.assertEqual(ledger.shot_plans["S2"], other)
+        ledger.freeze_plan()
+        restored = ProductionLedger.from_dict(copy.deepcopy(ledger.to_dict()))
+        self.assertEqual(restored.to_dict(), ledger.to_dict())
+        self.assertEqual((restored.plan_revision, restored.plan_frozen), (2, True))
+
+    def test_plan_replacement_requires_revision_and_untouched_generation(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC"))
+        ledger.add_shot(Shot("S1", scene_id="SC"))
+        ledger.add_shot(Shot("S2", scene_id="SC"))
+        first = ShotPlan("S1", "SC", 0, 1000, "p1", False)
+        ledger.add_shot_plan(first)
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement"):
+            ledger.add_shot_plan(ShotPlan("S1", "SC", 0, 2000, "p2", False))
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement"):
+            ledger.shot_plans["S1"] = ShotPlan("S1", "SC", 0, 2000, "p2", False)
+        with self.assertRaisesRegex(ProductionPolicyError, "freeze the current plan"):
+            ledger.create_new_plan_revision()
+        ledger.freeze_plan()
+        ledger.create_new_plan_revision()
+        with self.assertRaisesRegex(ProductionPolicyError, "duplicate sequence_index"):
+            ledger.add_shot_plan(ShotPlan("S2", "SC", 0, 1000, "p", False))
+        with self.assertRaisesRegex(ProductionPolicyError, "planned_duration_ms"):
+            ledger.add_shot_plan(ShotPlan("S1", "SC", 0, -1, "p2", False))
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="p1")
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement"):
+            ledger.add_shot_plan(ShotPlan("S1", "SC", 0, 2000, "p2", False))
+        binding = ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset())
+        ledger.add_shot_continuity_binding(binding)
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement"):
+            ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset({"new-reference"})))
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement"):
+            ledger.shot_continuity_bindings["S1"] = ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset({"new-reference"}))
+        self.assertEqual(ledger.shot_plans["S1"], first)
+        ledger.freeze_plan()
+        ledger.create_new_plan_revision()
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement"):
+            ledger.add_shot_plan(ShotPlan("S1", "SC", 0, 2000, "p2", False))
+
+    def test_frozen_plan_guards_public_mutation_routes(self):
+        ledger = ProductionLedger("movie")
+        scene = Scene("SC")
+        shot = Shot("S1", scene_id="SC")
+        ledger.add_scene(scene)
+        ledger.add_shot(shot)
+        ledger.freeze_plan()
+        mutations = (
+            lambda: ledger.scenes.update({"X": Scene("X")}),
+            lambda: ledger.scenes.setdefault("X", Scene("X")),
+            lambda: ledger.shots.pop("S1"),
+            lambda: ledger.shots.popitem(),
+            lambda: ledger.shot_plans.clear(),
+            lambda: ledger.shot_continuity_bindings.__ior__({"S1": None}),
+            lambda: setattr(ledger, "scenes", {}),
+            lambda: setattr(ledger, "plan_revision", 3),
+            lambda: setattr(ledger, "plan_frozen", False),
+            lambda: setattr(ledger, "plan_revision_history", ("0" * 64,)),
+            lambda: setattr(scene, "scene_id", "OTHER"),
+            lambda: setattr(shot, "scene_id", "OTHER"),
+            lambda: setattr(shot, "has_dialogue_or_audio", True),
+        )
+        before = ledger.to_dict()
+        for mutate in mutations:
+            with self.subTest(mutate=mutate), self.assertRaises(ProductionPolicyError):
+                mutate()
+            self.assertEqual(ledger.to_dict(), before)
+
+    def test_deletion_cannot_downgrade_frozen_plan_or_audio_gate(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC"))
+        ledger.add_shot(Shot("S1", scene_id="SC", has_dialogue_or_audio=True))
+        ledger.freeze_plan()
+        for current in (ledger, ProductionLedger.from_dict(copy.deepcopy(ledger.to_dict()))):
+            scene, shot = current.scenes["SC"], current.shots["S1"]
+            before = current.to_dict()
+            self.assertIn(Gate.AUDIO_QA, required_gates(shot))
+            deletions = (
+                (current, "plan_frozen"),
+                (current, "plan_revision"),
+                (current, "plan_revision_history"),
+                (current, "scenes"),
+                (current, "shots"),
+                (current, "shot_plans"),
+                (current, "shot_continuity_bindings"),
+                (current, "bible"),
+                (scene, "scene_id"),
+                (scene, "_plan_owner"),
+                (shot, "shot_id"),
+                (shot, "scene_id"),
+                (shot, "has_dialogue_or_audio"),
+                (shot, "_plan_owner"),
+            )
+            for target, name in deletions:
+                with self.subTest(restored=current is not ledger, field=name), self.assertRaises(ProductionPolicyError):
+                    delattr(target, name)
+                self.assertEqual(current.to_dict(), before)
+                current.validate()
+                self.assertTrue(current.plan_frozen)
+                self.assertIn(Gate.AUDIO_QA, required_gates(shot))
+            with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
+                current.add_shot_plan(ShotPlan("S1", "SC", 0, 1000, "p", True))
+
+    def test_revision_checkpoint_missing_metadata_fails_closed(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC"))
+        ledger.add_shot(Shot("S1", scene_id="SC"))
+        ledger.add_shot_plan(ShotPlan("S1", "SC", 0, 1000, "p", False))
+        ledger.freeze_plan()
+        ledger.create_new_plan_revision()
+        ledger.add_shot_plan(ShotPlan("S1", "SC", 0, 2000, "p2", False))
+        ledger.freeze_plan()
+        for field_name in ("plan_revision", "plan_frozen", "shot_plans"):
+            corrupt = copy.deepcopy(ledger.to_dict())
+            del corrupt[field_name]
+            with self.subTest(field=field_name), self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(corrupt)
+        for field_name, value in (("plan_revision", 1), ("plan_revision_history", []), ("plan_revision_history", ["bad-digest"]), ("plan_revision_history", None)):
+            corrupt = copy.deepcopy(ledger.to_dict())
+            corrupt[field_name] = value
+            with self.subTest(field=field_name, value=value), self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(corrupt)
+        corrupt = ledger.to_dict()
+        del corrupt["plan_revision_history"]
+        with self.assertRaisesRegex(ProductionPolicyError, "missing plan revision history"):
+            ProductionLedger.from_dict(corrupt)
+        corrupt = ledger.to_dict()
+        corrupt["plan_revision"] = 0
+        with self.assertRaisesRegex(ProductionPolicyError, "invalid plan_revision"):
+            ProductionLedger.from_dict(corrupt)
+
+    def test_frozen_scene_only_checkpoint_cannot_default_away_freeze(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC"))
+        ledger.freeze_plan()
+        for missing in ("plan_revision", "plan_frozen"):
+            corrupt = copy.deepcopy(ledger.to_dict())
+            del corrupt[missing]
+            with self.subTest(field=missing), self.assertRaisesRegex(ProductionPolicyError, "missing plan revision or freeze state"):
+                ProductionLedger.from_dict(corrupt)
+        corrupt = copy.deepcopy(ledger.to_dict())
+        del corrupt["scenes"]
+        with self.assertRaisesRegex(ProductionPolicyError, "missing revised planning data"):
+            ProductionLedger.from_dict(corrupt)
+        restored = ProductionLedger.from_dict(copy.deepcopy(ledger.to_dict()))
+        self.assertTrue(restored.plan_frozen)
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
+            restored.add_scene(Scene("SC2"))
+
     def test_frozen_plan_checkpoint_roundtrip(self):
         ledger = ProductionLedger("movie")
         ledger.freeze_plan()
@@ -177,7 +353,8 @@ class MovieStudioCoreTests(unittest.TestCase):
 
         # Corrupted scene map key
         corrupt_key = copy.deepcopy(ledger)
-        corrupt_key.scenes["bad_key"] = corrupt_key.scenes.pop("SC1")
+        # Simulate an internally corrupted map despite the public mutation guard.
+        corrupt_key.scenes._data["bad_key"] = corrupt_key.scenes._data.pop("SC1")
         with self.assertRaises(ProductionPolicyError):
             corrupt_key.validate()
 

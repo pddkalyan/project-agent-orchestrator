@@ -5,7 +5,8 @@ Model: GPT-5.6 Sol
 Run: 20261007_TASK_0005_PROVIDER_AUTHORIZATION
 No provider/network calls belong in this module.
 """
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
+from collections.abc import MutableMapping
 from enum import Enum
 from hashlib import sha256
 import json
@@ -110,6 +111,18 @@ class Scene:
     scene_id: str
     status: SceneStatus = SceneStatus.PLANNED
 
+    def __setattr__(self, name, value):
+        if name == "_plan_owner" and getattr(self, "_plan_owner", None) is not None:
+            raise ProductionPolicyError("plan ownership cannot be changed directly")
+        if name == "scene_id" and getattr(getattr(self, "_plan_owner", None), "plan_frozen", False):
+            raise ProductionPolicyError("plan is frozen")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name):
+        if name in type(self).__dataclass_fields__ or name == "_plan_owner":
+            raise ProductionPolicyError("scene fields cannot be deleted")
+        object.__delattr__(self, name)
+
 
 @dataclass(frozen=True)
 class ShotPlan:
@@ -172,6 +185,20 @@ class Shot:
     generation_epoch: int = 0
     generation_owner_job_id: Optional[str] = None
     scene_id: str = ""
+
+    def __setattr__(self, name, value):
+        if name == "_plan_owner" and getattr(self, "_plan_owner", None) is not None:
+            raise ProductionPolicyError("plan ownership cannot be changed directly")
+        if name in {"shot_id", "scene_id", "has_dialogue_or_audio"} and getattr(
+            getattr(self, "_plan_owner", None), "plan_frozen", False
+        ):
+            raise ProductionPolicyError("plan is frozen")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name):
+        if name in type(self).__dataclass_fields__ or name == "_plan_owner":
+            raise ProductionPolicyError("shot fields cannot be deleted")
+        object.__delattr__(self, name)
 
     def bind_generated_asset(self, asset_version: str) -> None:
         if not asset_version:
@@ -459,6 +486,82 @@ class MovieBible:
         self.revision += 1
 
 
+class PlanStateDict(MutableMapping):
+    """Guard the public planning maps; runtime state inside shots remains mutable."""
+
+    def __init__(self, owner, name, values=()):
+        self._owner = owner
+        self._name = name
+        self._data = {}
+        for key, value in dict(values).items():
+            self._put(key, value)
+
+    def _check(self):
+        if self._owner.plan_frozen:
+            raise ProductionPolicyError("plan is frozen")
+
+    def __setitem__(self, key, value):
+        self._check()
+        id_field = "scene_id" if self._name == "scenes" else "shot_id"
+        if key != getattr(value, id_field, None):
+            raise ProductionPolicyError("planning map key/id mismatch")
+        method = {
+            "scenes": self._owner.add_scene,
+            "shots": self._owner.add_shot,
+            "shot_plans": self._owner.add_shot_plan,
+            "shot_continuity_bindings": self._owner.add_shot_continuity_binding,
+        }[self._name]
+        method(value)
+
+    def _put(self, key, value):
+        """Write after a ledger method has validated it, or during checkpoint restore."""
+        if isinstance(value, (Scene, Shot)):
+            previous = getattr(value, "_plan_owner", None)
+            if previous is not None and previous is not self._owner:
+                raise ProductionPolicyError("plan item belongs to another ledger")
+            object.__setattr__(value, "_plan_owner", self._owner)
+        self._data[key] = value
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
+
+    def __delitem__(self, key):
+        self._check()
+        raise ProductionPolicyError("planning item removal requires an explicit revision operation")
+
+    def update(self, *args, **kwargs):
+        self._check()
+        for key, value in dict(*args, **kwargs).items():
+            self[key] = value
+
+    def pop(self, key, *args):
+        self._check()
+        return super().pop(key, *args)
+
+    def popitem(self):
+        self._check()
+        return super().popitem()
+
+    def clear(self):
+        self._check()
+        return super().clear()
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+
 @dataclass
 class ProductionLedger:
     project_id: str
@@ -466,6 +569,7 @@ class ProductionLedger:
     episode_status: EpisodeStatus = EpisodeStatus.PLANNED
     plan_revision: int = 1
     plan_frozen: bool = False
+    plan_revision_history: Tuple[str, ...] = ()
     bible: MovieBible = field(default_factory=MovieBible)
     scenes: Dict[str, Scene] = field(default_factory=dict)
     shots: Dict[str, Shot] = field(default_factory=dict)
@@ -476,6 +580,29 @@ class ProductionLedger:
     authorization_index: Dict[str, str] = field(default_factory=dict)
     provider_request_index: Dict[str, str] = field(default_factory=dict)
     provider_adapters: Dict[str, ProviderAdapterRegistration] = field(default_factory=dict)
+
+    def __post_init__(self):
+        frozen = self.plan_frozen
+        object.__setattr__(self, "plan_frozen", False)
+        for name in ("scenes", "shots", "shot_plans", "shot_continuity_bindings"):
+            object.__setattr__(self, name, PlanStateDict(self, name, getattr(self, name)))
+        object.__setattr__(self, "plan_frozen", frozen)
+
+    def __setattr__(self, name, value):
+        if name in {"plan_revision", "plan_frozen", "plan_revision_history"} and name in self.__dict__:
+            raise ProductionPolicyError("plan revision and freeze state require explicit transitions")
+        if name in {"scenes", "shots", "shot_plans", "shot_continuity_bindings"} and name in self.__dict__:
+            if value is self.__dict__[name] and not self.plan_frozen:
+                return
+            raise ProductionPolicyError("planning maps cannot be replaced directly")
+        if name == "bible" and name in self.__dict__ and getattr(self, "plan_frozen", False):
+            raise ProductionPolicyError("plan is frozen")
+        object.__setattr__(self, name, value)
+
+    def __delattr__(self, name):
+        if name in type(self).__dataclass_fields__:
+            raise ProductionPolicyError("ledger fields cannot be deleted")
+        object.__delattr__(self, name)
 
     def register_provider_adapter(self, adapter: ProviderAdapterRegistration) -> None:
         if type(adapter) is not ProviderAdapterRegistration:
@@ -512,18 +639,52 @@ class ProductionLedger:
     def freeze_plan(self) -> None:
         if self.plan_frozen:
             raise ProductionPolicyError("plan is already frozen")
-        self.plan_frozen = True
+        self.validate()
+        object.__setattr__(self, "plan_frozen", True)
 
     def create_new_plan_revision(self) -> None:
-        self.plan_revision += 1
-        self.plan_frozen = False
+        if not self.plan_frozen:
+            raise ProductionPolicyError("freeze the current plan before creating a new revision")
+        self.validate()
+        prior = self.to_dict()
+        snapshot = {
+            "movie_bible": prior["movie_bible"],
+            "scenes": {key: value["scene_id"] for key, value in prior["scenes"].items()},
+            "shots": {
+                key: (value["shot_id"], value["scene_id"], value["has_dialogue_or_audio"])
+                for key, value in prior["shots"].items()
+            },
+            "shot_plans": prior["shot_plans"],
+            "shot_continuity_bindings": prior["shot_continuity_bindings"],
+        }
+        digest = sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        object.__setattr__(self, "plan_revision_history", self.plan_revision_history + (digest,))
+        object.__setattr__(self, "plan_revision", self.plan_revision + 1)
+        object.__setattr__(self, "plan_frozen", False)
+
+    def _require_safe_replacement(self, shot_id: str, kind: str) -> None:
+        shot = self.shots[shot_id]
+        if (
+            self.plan_revision == 1
+            or shot.status is not ShotStatus.PLANNED
+            or shot.generation_epoch != 0
+            or shot.generation_owner_job_id is not None
+            or shot.asset_version
+            or shot.reviews
+            or shot.canonical
+            or shot.upscale_allowed
+            or any(job.shot_id == shot_id for job in self.jobs.values())
+        ):
+            raise ProductionPolicyError(
+                f"conflicting {kind} replacement is not allowed without a new revision and untouched shot"
+            )
 
     def add_scene(self, scene: Scene) -> None:
         if self.plan_frozen:
             raise ProductionPolicyError("plan is frozen")
         if not scene.scene_id or scene.scene_id in self.scenes:
             raise ProductionPolicyError("scene id must be non-empty and unique")
-        self.scenes[scene.scene_id] = scene
+        self.scenes._put(scene.scene_id, scene)
 
     def add_shot(self, shot: Shot) -> None:
         if self.plan_frozen:
@@ -532,7 +693,7 @@ class ProductionLedger:
             raise ProductionPolicyError("shot id must be non-empty and unique")
         if shot.scene_id and shot.scene_id not in self.scenes:
             raise ProductionPolicyError("shot references unknown scene")
-        self.shots[shot.shot_id] = shot
+        self.shots._put(shot.shot_id, shot)
 
     def add_shot_plan(self, plan: ShotPlan) -> None:
         if self.plan_frozen:
@@ -566,10 +727,11 @@ class ProductionLedger:
         if plan.shot_id in self.shot_plans:
             existing = self.shot_plans[plan.shot_id]
             if existing != plan:
-                raise ProductionPolicyError("conflicting shot plan replacement is not allowed")
-            return
+                self._require_safe_replacement(plan.shot_id, "shot plan")
+            else:
+                return
 
-        self.shot_plans[plan.shot_id] = plan
+        self.shot_plans._put(plan.shot_id, plan)
 
     def add_shot_continuity_binding(self, binding: ShotContinuityBinding) -> None:
         if self.plan_frozen:
@@ -630,10 +792,11 @@ class ProductionLedger:
 
         if binding.shot_id in self.shot_continuity_bindings:
             if self.shot_continuity_bindings[binding.shot_id] != binding:
-                raise ProductionPolicyError("conflicting continuity binding replacement is not allowed")
-            return
+                self._require_safe_replacement(binding.shot_id, "continuity binding")
+            else:
+                return
 
-        self.shot_continuity_bindings[binding.shot_id] = binding
+        self.shot_continuity_bindings._put(binding.shot_id, binding)
 
     def submit_generation(
         self,
@@ -966,7 +1129,9 @@ class ProductionLedger:
         def to_json_types(value):
             if isinstance(value, Enum):
                 return value.value
-            if isinstance(value, dict):
+            if is_dataclass(value) and not isinstance(value, type):
+                return to_json_types(asdict(value))
+            if isinstance(value, Mapping):
                 return {to_json_types(k): to_json_types(v) for k, v in value.items()}
             if isinstance(value, frozenset):
                 return sorted(list(value))
@@ -974,7 +1139,7 @@ class ProductionLedger:
                 return [to_json_types(v) for v in value]
             return value
 
-        raw = to_json_types(asdict(self))
+        raw = to_json_types({item.name: getattr(self, item.name) for item in fields(self)})
         return {
             "schema_version": SCHEMA_VERSION,
             "project_id": raw["project_id"],
@@ -982,6 +1147,7 @@ class ProductionLedger:
             "episode_status": raw["episode_status"],
             "plan_revision": raw["plan_revision"],
             "plan_frozen": raw["plan_frozen"],
+            "plan_revision_history": raw["plan_revision_history"],
             "spend_limit_usd_micros": 0,
             "production": dict(PRODUCTION_CONTRACT),
             "movie_bible": raw["bible"],
@@ -1007,11 +1173,32 @@ class ProductionLedger:
 
     @classmethod
     def _from_dict(cls, data: Mapping) -> "ProductionLedger":
+        if not isinstance(data, Mapping):
+            raise ProductionPolicyError("production checkpoint fields mismatch")
         data = dict(data)
+        # Legacy defaults apply only to untouched planning ledgers. A missing
+        # revision/freeze flag on a populated checkpoint could unlock work.
+        if ("plan_revision" not in data or "plan_frozen" not in data) and (
+            data.get("shot_plans") or data.get("shot_continuity_bindings")
+            or data.get("generation_jobs") or data.get("shots") or data.get("scenes")
+        ):
+            raise ProductionPolicyError("missing plan revision or freeze state")
+        if ("scenes" not in data or "shot_plans" not in data or "shot_continuity_bindings" not in data) and (
+            type(data.get("plan_revision", 1)) is not int
+            or data.get("plan_revision", 1) > 1
+            or data.get("plan_frozen", False) is True
+            or data.get("generation_jobs")
+        ):
+            raise ProductionPolicyError("missing revised planning data")
+        if "plan_revision_history" not in data and data.get("plan_revision") != 1 and (
+            data.get("plan_revision") is not None or data.get("shot_plans")
+        ):
+            raise ProductionPolicyError("missing plan revision history")
         data.setdefault("episode_id", "")
         data.setdefault("episode_status", EpisodeStatus.PLANNED.value)
         data.setdefault("plan_revision", 1)
         data.setdefault("plan_frozen", False)
+        data.setdefault("plan_revision_history", [])
         data.setdefault("scenes", {})
         data.setdefault("shot_plans", {})
         data.setdefault("shot_continuity_bindings", {})
@@ -1023,6 +1210,7 @@ class ProductionLedger:
             "episode_status",
             "plan_revision",
             "plan_frozen",
+            "plan_revision_history",
             "spend_limit_usd_micros",
             "production",
             "movie_bible",
@@ -1036,13 +1224,13 @@ class ProductionLedger:
             "provider_request_index",
             "provider_adapters",
         }
-        if not isinstance(data, Mapping):
-            raise ProductionPolicyError("production checkpoint fields mismatch")
         actual_fields = set(data.keys())
         if "provider_adapters" not in actual_fields:
             actual_fields.add("provider_adapters")
         if "shot_plans" not in actual_fields:
             actual_fields.add("shot_plans")
+        if "plan_revision_history" not in actual_fields:
+            actual_fields.add("plan_revision_history")
         if actual_fields != root_fields:
             raise ProductionPolicyError("production checkpoint fields mismatch")
         if (
@@ -1059,6 +1247,8 @@ class ProductionLedger:
             raise ProductionPolicyError("invalid plan_revision")
         if type(data.get("plan_frozen")) is not bool:
             raise ProductionPolicyError("invalid plan_frozen")
+        if not isinstance(data.get("plan_revision_history"), list):
+            raise ProductionPolicyError("invalid plan revision history")
 
         if (
             type(data.get("spend_limit_usd_micros")) is not int
@@ -1120,7 +1310,8 @@ class ProductionLedger:
             episode_id=data["episode_id"],
             episode_status=episode_status,
             plan_revision=data["plan_revision"],
-            plan_frozen=data["plan_frozen"],
+            plan_frozen=False,
+            plan_revision_history=tuple(data["plan_revision_history"]),
             bible=MovieBible(**bible_raw),
         )
         for scene_id, raw in data.get("scenes", {}).items():
@@ -1133,7 +1324,7 @@ class ProductionLedger:
                 scene_status = SceneStatus(raw["status"])
             except ValueError as exc:
                 raise ProductionPolicyError("invalid scene status") from exc
-            ledger.scenes[scene_id] = Scene(scene_id=raw["scene_id"], status=scene_status)
+            ledger.scenes._put(scene_id, Scene(scene_id=raw["scene_id"], status=scene_status))
         for shot_id, raw in data.get("shot_continuity_bindings", {}).items():
             raw = dict(raw)
             binding_fields = {
@@ -1160,7 +1351,7 @@ class ProductionLedger:
                 raise ProductionPolicyError("binding bible_revision must match current movie-bible revision exactly")
 
             try:
-                ledger.shot_continuity_bindings[shot_id] = ShotContinuityBinding(**raw)
+                ledger.shot_continuity_bindings._put(shot_id, ShotContinuityBinding(**raw))
             except (TypeError, ValueError) as exc:
                 raise ProductionPolicyError("malformed shot continuity binding") from exc
 
@@ -1196,7 +1387,7 @@ class ProductionLedger:
             }
             if len(reviews) != len(raw["reviews"]):
                 raise ProductionPolicyError("review fields mismatch")
-            ledger.shots[shot_id] = Shot(
+            ledger.shots._put(shot_id, Shot(
                 shot_id=raw["shot_id"],
                 scene_id=raw["scene_id"],
                 asset_version=raw["asset_version"],
@@ -1207,7 +1398,7 @@ class ProductionLedger:
                 upscale_allowed=raw["upscale_allowed"],
                 generation_epoch=raw["generation_epoch"],
                 generation_owner_job_id=raw["generation_owner_job_id"],
-            )
+            ))
         for plan_id, raw in data.get("shot_plans", {}).items():
             plan_fields = {
                 "shot_id",
@@ -1219,14 +1410,14 @@ class ProductionLedger:
             }
             if not isinstance(raw, Mapping) or set(raw) != plan_fields:
                 raise ProductionPolicyError("shot plan fields mismatch")
-            ledger.shot_plans[plan_id] = ShotPlan(
+            ledger.shot_plans._put(plan_id, ShotPlan(
                 shot_id=raw["shot_id"],
                 scene_id=raw["scene_id"],
                 sequence_index=raw["sequence_index"],
                 planned_duration_ms=raw["planned_duration_ms"],
                 prompt_fingerprint=raw["prompt_fingerprint"],
                 has_dialogue_or_audio=raw["has_dialogue_or_audio"],
-            )
+            ))
         for job_id, raw in data.get("generation_jobs", {}).items():
             job_fields = {
                 "job_id",
@@ -1318,6 +1509,7 @@ class ProductionLedger:
             except (KeyError, ValueError, TypeError) as exc:
                 raise ProductionPolicyError("malformed provider adapter registration") from exc
 
+        object.__setattr__(ledger, "plan_frozen", data["plan_frozen"])
         ledger.validate()
         return ledger
 
@@ -1332,6 +1524,12 @@ class ProductionLedger:
             raise ProductionPolicyError("invalid plan_revision")
         if type(self.plan_frozen) is not bool:
             raise ProductionPolicyError("invalid plan_frozen")
+        if (
+            type(self.plan_revision_history) is not tuple
+            or len(self.plan_revision_history) != self.plan_revision - 1
+            or any(type(digest) is not str or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest) for digest in self.plan_revision_history)
+        ):
+            raise ProductionPolicyError("invalid plan revision history")
         if type(self.bible.revision) is not int or self.bible.revision < 1:
             raise ProductionPolicyError("invalid movie-bible revision")
         self._validate_bible_maps()

@@ -50,6 +50,10 @@
     "plan_frozen": {
       "type": "boolean"
     },
+    "plan_revision_history": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
     "spend_limit_usd_micros": {
       "type": "integer",
       "const": 0
