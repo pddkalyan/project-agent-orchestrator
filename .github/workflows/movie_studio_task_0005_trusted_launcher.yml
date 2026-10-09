@@ -51,12 +51,16 @@ jobs:
                   # The worker resumes this exact Jules session, never creates a duplicate.
                   reason="resume existing Jules session"
               else:
+                  wm_obj=get(base+"/contents/monitor/task_0005_candidate_review_watermark.json?ref=automation/TASK-0005-runtime-state")
+                  wm=json.loads(base64.b64decode(wm_obj["content"]))
+                  last_reviewed=wm.get("last_reviewed_candidate_pr")
+                  if wm.get("task_id")!="TASK-0005" or type(last_reviewed) is not int or last_reviewed<28:
+                      raise ValueError("invalid candidate review watermark")
                   prs=get(base+"/pulls?state=open&per_page=100")
                   for pr in prs:
-                      # PRs <= 28 are legacy candidates predating reviewed PR #28 promotion.
-                      if pr["base"]["ref"]=="feature/TASK-0005-movie-studio-core" and pr["number"] > 28:
+                      if pr["base"]["ref"]=="feature/TASK-0005-movie-studio-core" and pr["number"] > last_reviewed:
                           allowed=False
-                          reason="candidate PR awaiting review"
+                          reason="new candidate PR awaiting review: #"+str(pr["number"])
                           break
           except Exception as e:
               allowed=False
