@@ -60,30 +60,44 @@ jobs:
               if review.get("task_id")!="TASK-0005" or type(review.get("reviewed_through_pr")) is not int:
                   raise ValueError("invalid reviewed-candidate checkpoint")
               last_reviewed=review["reviewed_through_pr"]
-              active=str(state.get("active_session_id") or "").strip()
-              if active and state.get("state") not in ("COMPLETED","FAILED","CANCELLED"):
-                  # Never create a second Jules session. Re-monitor the SAME session.
-                  # GitHub concurrency serializes trusted and legacy monitor runs.
-                  allowed=True
-                  reason="resume existing Jules session "+active
+              policy=state_file("monitor/task_0005_execution_policy.json",runtime_ref)
+              if policy.get("task_id")!="TASK-0005" or policy.get("primary_coding_model")!="GPT-6 Sol":
+                  raise ValueError("invalid Sol-first coding policy")
+              # Disallow routine Jules launches; GPT-6 Sol runs in authenticated Codex/Work
+              # rather than GitHub-hosted pay-as-you-go API. Preserve Jules checkpoints.
+              if policy.get("jules_fallback_enabled") is not True:
+                  reason="Sol is primary; Jules fallback paused until explicit enablement"
+              elif policy.get("codex_sol_session_state") not in (
+                  "NOT_LAUNCHED_FROM_THIS_CONNECTOR", "IDLE", "COMPLETED",
+                  "FAILED", "BLOCKED_BY_QUOTA",
+              ):
+                  reason="Sol task may be active; refuse overlapping Jules work"
               else:
-                  trigger=state_file("tasks/dispatch/task_0005_free_worker_trigger.json",feature_ref)
-                  if state.get("state")=="COMPLETED" and state.get("dispatch_sequence")==trigger.get("sequence"):
-                      reason="await next supervisor dispatch increment"
-                  else:
-                      prs=get(base+"/pulls?state=open&per_page=100")
-                      if len(prs)>=100:
-                          reason="open-PR page limit; fail closed"
+                  active=str(state.get("active_session_id") or "").strip()
+                  if active and state.get("state") not in ("COMPLETED","FAILED","CANCELLED"):
+                      if policy.get("jules_existing_session_resume_enabled") is True:
+                          allowed=True
+                          reason="resume existing Jules fallback session "+active
                       else:
-                          pending=[
-                              pr["number"] for pr in prs
-                              if pr["base"]["ref"]==feature_ref and pr["number"]>last_reviewed
-                          ]
-                          if pending:
-                              reason="unreviewed Jules candidate PR #"+str(min(pending))
+                          reason="Jules session preserved, automatic resume paused"
+                  else:
+                      trigger=state_file("tasks/dispatch/task_0005_free_worker_trigger.json",feature_ref)
+                      if state.get("state")=="COMPLETED" and state.get("dispatch_sequence")==trigger.get("sequence"):
+                          reason="await next verified coding increment"
+                      else:
+                          prs=get(base+"/pulls?state=open&per_page=100")
+                          if len(prs)>=100:
+                              reason="open-PR page limit; fail closed"
                           else:
-                              allowed=True
-                              reason="idle and safe to start next increment"
+                              pending=[
+                                  pr["number"] for pr in prs
+                                  if pr["base"]["ref"]==feature_ref and pr["number"]>last_reviewed
+                              ]
+                              if pending:
+                                  reason="unreviewed Jules candidate PR #"+str(min(pending))
+                              else:
+                                  allowed=True
+                                  reason="explicit Jules fallback enabled, no overlap"
           except Exception as e:
               allowed=False
               reason="preflight check failed: "+str(e)[:160]
