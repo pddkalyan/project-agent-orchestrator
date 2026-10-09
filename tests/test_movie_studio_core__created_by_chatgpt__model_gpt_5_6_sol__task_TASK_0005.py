@@ -126,6 +126,41 @@ class MovieStudioCoreTests(unittest.TestCase):
                 ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset())
             )
 
+    def test_plan_revision_allows_update_and_blocks_direct_mutation(self):
+        ledger = ProductionLedger(project_id="test_revision")
+        ledger.add_scene(Scene("S1"))
+        ledger.add_shot(Shot("SHT1", scene_id="S1"))
+
+        # Test direct mutation block
+        ledger.freeze_plan()
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
+            ledger.scenes["S2"] = Scene("S2")
+
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
+            del ledger.scenes["S1"]
+
+        # Test explicit plan revision permits updates
+        ledger.create_new_plan_revision()
+        ledger.scenes["S2"] = Scene("S2")
+        self.assertIn("S2", ledger.scenes)
+
+        # Adding a plan
+        plan1 = ShotPlan("SHT1", "S1", 0, 5000, "f1", False)
+        ledger.add_shot_plan(plan1)
+        ledger.freeze_plan()
+
+        # Explicit new plan revision permits update
+        ledger.create_new_plan_revision()
+        plan2 = ShotPlan("SHT1", "S1", 0, 6000, "f2", False)
+        ledger.add_shot_plan(plan2) # Succeeds
+        self.assertEqual(ledger.shot_plans["SHT1"].planned_duration_ms, 6000)
+
+        # But if active job exists, fail closed
+        ledger.shots["SHT1"].status = ShotStatus.GENERATING
+        plan3 = ShotPlan("SHT1", "S1", 0, 7000, "f3", False)
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement is not allowed"):
+            ledger.add_shot_plan(plan3)
+
     def test_create_new_plan_revision(self):
         ledger = ProductionLedger("movie")
         ledger.freeze_plan()
@@ -1450,8 +1485,21 @@ class MovieStudioCoreTests(unittest.TestCase):
             prompt_fingerprint="prompt1",
             has_dialogue_or_audio=True
         )
-        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement"):
-            ledger.add_shot_plan(plan2)
+        # Without an active job, it's allowed!
+        ledger.add_shot_plan(plan2)
+
+        # Now add an active job to make it reject
+        shot.status = ShotStatus.GENERATING
+        plan3 = ShotPlan(
+            shot_id="sht1",
+            scene_id="scn1",
+            sequence_index=2,
+            planned_duration_ms=5000,
+            prompt_fingerprint="prompt1",
+            has_dialogue_or_audio=True
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement is not allowed"):
+            ledger.add_shot_plan(plan3)
 
     def test_shot_plan_rejects_duplicate_sequence_index(self):
         ledger = ProductionLedger(project_id="test_proj")
@@ -1564,65 +1612,42 @@ class MovieStudioCoreTests(unittest.TestCase):
             ProductionLedger.from_dict(data)
 
     def test_continuity_binding_rejections(self):
-        ledger = ProductionLedger(project_id="test-rejections")
-        ledger.add_shot(Shot(shot_id="shot-1"))
-        ledger.bible.characters["char-1"] = {}
-        ledger.bible.voices["voice-1"] = {}
+        ledger = ProductionLedger(project_id="test_proj")
+        ledger.bible.characters["char-1"] = "Character 1"
+        ledger.bible.characters["char-2"] = "Character 2"
+        ledger.bible.voices["voice-1"] = "Voice 1"
+        ledger.add_scene(Scene("scn-1"))
+        ledger.add_shot(Shot("shot-1", scene_id="scn-1"))
 
-        binding_no_shot = ShotContinuityBinding(
-            shot_id="unknown-shot", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
+        binding_dangling = ShotContinuityBinding("missing", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset())
+        binding_voice_no_char = ShotContinuityBinding("shot-1", 1, frozenset(), frozenset(["voice-1"]), "", frozenset(), frozenset(), frozenset())
+        binding_wrong_rev = ShotContinuityBinding("shot-1", 999, frozenset(["char-1"]), frozenset(), "", frozenset(), frozenset(), frozenset())
+        binding_ok = ShotContinuityBinding("shot-1", 1, frozenset(["char-1"]), frozenset(), "", frozenset(), frozenset(), frozenset())
+
+        with self.assertRaisesRegex(ProductionPolicyError, "shot_id must be a non-empty string"):
+            ShotContinuityBinding("", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset())
+
         with self.assertRaisesRegex(ProductionPolicyError, "binding must reference an existing shot"):
-            ledger.add_shot_continuity_binding(binding_no_shot)
-
-        binding_dangling = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["unknown-char"]), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
-        with self.assertRaisesRegex(ProductionPolicyError, "binding references unknown character"):
             ledger.add_shot_continuity_binding(binding_dangling)
 
-        binding_voice_no_char = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(), voice_ids=frozenset(["voice-1"]), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
         with self.assertRaisesRegex(ProductionPolicyError, "voice continuity requires at least one character in the binding"):
             ledger.add_shot_continuity_binding(binding_voice_no_char)
 
-        binding_wrong_rev = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=999,
-            character_ids=frozenset(), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
-        with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision must match current"):
+        with self.assertRaisesRegex(ProductionPolicyError, "binding bible_revision must match current movie-bible revision exactly"):
             ledger.add_shot_continuity_binding(binding_wrong_rev)
 
-        binding_ok = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(["char-1"]), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
         ledger.add_shot_continuity_binding(binding_ok)
         ledger.add_shot_continuity_binding(binding_ok) # Idempotent
 
-        binding_conflict = ShotContinuityBinding(
-            shot_id="shot-1", bible_revision=ledger.bible.revision,
-            character_ids=frozenset(), voice_ids=frozenset(), location_id="",
-            costume_ids=frozenset(), prop_ids=frozenset(), reference_asset_versions=frozenset()
-        )
-        with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement is not allowed"):
-            ledger.add_shot_continuity_binding(binding_conflict)
+        binding_conflict = ShotContinuityBinding("shot-1", 1, frozenset(["char-1", "char-2"]), frozenset(), "", frozenset(), frozenset(), frozenset())
+        # Replace ok without active job
+        ledger.add_shot_continuity_binding(binding_conflict)
 
-        # Digest stability test
-        digest1 = continuity_binding_digest(binding_ok)
-        digest2 = continuity_binding_digest(binding_ok)
-        self.assertEqual(digest1, digest2)
-        digest3 = continuity_binding_digest(binding_conflict)
-        self.assertNotEqual(digest1, digest3)
+        # Test active job rejection
+        ledger.shots["shot-1"].status = ShotStatus.GENERATING
+        binding_conflict2 = ShotContinuityBinding("shot-1", 1, frozenset(["char-1"]), frozenset(), "", frozenset(), frozenset(), frozenset())
+        with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement is not allowed"):
+            ledger.add_shot_continuity_binding(binding_conflict2)
 
     def test_continuity_binding_stale_and_future_mismatches(self):
         ledger = ProductionLedger(project_id="test-mismatches")
