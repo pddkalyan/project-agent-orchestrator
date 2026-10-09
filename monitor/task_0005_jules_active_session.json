@@ -1,7 +1,8 @@
 {
   "task_id": "TASK-0005",
-  "active_session_id": "15056572663642841518",
-  "session_url": "https://jules.google.com/session/15056572663642841518",
-  "state": "AWAITING_USER_FEEDBACK",
-  "phase": 2
+  "active_session_id": "",
+  "last_session_id": "15056572663642841518",
+  "state": "COMPLETED",
+  "phase": 2,
+  "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/33"
 }
