@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0005",
+  "primary_coding_model": "GPT-6 Sol",
+  "primary_surface": "ChatGPT Codex or Work signed in with included ChatGPT Plus plan",
+  "expert_reviewer": "GPT-6 Astra",
+  "reviewer_use": [
+    "difficult P0/P1 corrections",
+    "end-of-phase review",
+    "final production-readiness review"
+  ],
+  "fallback_worker": "Google Jules",
+  "jules_fallback_enabled": false,
+  "jules_existing_session_resume_enabled": false,
+  "jules_session_preserved": "12184075764881634418",
+  "codex_sol_session_state": "NOT_LAUNCHED_FROM_THIS_CONNECTOR",
+  "sol_handoff_issue_url": "https://github.com/pddkalyan/project-agent-orchestrator/issues/35",
+  "usage_source": "ChatGPT/Codex Settings > Usage",
+  "usage_access": "UNAVAILABLE_IN_GITHUB_CONNECTOR",
+  "five_hour_allowance_remaining": null,
+  "weekly_allowance_remaining": null,
+  "next_five_hour_reset": null,
+  "next_weekly_reset": null,
+  "paid_credit_spend_enabled": false,
+  "additional_spend_usd_limit": 0,
+  "automatic_paid_reset_enabled": false,
+  "phase": 2,
+  "phase3_requires_astra_approval": true,
+  "no_auto_merge": true,
+  "no_duplicate_sessions": true,
+  "warning": "Do not infer ChatGPT usage from GitHub Actions minutes. Only enable Jules fallback if the Sol access/allowance issue is explicitly verified and one-worker safety confirmed."
+}
