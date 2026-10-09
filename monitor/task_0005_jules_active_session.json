@@ -2,7 +2,7 @@
   "task_id": "TASK-0005",
   "active_session_id": "12184075764881634418",
   "session_url": "https://jules.google.com/session/12184075764881634418",
-  "state": "IN_PROGRESS",
+  "state": "AWAITING_USER_FEEDBACK",
   "phase": 2,
-  "dispatch_sequence": 25
+  "dispatch_sequence": 26
 }
