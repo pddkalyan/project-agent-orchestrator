@@ -39,7 +39,7 @@
     "preserved_source_sha": "05ae0fc88260e7f5a35461313297185adc23243a",
     "status": "COMPLETED_SCOPED_INCREMENT"
   },
-  "last_verified_at_utc": "2026-10-09T12:21:35.468Z",
+  "last_verified_at_utc": "2026-10-09T12:22:16.293Z",
   "phase2_approval": "WITHHELD_AUTHORITATIVE_A_H_CHECKLIST_MISSING",
   "latest_validation": {
     "movie_studio_tests_passed": 107,
@@ -62,6 +62,6 @@
     "tree_sha": "74e47c905c1d018ca61e60bc98435b5fef1eeb87",
     "astra_scope_review": "APPROVED",
     "full_phase_review": "WITHHELD_MISSING_A_H_DEFINITION",
-    "github_ci": "IN_PROGRESS_37929451170"
+    "github_ci": "SUCCESS_37929451170"
   }
 }
