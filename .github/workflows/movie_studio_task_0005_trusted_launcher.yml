@@ -23,6 +23,7 @@ jobs:
       REPO_OWNER: pddkalyan
       REPO_NAME: project-agent-orchestrator
       STARTING_BRANCH: feature/TASK-0005-movie-studio-core
+      STATUS_BRANCH: automation/TASK-0005-runtime-state
       CONTRACT_FILE: tasks/worker/task_0005_free_worker_contract.json
       TRIGGER_FILE: tasks/dispatch/task_0005_free_worker_trigger.json
     steps:
@@ -43,7 +44,7 @@ jobs:
           reason="idle"
           try:
               import base64
-              obj=get(base+"/contents/monitor/task_0005_jules_active_session.json?ref=feature/TASK-0005-movie-studio-core")
+              obj=get(base+"/contents/monitor/task_0005_jules_active_session.json?ref=automation/TASK-0005-runtime-state")
               state=json.loads(base64.b64decode(obj["content"]))
               if state.get("active_session_id") and state.get("state") not in ("COMPLETED","FAILED","CANCELLED"):
                   allowed=False
@@ -105,11 +106,12 @@ jobs:
           OWNER=os.environ["REPO_OWNER"]
           REPO=os.environ["REPO_NAME"]
           BRANCH=os.environ["STARTING_BRANCH"]
+          STATUS_BRANCH=os.environ["STATUS_BRANCH"]
           trigger=json.loads(Path(os.environ["TRIGGER_FILE"]).read_text(encoding="utf-8"))
           STATUS_PATH="monitor/task_0005_jules_active_session.json"
           GH_API=f"https://api.github.com/repos/{OWNER}/{REPO}/contents/{STATUS_PATH}"
           def read_checkpoint():
-              req=urllib.request.Request(GH_API+"?ref="+BRANCH,headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json"})
+              req=urllib.request.Request(GH_API+"?ref="+STATUS_BRANCH,headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json"})
               try:
                   with urllib.request.urlopen(req,timeout=30) as response: data=json.load(response)
                   return json.loads(base64.b64decode(data["content"])),data["sha"]
@@ -118,7 +120,7 @@ jobs:
                   raise
           def save_checkpoint(status):
               old,sha=read_checkpoint()
-              payload={"message":"chore(task-0005): checkpoint Jules session","branch":BRANCH,"content":base64.b64encode((json.dumps(status,indent=2)+"\n").encode()).decode()}
+              payload={"message":"chore(task-0005): checkpoint Jules session","branch":STATUS_BRANCH,"content":base64.b64encode((json.dumps(status,indent=2)+"\n").encode()).decode()}
               if sha: payload["sha"]=sha
               req=urllib.request.Request(GH_API,data=json.dumps(payload).encode(),headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"],"Accept":"application/vnd.github+json","Content-Type":"application/json"},method="PUT")
               with urllib.request.urlopen(req,timeout=30) as response: return json.load(response)
