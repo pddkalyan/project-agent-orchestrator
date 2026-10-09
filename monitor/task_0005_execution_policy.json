@@ -34,8 +34,20 @@
     "effort": "high",
     "surface": "ChatGPT Work delegated coding agent",
     "base_sha": "3a97d0a7e5e4965e6a432373ffd15a6a12085a7b",
-    "scope": "Recover final Jules patch and repair controlled frozen-plan revisions",
-    "published_codex_cloud_environment": "UNAVAILABLE_UNAUTHENTICATED_BROWSER"
+    "scope": "Controlled Movie Bible revision/digest binding; dependent candidate",
+    "published_codex_cloud_environment": "UNAVAILABLE_UNAUTHENTICATED_BROWSER",
+    "approved_narrow_candidate_pr": 37,
+    "approved_narrow_candidate_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870"
   },
-  "last_verified_at_utc": "2026-10-09T06:07:55.334Z"
+  "last_verified_at_utc": "2026-10-09T06:20:06.584Z",
+  "phase2_approval": "WITHHELD",
+  "latest_validation": {
+    "movie_studio_tests_passed": 93,
+    "controller_tests_passed": 34,
+    "reviewer_tests_passed": 68,
+    "controller_production_fixtures_passed": 5,
+    "windows_candidate_regression": "NOT_RUN_NO_POWERSHELL",
+    "actual_astra_narrow_review": "APPROVED_SOURCE_b277292_TREE_IDENTICAL",
+    "additional_spend_usd": 0
+  }
 }
