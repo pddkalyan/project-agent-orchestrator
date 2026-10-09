@@ -2,7 +2,7 @@ const REPO = 'pddkalyan/project-agent-orchestrator';
 
 function escapeHTML(str) {
     if (!str) return '';
-    return str.toString().replace(/[&<>'"]/g, 
+    return str.toString().replace(/[&<>'"]/g,
         tag => ({
             '&': '&amp;',
             '<': '&lt;',
@@ -16,12 +16,12 @@ function escapeHTML(str) {
 async function fetchPRs() {
     const container = document.getElementById('pr-container');
     container.innerHTML = '<div class="flex items-center justify-center h-full text-cinematic-muted"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Loading PRs...</div>';
-    
+
     try {
         const response = await fetch(`https://api.github.com/repos/${REPO}/pulls?state=all&per_page=10`);
         if (!response.ok) throw new Error('Failed to fetch PRs');
         const prs = await response.json();
-        
+
         container.innerHTML = '';
         if (prs.length === 0) {
             container.innerHTML = '<div class="text-sm text-cinematic-muted italic text-center mt-4">No PRs found.</div>';
@@ -61,13 +61,13 @@ async function fetchPRs() {
 async function fetchActions() {
     const container = document.getElementById('actions-container');
     container.innerHTML = '<div class="flex items-center justify-center h-full text-cinematic-muted"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Loading Actions...</div>';
-    
+
     try {
         const response = await fetch(`https://api.github.com/repos/${REPO}/actions/runs?per_page=10`);
         if (!response.ok) throw new Error('Failed to fetch Actions');
         const data = await response.json();
         const runs = data.workflow_runs;
-        
+
         container.innerHTML = '';
         if (!runs || runs.length === 0) {
             container.innerHTML = '<div class="text-sm text-cinematic-muted italic text-center mt-4">No recent runs found.</div>';
