@@ -16,8 +16,8 @@
   },
   "change": "Controlled MovieBible map writes advance revision, canonical content digest and prior-digest history; nested entity values are read-only. Frozen planning and all generation history prevent unsafe public Bible or referenced-structure changes. Continuity bindings store the exact Bible digest. Jobs and immutable attempt authorizations store a deterministic digest of actual shot structure, ShotPlan, continuity binding and Bible content; provider request keys, replay, callbacks and restore validate it.",
   "test_evidence": {
-    "movie_studio": "104 tests passed, 0 failures (93 narrow baseline + 9 dependent candidate + 2 correction methods)",
-    "test_discovery": "104 tests passed, 0 failures",
+    "movie_studio": "107 tests passed, 0 failures (93 narrow baseline + 9 dependent candidate + 5 correction methods)",
+    "test_discovery": "107 tests passed, 0 failures",
     "python_compile": "passed for core and tests",
     "json_schema_parse": "passed; runtime/schema shape tests passed; jsonschema package unavailable in both installed Python runtimes, so no independent JSON Schema meta-validation claimed",
     "git_diff_check": "passed",
@@ -38,10 +38,10 @@
     "usage_metrics": "model/account usage unavailable; no usage estimate asserted"
   },
   "phase_2_gap_assessment": "No authoritative full Phase 2 A-H checklist found in repository task, dispatch, worker, docs, reviews or packets. Explicit Phase 2 D acceptance and offline story/continuity/planning contracts have deterministic coverage; dependent candidate closes controlled Bible revision/digest and exact job/authorization bindings plus the actual Astra mutation-deadlock finding. No independent approval or overall Phase 2 completion claimed. Story facts are string maps, reference versions are identifiers rather than authenticated media provenance, and generation reconciliation is a protocol/receipt contract without a live adapter. Timeline/master QC and verified Drive archive remain broader production work, not evidence of generated media or grounds to start Phase 3.",
-  "review_status": "ASTRA_REJECTED_05AE0FC_CORRECTION_SELF_TESTED_PENDING_REREVIEW",
-  "reviewed_sha": "05ae0fc88260e7f5a35461313297185adc23243a",
+  "review_status": "ASTRA_REJECTED_F9B206_CORRECTIONS_SELF_TESTED_PENDING_REREVIEW",
+  "reviewed_sha": "f9b20670a723cdcb226163fff5fb27d51b9bad05",
   "tests": {
-    "passed": 104,
+    "passed": 107,
     "failed": 0
   },
   "corrections": [
@@ -49,20 +49,37 @@
       "reviewed_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",
       "finding": "Astra rejected: deleting plan_frozen or has_dialogue_or_audio falls back to class defaults, bypassing frozen plan and AUDIO_QA",
       "resolution": "__delattr__ guards for ledger dataclass fields and scene/shot dataclass fields plus ownership; direct and checkpoint-restored deletion tests retain unchanged serialization and AUDIO_QA",
-      "status": "SELF_TESTED_PENDING_ASTRA_REREVIEW"
+      "status": "RESOLVED_ASTRA_APPROVED",
+      "approved_sha": "b2772922f8b39a0be7b6ae1787fa5477ed064f0d"
     },
     {
       "reviewed_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",
       "finding": "Astra rejected: frozen scene-only checkpoint missing plan metadata or scenes silently restores as unfrozen or empty",
       "resolution": "Default missing plan fields only on truly empty legacy ledgers; require scenes on frozen/revised/job checkpoints; corruption and exact roundtrip tests",
-      "status": "SELF_TESTED_PENDING_ASTRA_REREVIEW"
+      "status": "RESOLVED_ASTRA_APPROVED",
+      "approved_sha": "b2772922f8b39a0be7b6ae1787fa5477ed064f0d"
     },
     {
       "reviewed_sha": "05ae0fc88260e7f5a35461313297185adc23243a",
       "finding": "Actual Astra P2 finding: meaningful Bible mutation with revision-1 continuity bindings creates stale bindings that cannot be replaced because replacement needs a new frozen plan revision, while freezing rejects stale bindings. In revision 2 a bound shot with a direct generated asset also cannot be safely rebound, but Bible mutation was still allowed.",
       "resolution": "Preflight every existing bound shot before every meaningful public Bible map write. Require an explicit unfrozen new plan revision and all bound shots eligible for safe replacement; reject before changing maps, revision, digest or history. Exact assignment/update and empty clear remain no-ops. Preserve stale/future checkpoint rejection assertions with legal revised-plan setup.",
+      "status": "RESOLVED_BY_ASTRA_REVIEW_OF_F9B206_WITH_NEW_FINDINGS",
+      "regression_evidence": "104 tests, including revision-1 unchanged serialization, generated-asset binding rejection, multi-binding six-write-path atomic rejection/restore and exact no-op replay",
+      "resolution_confirmed_sha": "f9b20670a723cdcb226163fff5fb27d51b9bad05"
+    },
+    {
+      "reviewed_sha": "f9b20670a723cdcb226163fff5fb27d51b9bad05",
+      "finding": "Actual final Astra P2 finding: unpaired Unicode surrogate in scalar Bible update raises UnicodeEncodeError after map, revision and history publication, leaving an invalid checkpoint and blocking subsequent writes.",
+      "resolution": "Validate UTF-8 for each namespace key, scalar value, entity field key and value; wrap digest encoding/serialization failures in ProductionPolicyError. Compute proposed full content digest and next revision/history before publishing map or metadata for assignment, update, deletion and clear.",
       "status": "SELF_TESTED_PENDING_ASTRA_REREVIEW",
-      "regression_evidence": "104 tests, including revision-1 unchanged serialization, generated-asset binding rejection, multi-binding six-write-path atomic rejection/restore and exact no-op replay"
+      "regression_evidence": "Invalid scalar/entity/update_entity/batch writes preserve exact checkpoint and restore; invalid constructor/restore Unicode fails closed, valid Unicode roundtrips; injected candidate digest failure preserves all state and subsequent legal update works."
+    },
+    {
+      "reviewed_sha": "f9b20670a723cdcb226163fff5fb27d51b9bad05",
+      "finding": "Actual final Astra P2 finding: Bible namespace constructor coerces checkpoint lists/pairs through dict(values), accepting [] as {} and collapsing duplicate identifiers if the final digest matches, contrary to strict schema objects and prior behavior.",
+      "resolution": "Require Mapping before reading namespace entries at construction, including restore; public update retains its intentional iterable-pair API.",
+      "status": "SELF_TESTED_PENDING_ASTRA_REREVIEW",
+      "regression_evidence": "All seven namespaces reject empty lists, duplicate pairs, strings, integers and None on empty/populated restore and construction; digest-matching duplicate character pairs reject."
     }
   ],
   "migration": "Only old empty revision-1 Bible checkpoints may reconstruct the deterministic empty digest. Populated/revisioned Bible checkpoints without digest/history, and generation jobs or continuity bindings without the new content binding, fail closed.",
@@ -76,6 +93,15 @@
       "passed": 102,
       "errors": 1,
       "cause": "Legacy stale/future test attempted a newly forbidden revision-1 bound Bible write; setup corrected to explicit new revision, original negative assertions retained"
+    },
+    "f9b206_review": {
+      "status": "REJECTED",
+      "prior_deadlock_correction": "confirmed resolved by actual Astra",
+      "new_findings": [
+        "Bible encoding mutation atomicity",
+        "Bible namespace checkpoint type coercion"
+      ],
+      "reviewer_tests": "104 Movie Studio + 34 controller + 68 reviewer bridge passed; additional probes found blockers"
     }
   },
   "next_actions": [

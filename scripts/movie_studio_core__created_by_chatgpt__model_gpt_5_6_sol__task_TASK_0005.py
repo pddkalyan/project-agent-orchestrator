@@ -518,17 +518,17 @@ class MovieBible:
             raise ProductionPolicyError("movie-bible fields cannot be deleted")
         object.__delattr__(self, name)
 
-    def _digest(self) -> str:
-        content = {
-            name: {key: dict(value) if isinstance(value, Mapping) else value for key, value in getattr(self, name).items()}
-            for name in self.MAP_NAMES
-        }
-        return sha256(json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
-
-    def _changed(self):
-        object.__setattr__(self, "revision_history", self.revision_history + (self.content_digest,))
-        object.__setattr__(self, "revision", self.revision + 1)
-        object.__setattr__(self, "content_digest", self._digest())
+    def _digest(self, replacement_name=None, replacement_values=None) -> str:
+        try:
+            content = {
+                name: {key: dict(value) if isinstance(value, Mapping) else value for key, value in
+                       (replacement_values if name == replacement_name else getattr(self, name)).items()}
+                for name in self.MAP_NAMES
+            }
+            encoded = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            return sha256(encoded).hexdigest()
+        except (TypeError, ValueError) as exc:
+            raise ProductionPolicyError("invalid movie-bible content encoding") from exc
 
     def validate_digest(self):
         try:
@@ -567,19 +567,44 @@ class BibleStateDict(MutableMapping):
     def __init__(self, bible: MovieBible, name: str, values):
         self._bible, self._name = bible, name
         self._data = {}
-        for key, value in dict(values).items():
+        if not isinstance(values, Mapping):
+            raise ProductionPolicyError("movie-bible namespace must be a mapping")
+        for key, value in values.items():
             self._data[key] = self._validated(key, value)
+
+    @staticmethod
+    def _validate_utf8(value):
+        try:
+            value.encode("utf-8")
+        except UnicodeError as exc:
+            raise ProductionPolicyError("movie-bible strings must be valid UTF-8") from exc
 
     def _validated(self, key, value):
         if type(key) is not str or not key:
             raise ProductionPolicyError("movie-bible key must be a non-empty string")
+        self._validate_utf8(key)
         if self._name in {"story_rules", "continuity_facts"}:
             if type(value) is not str or not value:
                 raise ProductionPolicyError("movie-bible fact value must be a non-empty string")
+            self._validate_utf8(value)
             return value
         if not isinstance(value, Mapping) or any(type(k) is not str or not k or type(v) is not str for k, v in value.items()):
             raise ProductionPolicyError("movie-bible entity must map non-empty fields to strings")
-        return dict(value)
+        copied = dict(value)
+        for field, content in copied.items():
+            self._validate_utf8(field)
+            self._validate_utf8(content)
+        return copied
+
+    def _commit(self, proposed):
+        # Every operation that can fail completes before publishing any state.
+        digest = self._bible._digest(self._name, proposed)
+        history = self._bible.revision_history + (self._bible.content_digest,)
+        revision = self._bible.revision + 1
+        self._data = proposed
+        object.__setattr__(self._bible, "revision_history", history)
+        object.__setattr__(self._bible, "revision", revision)
+        object.__setattr__(self._bible, "content_digest", digest)
 
     def _check(self):
         self._bible.validate_digest()
@@ -610,28 +635,30 @@ class BibleStateDict(MutableMapping):
         if key in self._data and self._data[key] == value:
             return
         self._check()
-        self._data[key] = value
-        self._bible._changed()
+        proposed = dict(self._data)
+        proposed[key] = value
+        self._commit(proposed)
 
     def __delitem__(self, key):
         self._check()
-        del self._data[key]
-        self._bible._changed()
+        proposed = dict(self._data)
+        del proposed[key]
+        self._commit(proposed)
 
     def update(self, *args, **kwargs):
         self._bible.validate_digest()
         proposed = {key: self._validated(key, value) for key, value in dict(*args, **kwargs).items()}
         if any(key not in self._data or self._data[key] != value for key, value in proposed.items()):
             self._check()
-            self._data.update(proposed)
-            self._bible._changed()
+            candidate = dict(self._data)
+            candidate.update(proposed)
+            self._commit(candidate)
 
     def clear(self):
         self._bible.validate_digest()
         if self._data:
             self._check()
-            self._data.clear()
-            self._bible._changed()
+            self._commit({})
 
     def __ior__(self, other):
         self.update(other)

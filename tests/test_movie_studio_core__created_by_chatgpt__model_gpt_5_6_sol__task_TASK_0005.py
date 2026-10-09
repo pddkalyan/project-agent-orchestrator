@@ -1,6 +1,7 @@
 import copy
 import json
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
@@ -598,6 +599,88 @@ class MovieStudioCoreTests(unittest.TestCase):
             ledger.bible.characters["B"] = {"name": "Bob"}
         with self.assertRaisesRegex(ProductionPolicyError, "revision/digest mismatch"):
             ledger.to_dict()
+
+    def test_bible_unicode_writes_reject_atomically_and_accept_valid_unicode(self):
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        before = ledger.to_dict()
+        invalid = chr(0xD800)
+        mutations = (
+            lambda: ledger.bible.update_fact("story_rules", "rule", invalid),
+            lambda: ledger.bible.update_fact("story_rules", invalid, "value"),
+            lambda: ledger.bible.characters.__setitem__(invalid, {"name": "Bob"}),
+            lambda: ledger.bible.characters.__setitem__("B", {invalid: "Bob"}),
+            lambda: ledger.bible.characters.__setitem__("B", {"name": invalid}),
+            lambda: ledger.bible.update_entity("characters", "A", {"name": invalid}, expected_revision=ledger.bible.revision),
+            lambda: ledger.bible.characters.update({"B": {"name": "Bob"}, "C": {"name": invalid}}),
+            lambda: ledger.bible.story_rules.update({"valid": "value", "invalid": invalid}),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with self.assertRaisesRegex(ProductionPolicyError, "UTF-8"):
+                    mutation()
+                self.assertEqual(ledger.to_dict(), before)
+                self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+        for namespace in MovieBible.MAP_NAMES:
+            value = invalid if namespace in {"story_rules", "continuity_facts"} else {"name": invalid}
+            with self.subTest(constructor_namespace=namespace):
+                with self.assertRaisesRegex(ProductionPolicyError, "UTF-8"):
+                    MovieBible(**{namespace: {"key": value}})
+                corrupt = copy.deepcopy(before)
+                corrupt["movie_bible"][namespace]["key"] = value
+                with self.assertRaisesRegex(ProductionPolicyError, "UTF-8"):
+                    ProductionLedger.from_dict(corrupt)
+        ledger.bible.update_fact("story_rules", "règle", "雪 🌙 café")
+        ledger.bible.update_entity("characters", "英雄", {"名前": "Élodie 🐈"}, expected_revision=ledger.bible.revision)
+        checkpoint = ledger.to_dict()
+        self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(checkpoint)).to_dict(), checkpoint)
+
+    def test_bible_digest_failure_cannot_publish_partial_mutation(self):
+        ledger = ProductionLedger("movie")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        before = ledger.to_dict()
+        original_digest = MovieBible._digest
+        def fail_proposed(bible, replacement_name=None, replacement_values=None):
+            if replacement_name is not None:
+                raise ProductionPolicyError("injected candidate digest failure")
+            return original_digest(bible)
+        mutations = (
+            lambda: ledger.bible.characters.__setitem__("B", {"name": "Bob"}),
+            lambda: ledger.bible.characters.update({"B": {"name": "Bob"}}),
+            lambda: ledger.bible.characters.__delitem__("A"),
+            lambda: ledger.bible.characters.clear(),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with patch.object(MovieBible, "_digest", fail_proposed):
+                    with self.assertRaisesRegex(ProductionPolicyError, "candidate digest failure"):
+                        mutation()
+                self.assertEqual(ledger.to_dict(), before)
+                self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+        # A failed write must not prevent a subsequent legal repair/update.
+        ledger.bible.characters["B"] = {"name": "Bob"}
+        ledger.validate()
+
+    def test_bible_namespace_restore_and_constructor_require_mapping(self):
+        for populated in (False, True):
+            ledger = ProductionLedger("movie")
+            if populated:
+                ledger.bible.characters["A"] = {"name": "Alice"}
+            checkpoint = ledger.to_dict()
+            for namespace in MovieBible.MAP_NAMES:
+                for invalid in ([], [("duplicate", {}), ("duplicate", {})], "", 0, None):
+                    with self.subTest(populated=populated, namespace=namespace, invalid=invalid):
+                        corrupt = copy.deepcopy(checkpoint)
+                        corrupt["movie_bible"][namespace] = invalid
+                        with self.assertRaisesRegex(ProductionPolicyError, "mapping"):
+                            ProductionLedger.from_dict(corrupt)
+                        with self.assertRaisesRegex(ProductionPolicyError, "mapping"):
+                            MovieBible(**{namespace: invalid})
+            if populated:
+                corrupt = copy.deepcopy(checkpoint)
+                corrupt["movie_bible"]["characters"] = [("A", {"name": "discarded"}), ("A", {"name": "Alice"})]
+                with self.assertRaisesRegex(ProductionPolicyError, "mapping"):
+                    ProductionLedger.from_dict(corrupt)
 
     def test_bible_checkpoint_integrity_and_legacy_boundary(self):
         empty = ProductionLedger("movie").to_dict()
