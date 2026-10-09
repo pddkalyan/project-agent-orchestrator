@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "task_id": "TASK-0005",
+  "report_as_of_utc": "2026-10-09T05:29:51.113Z",
+  "window_start_utc": "2026-10-08T05:29:51.113Z",
+  "source": "GitHub Actions repository workflow runs API, last 24h; not ChatGPT model-credit usage",
+  "window_complete": true,
+  "github_actions": {
+    "workflow_runs": 433,
+    "by_result": {
+      "pending": 1,
+      "skipped": 15,
+      "success": 167,
+      "failure": 53,
+      "action_required": 186,
+      "in_progress": 1,
+      "cancelled": 10
+    },
+    "interpretation": "Includes all repository workflows, not only Movie Studio coding. action_required is GitHub workflow approval state, not a test failure. GH cost/billable minutes NOT verified."
+  },
+  "chatgpt_codex_work": {
+    "primary_model": "GPT-6 Sol",
+    "reviewer": "GPT-6 Astra",
+    "five_hour_allowance_remaining": "UNAVAILABLE",
+    "weekly_allowance_remaining": "UNAVAILABLE",
+    "usage_credits_balance": "UNAVAILABLE",
+    "five_hour_reset_at": "UNAVAILABLE",
+    "weekly_reset_at": "UNAVAILABLE",
+    "access_method": "Settings > Usage (user account; not accessible through GitHub connector)",
+    "real_codex_sol_run_confirmed": false
+  },
+  "spending": {
+    "additional_spend_authorized_usd": 0,
+    "paid_api_usage_verified": "NO_CLAIM; subscription usage and billing dashboard not accessible"
+  },
+  "next_action": "User opens Codex signed into ChatGPT Plus, selects GPT-6 Sol, connects pddkalyan/project-agent-orchestrator and runs GitHub issue #35 with zero-spend settings; review real usage in Settings > Usage."
+}
