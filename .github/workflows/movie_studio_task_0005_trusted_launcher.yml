@@ -2,6 +2,12 @@ name: Movie Studio TASK-0005 Trusted Jules Launcher
 
 on:
   workflow_dispatch:
+  # One immediate trusted launch when THIS launcher is updated on main.
+  # PR updates never trigger it; the hourly schedule remains the fallback.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/movie_studio_task_0005_trusted_launcher.yml"
   schedule:
     - cron: '17 * * * *'
 
@@ -40,28 +46,44 @@ jobs:
           def get(url):
               req=urllib.request.Request(url,headers=headers)
               with urllib.request.urlopen(req,timeout=30) as response: return json.load(response)
-          allowed=True
-          reason="idle"
+          allowed=False
+          reason="unverified"
           try:
               import base64
-              obj=get(base+"/contents/monitor/task_0005_jules_active_session.json?ref=automation/TASK-0005-runtime-state")
-              state=json.loads(base64.b64decode(obj["content"]))
-              active=bool(state.get("active_session_id")) and state.get("state") not in ("COMPLETED","FAILED","CANCELLED")
-              if active:
-                  # The worker resumes this exact Jules session, never creates a duplicate.
-                  reason="resume existing Jules session"
+              def state_file(path, ref):
+                  payload=get(base+"/contents/"+path+"?ref="+ref)
+                  return json.loads(base64.b64decode(payload["content"]))
+              runtime_ref="automation/TASK-0005-runtime-state"
+              feature_ref="feature/TASK-0005-movie-studio-core"
+              state=state_file("monitor/task_0005_jules_active_session.json",runtime_ref)
+              review=state_file("monitor/task_0005_candidate_review_state.json",runtime_ref)
+              if review.get("task_id")!="TASK-0005" or type(review.get("reviewed_through_pr")) is not int:
+                  raise ValueError("invalid reviewed-candidate checkpoint")
+              last_reviewed=review["reviewed_through_pr"]
+              active=str(state.get("active_session_id") or "").strip()
+              if active and state.get("state") not in ("COMPLETED","FAILED","CANCELLED"):
+                  # Never create a second Jules session. Re-monitor the SAME session.
+                  # GitHub concurrency serializes trusted and legacy monitor runs.
+                  allowed=True
+                  reason="resume existing Jules session "+active
               else:
-                  wm_obj=get(base+"/contents/monitor/task_0005_candidate_review_watermark.json?ref=automation/TASK-0005-runtime-state")
-                  wm=json.loads(base64.b64decode(wm_obj["content"]))
-                  last_reviewed=wm.get("last_reviewed_candidate_pr")
-                  if wm.get("task_id")!="TASK-0005" or type(last_reviewed) is not int or last_reviewed<28:
-                      raise ValueError("invalid candidate review watermark")
-                  prs=get(base+"/pulls?state=open&per_page=100")
-                  for pr in prs:
-                      if pr["base"]["ref"]=="feature/TASK-0005-movie-studio-core" and pr["number"] > last_reviewed:
-                          allowed=False
-                          reason="new candidate PR awaiting review: #"+str(pr["number"])
-                          break
+                  trigger=state_file("tasks/dispatch/task_0005_free_worker_trigger.json",feature_ref)
+                  if state.get("state")=="COMPLETED" and state.get("dispatch_sequence")==trigger.get("sequence"):
+                      reason="await next supervisor dispatch increment"
+                  else:
+                      prs=get(base+"/pulls?state=open&per_page=100")
+                      if len(prs)>=100:
+                          reason="open-PR page limit; fail closed"
+                      else:
+                          pending=[
+                              pr["number"] for pr in prs
+                              if pr["base"]["ref"]==feature_ref and pr["number"]>last_reviewed
+                          ]
+                          if pending:
+                              reason="unreviewed Jules candidate PR #"+str(min(pending))
+                          else:
+                              allowed=True
+                              reason="idle and safe to start next increment"
           except Exception as e:
               allowed=False
               reason="preflight check failed: "+str(e)[:160]
@@ -224,7 +246,7 @@ jobs:
               if not sid:
                   raise SystemExit("JULES_SESSION_CREATE_RETURNED_NO_ID")
 
-          save_checkpoint({"task_id":"TASK-0005","active_session_id":sid,"session_url":session.get("url") or "https://jules.google.com/session/"+sid,"state":session.get("state"),"phase":2})
+          save_checkpoint({"task_id":"TASK-0005","active_session_id":sid,"session_url":session.get("url") or "https://jules.google.com/session/"+sid,"state":session.get("state"),"phase":2,"dispatch_sequence":trigger.get("sequence")})
           with open(os.environ["GITHUB_OUTPUT"],"a",encoding="utf-8") as fh:
               fh.write(f"session_id={sid}\n")
               fh.write(f"session_url={session.get('url') or ('https://jules.google.com/session/'+sid)}\n")
@@ -326,7 +348,7 @@ jobs:
                       print("Jules completed without creating a PR.")
                   else:
                       print("Jules PR:", prs[-1])
-                  save_checkpoint({"task_id":"TASK-0005","active_session_id":"","last_session_id":sid,"state":"COMPLETED","phase":2,"pr_url":prs[-1] if prs else None})
+                  save_checkpoint({"task_id":"TASK-0005","active_session_id":"","last_session_id":sid,"state":"COMPLETED","phase":2,"pr_url":prs[-1] if prs else None,"dispatch_sequence":trigger.get("sequence")})
                   sys.exit(0)
               if state=="AWAITING_PLAN_APPROVAL":
                   request("POST", f"{API}/sessions/{sid}:approvePlan", {})
@@ -374,7 +396,7 @@ jobs:
                   continue
               time.sleep(30)
 
-          save_checkpoint({"task_id":"TASK-0005","active_session_id":sid,"session_url":"https://jules.google.com/session/"+sid,"state":"MONITOR_WINDOW_ENDED","phase":2})
+          save_checkpoint({"task_id":"TASK-0005","active_session_id":sid,"session_url":"https://jules.google.com/session/"+sid,"state":"MONITOR_WINDOW_ENDED","phase":2,"dispatch_sequence":trigger.get("sequence")})
           print("JULES_MONITOR_HANDOFF: checkpoint saved for next watchdog cycle.")
           sys.exit(0)
           PY
