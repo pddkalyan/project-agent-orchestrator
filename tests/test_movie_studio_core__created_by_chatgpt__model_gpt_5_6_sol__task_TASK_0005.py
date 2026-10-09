@@ -286,7 +286,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             input_fingerprint="F1",
         )
         second = ledger.submit_generation(
-            job_id="ignored",
+            job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
             input_fingerprint="F1",
@@ -1772,6 +1772,17 @@ class MovieStudioCoreTests(unittest.TestCase):
         restored_binding = restored.shot_continuity_bindings["shot-1"]
         self.assertEqual(restored_binding, binding)
         self.assertEqual(restored_binding.character_ids, frozenset(["char-1"]))
+
+    def test_submit_generation_mismatched_job_id(self):
+        ledger = ProductionLedger("movie")
+        ledger.add_shot(Shot("S1"))
+        ledger.submit_generation(
+            job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1"
+        )
+        with self.assertRaisesRegex(ProductionPolicyError, "idempotency key reused with different input"):
+            ledger.submit_generation(
+                job_id="J2", shot_id="S1", idempotency_key="K1", input_fingerprint="F1"
+            )
 
 if __name__ == "__main__":
     unittest.main()
