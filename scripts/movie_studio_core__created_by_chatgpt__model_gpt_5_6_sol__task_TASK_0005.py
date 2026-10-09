@@ -646,7 +646,8 @@ class ProductionLedger:
         if existing_job_id:
             existing = self.jobs[existing_job_id]
             if (
-                existing.shot_id != shot_id
+                existing.job_id != job_id
+                or existing.shot_id != shot_id
                 or existing.input_fingerprint != input_fingerprint
                 or existing.max_attempts != max_attempts
             ):
