@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "task_id": "TASK-0005",
-  "primary_coding_model": "GPT-6 Sol",
+  "primary_coding_model": "GPT-6.1 Sol",
   "primary_surface": "ChatGPT Codex or Work signed in with included ChatGPT Plus plan",
   "expert_reviewer": "GPT-6 Astra",
   "reviewer_use": [
@@ -30,16 +30,15 @@
   "no_duplicate_sessions": true,
   "warning": "Do not infer ChatGPT usage from GitHub Actions minutes. Only enable Jules fallback if the Sol access/allowance issue is explicitly verified and one-worker safety confirmed.",
   "active_worker": {
-    "model": "gpt-6-sol",
-    "effort": "high",
+    "model": "gpt-6.1-sol",
+    "effort": "medium",
     "surface": "ChatGPT Work delegated coding agent",
-    "base_sha": "3a97d0a7e5e4965e6a432373ffd15a6a12085a7b",
-    "scope": "Controlled Movie Bible revision/digest binding; dependent candidate",
-    "published_codex_cloud_environment": "UNAVAILABLE_UNAUTHENTICATED_BROWSER",
-    "approved_narrow_candidate_pr": 37,
-    "approved_narrow_candidate_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870"
+    "base_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870",
+    "scope": "Resume 05ae0fc Bible/generation binding candidate and preserved Astra correction",
+    "local_worktree": "resumed-phase2",
+    "preserved_source_sha": "05ae0fc88260e7f5a35461313297185adc23243a"
   },
-  "last_verified_at_utc": "2026-10-09T06:20:06.584Z",
+  "last_verified_at_utc": "2026-10-09T12:09:27.386Z",
   "phase2_approval": "WITHHELD",
   "latest_validation": {
     "movie_studio_tests_passed": 93,
@@ -49,5 +48,7 @@
     "windows_candidate_regression": "NOT_RUN_NO_POWERSHELL",
     "actual_astra_narrow_review": "APPROVED_SOURCE_b277292_TREE_IDENTICAL",
     "additional_spend_usd": 0
-  }
+  },
+  "no_banked_resets": true,
+  "automatic_reload_enabled": false
 }
