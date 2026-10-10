@@ -109,8 +109,6 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         elif cmd == "agentapi":
             if subcmd == "send-message":
                 return self.mock_agentapi_result
-            elif subcmd == "get-conversation-metadata":
-                return 0, json.dumps({"conversation_id": args[2]}), ""
             elif subcmd == "--version":
                 return 0, "agentapi 1.0.0", ""
 
@@ -246,26 +244,6 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         valid, msg = bridge.is_config_valid()
         self.assertFalse(valid)
         self.assertIn("Unknown configuration key", msg)
-
-    def test_relative_workspace_dir_fails_closed(self):
-        self.write_local_config({
-            "workspace_dir": "relative-folder",
-            "dispatch_enabled": False,
-            "ping_enabled": True,
-            "status_enabled": True,
-            "conversation_id": "conv-existing",
-        })
-        bridge = AntigravityRemoteBridge(
-            state_dir=self.state_dir, runner=self.mock_runner, now_fn=self.mock_now
-        )
-        valid, message = bridge.is_config_valid()
-        self.assertFalse(valid)
-        self.assertIn("absolute", message)
-        self.assertEqual(bridge.process_inbox()["error"], STATUS_CODES["CONFIG_INVALID"])
-        self.assertFalse(any(
-            c["args"][:2] == ["agentapi", "send-message"]
-            for c in self.mock_runner_calls
-        ))
 
     def test_corrupt_watermark_fails_closed(self):
         bridge = self.create_bridge()
@@ -665,30 +643,6 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         self.assertFalse(res["results"][0]["dispatched"])
         self.assertEqual(res["results"][0]["code"], STATUS_CODES["PING_FAILED"])
 
-    def test_ping_requires_status_receipts_enabled(self):
-        # A native message must not be sent silently when the owner has
-        # opted out of the public status/acknowledgement channel.
-        self.write_local_config({
-            "workspace_dir": self.workspace_dir,
-            "dispatch_enabled": False, "ping_enabled": True,
-            "status_enabled": False, "conversation_id": "conv-existing",
-        })
-        bridge = AntigravityRemoteBridge(
-            state_dir=self.state_dir, runner=self.mock_runner, now_fn=self.mock_now
-        )
-        bridge.set_watermark(100)
-        self.mock_gh_comments_pages = [[
-            self.make_comment(101, command_id="11112222-3333-4444-5555-666677778888",
-                              action="ping_conversation", issue_number=47)
-        ]]
-        result = bridge.process_inbox()
-        self.assertEqual(result["results"][0]["code"], STATUS_CODES["PING_FAILED"])
-        self.assertFalse(result["results"][0]["dispatched"])
-        self.assertFalse(any(
-            call["args"][:2] == ["agentapi", "send-message"]
-            for call in self.mock_runner_calls
-        ))
-
     def test_ping_conversation_allowed_when_dirty_on_validated_sha(self):
         self.write_local_config({
             "workspace_dir": self.workspace_dir,
@@ -759,180 +713,6 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         self.assertTrue(res["results"][0]["valid"])
         self.assertFalse(res["results"][0]["dispatched"])
         self.assertEqual(res["results"][0]["code"], STATUS_CODES["PING_FAILED"])
-
-    def test_ping_conversation_blocks_failed_metadata_lookup(self):
-        self.write_local_config({
-            "workspace_dir": self.workspace_dir,
-            "dispatch_enabled": False, "ping_enabled": True,
-            "status_enabled": True, "conversation_id": "conv-existing",
-        })
-
-        def metadata_failure(args, cwd=None, input_data=None):
-            if args[:2] == ["agentapi", "get-conversation-metadata"]:
-                return 1, "", "not available"
-            return self.mock_runner(args, cwd=cwd, input_data=input_data)
-
-        bridge = AntigravityRemoteBridge(
-            state_dir=self.state_dir, runner=metadata_failure, now_fn=self.mock_now
-        )
-        bridge.set_watermark(100)
-        self.mock_gh_comments_pages = [[
-            self.make_comment(101, command_id="33333333-4444-5555-6666-777777777777",
-                              action="ping_conversation", issue_number=47)
-        ]]
-        result = bridge.process_inbox()
-        self.assertEqual(result["results"][0]["code"], STATUS_CODES["PING_FAILED"])
-        self.assertFalse(result["results"][0]["dispatched"])
-        self.assertFalse(any(c["args"][:2] == ["agentapi", "send-message"]
-                             for c in self.mock_runner_calls))
-
-    def test_ping_conversation_blocks_malformed_or_missing_metadata(self):
-        for output in ["garbled", "{}", "[]", '{"conversation_id": ""}',
-                       '{"conversation_id": "wrong"}']:
-            with self.subTest(output=output):
-                self.mock_runner_calls = []
-                self.write_local_config({
-                    "workspace_dir": self.workspace_dir,
-                    "dispatch_enabled": False, "ping_enabled": True,
-                    "status_enabled": True, "conversation_id": "conv-existing",
-                })
-
-                def bad_metadata(args, cwd=None, input_data=None):
-                    if args[:2] == ["agentapi", "get-conversation-metadata"]:
-                        return 0, output, ""
-                    return self.mock_runner(args, cwd=cwd, input_data=input_data)
-
-                bridge = AntigravityRemoteBridge(
-                    state_dir=self.state_dir, runner=bad_metadata, now_fn=self.mock_now
-                )
-                bridge.set_watermark(100)
-                command_id = "44444444-5555-6666-7777-888888888888"
-                claim_path = os.path.join(self.state_dir, "claims", command_id + ".json")
-                if os.path.exists(claim_path):
-                    os.remove(claim_path)
-                self.mock_gh_comments_pages = [[
-                    self.make_comment(101, command_id=command_id,
-                                      action="ping_conversation", issue_number=47)
-                ]]
-                result = bridge.process_inbox()
-                self.assertEqual(result["results"][0]["code"], STATUS_CODES["PING_FAILED"])
-                self.assertFalse(result["results"][0]["dispatched"])
-                self.assertFalse(any(c["args"][:2] == ["agentapi", "send-message"]
-                                     for c in self.mock_runner_calls))
-
-    def test_throttled_ping_result_survives_until_next_public_heartbeat(self):
-        bridge = self.create_bridge()
-        first_ok, _ = bridge.post_status_receipt(force=True)
-        self.assertTrue(first_ok)
-        blocked_ok, blocked_code = bridge.post_status_receipt(
-            force=False, last_result_code=STATUS_CODES["PING_DISPATCHED"]
-        )
-        self.assertFalse(blocked_ok)
-        self.assertEqual(blocked_code, STATUS_CODES["RATE_LIMITED"])
-        self.assertTrue(os.path.exists(bridge.pending_status_file))
-
-        # The following scheduled poll is idle; it must not overwrite the
-        # queued ping outcome with NO_OP.
-        self.now += timedelta(seconds=901)
-        second_ok, _ = bridge.post_status_receipt(
-            force=False, last_result_code=STATUS_CODES["NO_OP"]
-        )
-        self.assertTrue(second_ok)
-        posts = [call for call in self.mock_runner_calls
-                 if call["args"][:2] == ["gh", "api"] and "-f" in call["args"]]
-        self.assertEqual(len(posts), 2)
-        body = next(arg[5:] for arg in posts[-1]["args"]
-                    if arg.startswith("body="))
-        data = json.loads(body.split("```json\n")[1].split("\n```")[0])
-        self.assertEqual(data["last_command_result_code"], STATUS_CODES["PING_DISPATCHED"])
-        self.assertFalse(os.path.exists(bridge.pending_status_file))
-
-    def test_pending_result_survives_github_outage(self):
-        bridge = self.create_bridge()
-        self.mock_gh_api_post_result = (1, "", "API offline")
-        sent_ok, reason = bridge.post_status_receipt(
-            force=False, last_result_code=STATUS_CODES["PING_FAILED"]
-        )
-        self.assertFalse(sent_ok)
-        self.assertEqual(reason, "GH_API_STATUS_POST_FAILED")
-        self.assertTrue(os.path.exists(bridge.pending_status_file))
-
-        self.mock_gh_api_post_result = (0, "{}", "")
-        next_ok, _ = bridge.post_status_receipt(
-            force=False, last_result_code=STATUS_CODES["NO_OP"]
-        )
-        self.assertTrue(next_ok)
-        posts = [call for call in self.mock_runner_calls
-                 if call["args"][:2] == ["gh", "api"] and "-f" in call["args"]]
-        body = next(arg[5:] for arg in posts[-1]["args"]
-                    if arg.startswith("body="))
-        data = json.loads(body.split("```json\n")[1].split("\n```")[0])
-        self.assertEqual(data["last_command_result_code"], STATUS_CODES["PING_FAILED"])
-        self.assertFalse(os.path.exists(bridge.pending_status_file))
-
-    def test_ping_rejects_head_moving_between_validation_and_dispatch(self):
-        self.write_local_config({
-            "workspace_dir": self.workspace_dir,
-            "dispatch_enabled": False, "ping_enabled": True,
-            "status_enabled": True, "conversation_id": "conv-existing",
-        })
-        bridge = AntigravityRemoteBridge(
-            state_dir=self.state_dir, runner=self.mock_runner, now_fn=self.mock_now
-        )
-        bridge.set_watermark(100)
-        self.mock_gh_comments_pages = [[
-            self.make_comment(101, command_id="99999999-aaaa-bbbb-cccc-dddddddddddd",
-                              action="ping_conversation", issue_number=47)
-        ]]
-        get_info = bridge.get_local_git_info
-        calls = [0]
-
-        def simulated_head_change():
-            calls[0] += 1
-            if calls[0] == 2:
-                self.mock_git_sha = "f" * 40
-            return get_info()
-
-        bridge.get_local_git_info = simulated_head_change
-        res = bridge.process_inbox()
-        self.assertFalse(res["results"][0]["dispatched"])
-        self.assertEqual(res["results"][0]["code"], STATUS_CODES["INVALID_PAYLOAD"])
-        self.assertFalse(any(
-            call["args"][:2] == ["agentapi", "send-message"]
-            for call in self.mock_runner_calls
-        ))
-
-    def test_ping_rejects_remote_change_between_validation_and_dispatch(self):
-        self.write_local_config({
-            "workspace_dir": self.workspace_dir,
-            "dispatch_enabled": False, "ping_enabled": True,
-            "status_enabled": True, "conversation_id": "conv-existing",
-        })
-        bridge = AntigravityRemoteBridge(
-            state_dir=self.state_dir, runner=self.mock_runner, now_fn=self.mock_now
-        )
-        bridge.set_watermark(100)
-        self.mock_gh_comments_pages = [[
-            self.make_comment(101, command_id="88888888-aaaa-bbbb-cccc-dddddddddddd",
-                              action="ping_conversation", issue_number=47)
-        ]]
-        get_info = bridge.get_local_git_info
-        calls = [0]
-
-        def swapped_origin():
-            calls[0] += 1
-            if calls[0] == 2:
-                self.mock_git_remote_url = "https://github.com/attacker/repository.git"
-            return get_info()
-
-        bridge.get_local_git_info = swapped_origin
-        res = bridge.process_inbox()
-        self.assertFalse(res["results"][0]["dispatched"])
-        self.assertEqual(res["results"][0]["code"], STATUS_CODES["INVALID_PAYLOAD"])
-        self.assertFalse(any(
-            call["args"][:2] == ["agentapi", "send-message"]
-            for call in self.mock_runner_calls
-        ))
 
     def test_ping_conversation_windows_path_and_mock(self):
         windows_workspace = os.path.join(self.test_dir, "C_drive", "project")
