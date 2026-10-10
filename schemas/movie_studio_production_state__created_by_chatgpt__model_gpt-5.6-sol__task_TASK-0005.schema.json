@@ -19,7 +19,8 @@
     "generation_jobs",
     "idempotency_index",
     "authorization_index",
-    "provider_request_index"
+    "provider_request_index",
+    "episode_status_history"
   ],
   "properties": {
     "schema_version": {
@@ -38,10 +39,9 @@
         "IN_PRODUCTION",
         "ASSEMBLING",
         "FINAL_QC",
-        "ARCHIVING",
-        "COMPLETED",
         "BLOCKED"
-      ]
+      ],
+      "description": "Intermediate offline lifecycle only; ARCHIVING and COMPLETED require a future typed timeline/archive evidence contract."
     },
     "plan_revision": {
       "type": "integer",
@@ -52,7 +52,10 @@
     },
     "plan_revision_history": {
       "type": "array",
-      "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
     },
     "spend_limit_usd_micros": {
       "type": "integer",
@@ -141,6 +144,18 @@
       "additionalProperties": {
         "$ref": "#/$defs/shot_continuity_binding"
       }
+    },
+    "episode_status_history": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "PLANNED",
+          "IN_PRODUCTION",
+          "ASSEMBLING",
+          "FINAL_QC",
+          "BLOCKED"
+        ]
+      }
     }
   },
   "$defs": {
@@ -161,7 +176,8 @@
       "additionalProperties": false,
       "required": [
         "scene_id",
-        "status"
+        "status",
+        "status_history"
       ],
       "properties": {
         "scene_id": {
@@ -176,6 +192,18 @@
             "APPROVED",
             "BLOCKED"
           ]
+        },
+        "status_history": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "PLANNED",
+              "GENERATING",
+              "REVIEW",
+              "APPROVED",
+              "BLOCKED"
+            ]
+          }
         }
       }
     },
@@ -184,6 +212,8 @@
       "additionalProperties": false,
       "required": [
         "revision",
+        "content_digest",
+        "revision_history",
         "story_rules",
         "characters",
         "voices",
@@ -196,6 +226,17 @@
         "revision": {
           "type": "integer",
           "minimum": 1
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "revision_history": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
         },
         "story_rules": {
           "$ref": "#/$defs/string_map"
@@ -329,6 +370,7 @@
         "adapter_version",
         "quote_id",
         "input_fingerprint",
+        "plan_state_digest",
         "provider_request_key",
         "maximum_cost_usd_micros",
         "cloud_execution",
@@ -374,6 +416,10 @@
         "input_fingerprint": {
           "type": "string",
           "minLength": 1
+        },
+        "plan_state_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "provider_request_key": {
           "type": "string",
@@ -460,6 +506,7 @@
         "shot_id",
         "idempotency_key",
         "input_fingerprint",
+        "plan_state_digest",
         "max_attempts",
         "attempts",
         "status",
@@ -485,6 +532,10 @@
         "input_fingerprint": {
           "type": "string",
           "minLength": 1
+        },
+        "plan_state_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "max_attempts": {
           "type": "integer",
@@ -599,7 +650,8 @@
         "location_id",
         "costume_ids",
         "prop_ids",
-        "reference_asset_versions"
+        "reference_asset_versions",
+        "bible_digest"
       ],
       "properties": {
         "shot_id": {
@@ -609,6 +661,10 @@
         "bible_revision": {
           "type": "integer",
           "minimum": 1
+        },
+        "bible_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "character_ids": {
           "type": "array",
@@ -692,5 +748,38 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "generation_jobs": {
+            "minProperties": 1
+          }
+        },
+        "required": [
+          "generation_jobs"
+        ]
+      },
+      "then": {
+        "properties": {
+          "plan_frozen": {
+            "const": true
+          },
+          "scenes": {
+            "minProperties": 1
+          },
+          "shots": {
+            "minProperties": 1
+          },
+          "shot_plans": {
+            "minProperties": 1
+          },
+          "shot_continuity_bindings": {
+            "minProperties": 1
+          }
+        }
+      }
+    }
+  ]
 }
