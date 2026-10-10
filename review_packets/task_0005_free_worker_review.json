@@ -2,7 +2,7 @@
   "schema_version": 1,
   "task_id": "TASK-0005",
   "issue": 35,
-  "stage": "PHASE_2_PACKAGE_1_GUARDED_LIFECYCLE_CANDIDATE",
+  "stage": "PHASE_2_PACKAGE_1_ASTRA_CORRECTION_CANDIDATE",
   "base_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
   "worker": "ChatGPT Work Mode",
   "worker_model": "gpt-6.1-sol",
@@ -17,14 +17,14 @@
   },
   "change": "Package1 adds guarded legal episode/scene lifecycle transitions and immutable prior-status history, rejects direct lifecycle writes/advanced constructors, validates restored histories and current state evidence, and enables BLOCKED resume only to the immediately preceding legal state. Nonempty scene-bound shots are required to enter production; scene review requires assets/no active jobs; approval, assembly and final-QC entry require current canonical reviewed shots. ARCHIVING/COMPLETED remain unsupported until typed timeline/archive evidence exists. Reviewed/approved lifecycle content rejects incompatible regeneration and planning changes before mutation; historic exact callback/asset replay remains idempotent. Legacy boolean completion helper now always returns False and cannot certify completion.",
   "test_evidence": {
-    "movie_studio": "113 tests passed, 0 failures (preserved107 +6 lifecycle methods)",
-    "test_discovery": "113 tests passed, 0 failures",
+    "movie_studio": "116 tests passed, 0 failures (preserved 113 +3 focused correction methods)",
+    "test_discovery": "116 tests passed, 0 failures",
     "python_compile": "passed for core and tests",
     "json_schema_parse": "passed; runtime/schema shape tests passed; jsonschema package unavailable in both installed Python runtimes, so no independent JSON Schema meta-validation claimed",
     "git_diff_check": "passed",
-    "controller_regression": "34 passed on lifecycle worktree independently by coordinator",
-    "reviewer_bridge_regression": "68 passed on lifecycle worktree independently by coordinator",
-    "controller_production_fixtures": "5 existing workflow fixtures passed on lifecycle worktree independently by coordinator; dependency files unchanged",
+    "controller_regression": "34 tests passed; exact TASK-0002 deterministic workflow step passed in correction worktree",
+    "reviewer_bridge_regression": "68 tests passed; exact TASK-0003 deterministic workflow step passed in correction worktree",
+    "controller_production_fixtures": "All 5 exact Astra Review #4 production-path fixtures passed in correction worktree; isolated RUNNER_TEMP/PYTHONPATH",
     "windows_regression": "not run on package1 candidate; remote source/base evidence retained, no new Windows run claimed",
     "narrow_ci": "PR37 narrow candidate run 37892960500 SUCCESS per supervisor; dependent candidate not yet published",
     "safety_provenance": "passed changed-path worker allowlist, all changed artifact provenance, JSONL parse, zero-spend/cloud-only/no-merge boundaries and changed-file CI secret pattern; no provider calls or external workflow launches"
@@ -39,10 +39,10 @@
     "usage_metrics": "model/account usage unavailable; no usage estimate asserted"
   },
   "phase_2_gap_assessment": "Package1 addresses legal guarded episode/scene transitions, false completion and recoverable BLOCKED lifecycle. Exact source/base generation contracts remain covered. Complete frozen planning at dispatch, executable reconcile/durable writer, typed timeline/master QC, authenticated archive/cleanup evidence and accepted story/reference provenance remain separate unfinished packages. Reconstructed matrix maintained separately; no full Phase2 pass or Phase3 authorization claimed.",
-  "review_status": "PACKAGE_1_SELF_TESTED_PENDING_ASTRA_REVIEW",
+  "review_status": "PACKAGE_1_CORRECTED_SELF_TESTED_PENDING_EXACT_SOURCE_ASTRA_REVIEW",
   "reviewed_sha": null,
   "tests": {
-    "passed": 113,
+    "passed": 116,
     "failed": 0
   },
   "corrections": [
@@ -89,9 +89,19 @@
       "resolution": "Package1 adds guarded legal episode/scene lifecycle transitions and immutable prior-status history, rejects direct lifecycle writes/advanced constructors, validates restored histories and current state evidence, and enables BLOCKED resume only to the immediately preceding legal state. Nonempty scene-bound shots are required to enter production; scene review requires assets/no active jobs; approval, assembly and final-QC entry require current canonical reviewed shots. ARCHIVING/COMPLETED remain unsupported until typed timeline/archive evidence exists. Reviewed/approved lifecycle content rejects incompatible regeneration and planning changes before mutation; historic exact callback/asset replay remains idempotent. Legacy boolean completion helper now always returns False and cannot certify completion.",
       "status": "SELF_TESTED_PENDING_ASTRA_REVIEW",
       "regression_evidence": "113 tests with legal intermediate transition/history roundtrip, illegal/direct/constructor/restore/empty/unreviewed/no-archive rejection, BLOCKED resume/replay and atomic lifecycle-preserving generation/planning checks"
+    },
+    {
+      "review_status": "ACTUAL_ASTRA_REJECT_PER_SUPERVISOR",
+      "preserved_candidate_sha": "6fcec7da56dd960ae8b9827fbde3e0403a03aac6",
+      "findings": [
+        "Missing lifecycle status/history can downgrade checkpoints to PLANNED",
+        "Public planning writes can publish invalid active graphs"
+      ],
+      "implementation": "Require explicit episode and per-scene status; allow absent history only for explicit PLANNED legacy records. Validate detached prospective graphs before scene/shot insertion or owned shot structural mutation; reject owned ID renames. Preserve state and ownership on rejection.",
+      "regressions": "Deletion matrix for status/history/both across every supported lifecycle and BLOCKED variant; exact restoration, explicit planned history defaults, active method/map/attribute atomic rejection and legal scaffolding/moves. Existing corruption tests now inject internal corruption after legal insertion and retain original validation assertions."
     }
   ],
-  "migration": "New episode_status_history and per-scene status_history checkpoint arrays. Only PLANNED legacy lifecycle records may default empty histories; advanced legacy statuses without history reject rather than fabricating transitions. Advanced public constructors reject; controlled restore validates the full history and current evidence. ARCHIVING/COMPLETED checkpoints fail closed. Schema version remains2 for this unreleased offline scaffold; no live checkpoint migration is claimed.",
+  "migration": "All checkpoints require explicit episode_status and every present scene status. Only explicit PLANNED legacy lifecycle records may default empty histories. Advanced/BLOCKED absent history rejects. No status defaulting, invented transitions, live migration or new approval claimed. Schema remains unreleased offline version 2.",
   "worker_reasoning_effort": "medium",
   "prior_review_history": {
     "narrow_rejected_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",

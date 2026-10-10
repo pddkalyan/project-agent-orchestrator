@@ -11,6 +11,7 @@ from types import MappingProxyType
 from enum import Enum
 from hashlib import sha256
 import json
+from copy import copy
 from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Protocol, Tuple
 
 SCHEMA_VERSION = 2
@@ -132,6 +133,8 @@ class Scene:
             for job in owner.jobs.values()
         ):
             raise ProductionPolicyError("scene structure is referenced by generation history")
+        if name == "scene_id" and owner is not None and value != self.scene_id:
+            raise ProductionPolicyError("owned scene identity cannot be renamed")
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name):
@@ -223,6 +226,12 @@ class Shot:
             job.shot_id == self.shot_id for job in owner.jobs.values()
         ):
             raise ProductionPolicyError("shot structure is referenced by generation history")
+        if name in {"shot_id", "scene_id", "has_dialogue_or_audio"} and owner is not None:
+            if name == "shot_id" and value != self.shot_id:
+                raise ProductionPolicyError("owned shot identity cannot be renamed")
+            prospective = copy(self)
+            object.__setattr__(prospective, name, value)
+            owner._preflight_plan_item("shots", prospective)
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name):
@@ -1017,12 +1026,22 @@ class ProductionLedger:
                 f"conflicting {kind} replacement is not allowed without a new revision and untouched shot"
             )
 
+    def _preflight_plan_item(self, map_name, item):
+        """Validate a detached prospective graph before publishing data or ownership."""
+        candidate = type(self).from_dict(self.to_dict())
+        prospective = copy(item)
+        object.__setattr__(prospective, "_plan_owner", None)
+        key = prospective.scene_id if map_name == "scenes" else prospective.shot_id
+        getattr(candidate, map_name)._put(key, prospective)
+        candidate.validate()
+
     def add_scene(self, scene: Scene) -> None:
         self._require_lifecycle_mutable()
         if self.plan_frozen:
             raise ProductionPolicyError("plan is frozen")
         if not scene.scene_id or scene.scene_id in self.scenes:
             raise ProductionPolicyError("scene id must be non-empty and unique")
+        self._preflight_plan_item("scenes", scene)
         self.scenes._put(scene.scene_id, scene)
 
     def add_shot(self, shot: Shot) -> None:
@@ -1033,6 +1052,7 @@ class ProductionLedger:
             raise ProductionPolicyError("shot id must be non-empty and unique")
         if shot.scene_id and shot.scene_id not in self.scenes:
             raise ProductionPolicyError("shot references unknown scene")
+        self._preflight_plan_item("shots", shot)
         self.shots._put(shot.shot_id, shot)
 
     def add_shot_plan(self, plan: ShotPlan) -> None:
@@ -1587,7 +1607,8 @@ class ProductionLedger:
         ):
             raise ProductionPolicyError("missing plan revision history")
         data.setdefault("episode_id", "")
-        data.setdefault("episode_status", EpisodeStatus.PLANNED.value)
+        if "episode_status" not in data:
+            raise ProductionPolicyError("episode checkpoint requires explicit lifecycle status")
         if "episode_status_history" not in data:
             if data["episode_status"] != EpisodeStatus.PLANNED.value:
                 raise ProductionPolicyError("advanced episode checkpoint requires lifecycle history")
@@ -1733,7 +1754,8 @@ class ProductionLedger:
             if not isinstance(raw, Mapping):
                 raise ProductionPolicyError("scene must be a mapping")
             raw = dict(raw)
-            raw.setdefault("status", SceneStatus.PLANNED.value)
+            if "status" not in raw:
+                raise ProductionPolicyError("scene checkpoint requires explicit lifecycle status")
             if "status_history" not in raw:
                 if raw["status"] != SceneStatus.PLANNED.value:
                     raise ProductionPolicyError("advanced scene checkpoint requires lifecycle history")

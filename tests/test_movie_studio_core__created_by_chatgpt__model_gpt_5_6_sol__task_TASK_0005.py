@@ -361,7 +361,7 @@ class MovieStudioCoreTests(unittest.TestCase):
 
         # Dangling scene reference
         dangling_ref = copy.deepcopy(ledger)
-        dangling_ref.shots["S1"].scene_id = "SC2"
+        object.__setattr__(dangling_ref.shots["S1"], "scene_id", "SC2")
         with self.assertRaises(ProductionPolicyError):
             dangling_ref.validate()
 
@@ -1246,8 +1246,8 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_checkpoint_rejects_corrupt_in_memory_enum_values(self):
         shot_status_ledger = ProductionLedger("movie")
         shot = Shot("S1")
-        shot.status = "NOT_A_STATUS"
         shot_status_ledger.add_shot(shot)
+        shot.status = "NOT_A_STATUS"
 
         job_status_ledger = ProductionLedger("movie")
         job_status_ledger.add_shot(Shot("S1"))
@@ -1261,10 +1261,10 @@ class MovieStudioCoreTests(unittest.TestCase):
 
         review_ledger = ProductionLedger("movie")
         review_shot = self.generated_shot()
+        review_ledger.add_shot(review_shot)
         review_shot.reviews = {
             Gate.VISUAL_QA: Review(Gate.VISUAL_QA, "v1", "BOGUS")
         }
-        review_ledger.add_shot(review_shot)
 
         for ledger in (shot_status_ledger, job_status_ledger, review_ledger):
             with self.subTest(ledger=ledger), self.assertRaises(
@@ -1969,6 +1969,98 @@ class MovieStudioCoreTests(unittest.TestCase):
                     ledger.bible.update_fact("story_rules", "changed", "value")
                 self.assertEqual(ledger.to_dict(), before)
 
+    def test_restore_requires_explicit_lifecycle_status_and_advanced_history(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        checkpoints = [ledger.to_dict()]
+        def record_with_blocked_variants():
+            checkpoints.append(ledger.to_dict())
+            if ledger.scenes["SC1"].status is not SceneStatus.APPROVED:
+                ledger.transition_scene("SC1", SceneStatus.BLOCKED)
+                checkpoints.append(ledger.to_dict())
+                ledger.resume_scene("SC1")
+            ledger.transition_episode(EpisodeStatus.BLOCKED)
+            checkpoints.append(ledger.to_dict())
+            ledger.resume_episode()
+        record_with_blocked_variants()
+        ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        record_with_blocked_variants()
+        ledger.transition_scene("SC1", SceneStatus.GENERATING)
+        record_with_blocked_variants()
+        ledger.shots["S1"].bind_generated_asset("v1")
+        ledger.transition_scene("SC1", SceneStatus.REVIEW)
+        record_with_blocked_variants()
+        for gate in required_gates(ledger.shots["S1"]):
+            ledger.shots["S1"].reviews[gate] = Review(gate, "v1", Verdict.PASS)
+        canonicalize(ledger.shots["S1"])
+        ledger.transition_scene("SC1", SceneStatus.APPROVED)
+        record_with_blocked_variants()
+        ledger.transition_episode(EpisodeStatus.ASSEMBLING)
+        record_with_blocked_variants()
+        ledger.transition_episode(EpisodeStatus.FINAL_QC)
+        record_with_blocked_variants()
+        for checkpoint in checkpoints:
+            self.assertEqual(ProductionLedger.from_dict(checkpoint).to_dict(), checkpoint)
+            for scope, status, history in ((None, "episode_status", "episode_status_history"), ("SC1", "status", "status_history")):
+                for removed in ((status,), (history,), (status, history)):
+                    data = copy.deepcopy(checkpoint)
+                    record = data if scope is None else data["scenes"][scope]
+                    for key in removed:
+                        record.pop(key)
+                    with self.subTest(checkpoint=checkpoint["episode_status"], scope=scope, removed=removed):
+                        if record.get(status) == "PLANNED" and removed == (history,):
+                            expected = copy.deepcopy(checkpoint)
+                            (expected if scope is None else expected["scenes"][scope])[history] = []
+                            self.assertEqual(ProductionLedger.from_dict(data).to_dict(), expected)
+                        else:
+                            with self.assertRaises(ProductionPolicyError):
+                                ProductionLedger.from_dict(data)
+
+    def test_planning_mutation_preflights_active_graph_and_preserves_ownership(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("movie")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_scene(Scene("SC2"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        ledger.transition_scene("SC1", SceneStatus.GENERATING)
+        before = ledger.to_dict()
+        for route in ("method", "map"):
+            shot = Shot("unbound")
+            with self.subTest(route=route), self.assertRaises(ProductionPolicyError):
+                if route == "method":
+                    ledger.add_shot(shot)
+                else:
+                    ledger.shots[shot.shot_id] = shot
+            self.assertFalse(hasattr(shot, "_plan_owner"))
+            self.assertEqual(ledger.to_dict(), before)
+        for item, field, value in ((ledger.shots["S1"], "scene_id", ""), (ledger.shots["S1"], "scene_id", "SC2"), (ledger.scenes["SC1"], "scene_id", "renamed"), (ledger.shots["S1"], "shot_id", "renamed")):
+            with self.subTest(field=field, value=value), self.assertRaises(ProductionPolicyError):
+                setattr(item, field, value)
+            self.assertIs(item._plan_owner, ledger)
+            self.assertEqual(ledger.to_dict(), before)
+        # Legal active insertion keeps both scenes nonempty during a move.
+        ledger.add_shot(Shot("S2", scene_id="SC1"))
+        ledger.shots["S1"].scene_id = "SC2"
+        ledger.validate()
+        self.assertEqual(ProductionLedger.from_dict(ledger.to_dict()).to_dict(), ledger.to_dict())
+
+    def test_planned_scaffold_routes_remain_legal_and_owned_ids_stay_valid(self):
+        ledger = ProductionLedger("movie")
+        shot = Shot("S1")
+        ledger.shots["S1"] = shot
+        ledger.scenes["SC1"] = Scene("SC1")
+        shot.scene_id = "SC1"
+        shot.scene_id = ""
+        shot.has_dialogue_or_audio = True
+        before = ledger.to_dict()
+        with self.assertRaises(ProductionPolicyError):
+            ledger.scenes["SC1"].scene_id = "SC2"
+        self.assertEqual(ledger.to_dict(), before)
+        self.assertEqual(ProductionLedger.from_dict(before).to_dict(), before)
+
     def test_unknown_lifecycle_status_fails_closed(self):
         ledger = ProductionLedger("movie")
         ledger.add_scene(Scene("SC1"))
@@ -2128,8 +2220,8 @@ class MovieStudioCoreTests(unittest.TestCase):
         scene = Scene("SC1")
         with self.assertRaises(ProductionPolicyError):
             scene.status = "NOT_AN_ENUM"
-        object.__setattr__(scene, "status", "NOT_AN_ENUM")
         ledger2.add_scene(scene)
+        object.__setattr__(scene, "status", "NOT_AN_ENUM")
         with self.assertRaises(ProductionPolicyError):
             ledger2.validate()
 
