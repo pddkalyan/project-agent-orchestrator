@@ -29,13 +29,13 @@ async function fetchPRs() {
         }
 
         prs.forEach(pr => {
-            let statusClass = 'status-open';
+            let statusClass = 'bg-green-900/40 text-green-400 border border-green-800';
             let statusText = 'OPEN';
             if (pr.merged_at) {
-                statusClass = 'status-merged';
+                statusClass = 'bg-purple-900/40 text-purple-400 border border-purple-800';
                 statusText = 'MERGED';
             } else if (pr.state === 'closed') {
-                statusClass = 'status-closed';
+                statusClass = 'bg-red-900/40 text-red-400 border border-red-800';
                 statusText = 'CLOSED';
             }
 
@@ -43,8 +43,8 @@ async function fetchPRs() {
             el.className = 'border-b border-cinematic-border/50 py-3 last:border-0 hover:bg-black/20 transition-colors px-2 -mx-2 rounded';
             el.innerHTML = `
                 <div class="flex justify-between items-start mb-1">
-                    <a href="${pr.html_url}" target="_blank" class="text-sm font-semibold text-white hover:text-cinematic-accent2 truncate pr-4">${escapeHTML(pr.title)}</a>
-                    <span class="status-badge ${statusClass} flex-shrink-0">${statusText}</span>
+                    <a href="${escapeHTML(pr.html_url)}" target="_blank" class="text-sm font-semibold text-white hover:text-cinematic-accent2 truncate pr-4">${escapeHTML(pr.title)}</a>
+                    <span class="px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${statusClass} flex-shrink-0">${statusText}</span>
                 </div>
                 <div class="flex justify-between items-center text-xs text-cinematic-muted font-mono">
                     <span>#${pr.number} by ${escapeHTML(pr.user.login)}</span>
@@ -75,12 +75,12 @@ async function fetchActions() {
         }
 
         runs.forEach(run => {
-            let icon = '<i class="fa-solid fa-circle-notch fa-spin status-in_progress"></i>';
+            let icon = '<i class="fa-solid fa-circle-notch fa-spin text-yellow-400"></i>';
             if (run.status === 'completed') {
                 if (run.conclusion === 'success') {
-                    icon = '<i class="fa-solid fa-check-circle status-success"></i>';
+                    icon = '<i class="fa-solid fa-check-circle text-green-400"></i>';
                 } else {
-                    icon = '<i class="fa-solid fa-times-circle status-failure"></i>';
+                    icon = '<i class="fa-solid fa-times-circle text-red-400"></i>';
                 }
             }
 
@@ -89,7 +89,7 @@ async function fetchActions() {
             el.innerHTML = `
                 <div class="text-lg">${icon}</div>
                 <div class="flex-1 min-w-0">
-                    <div class="text-sm text-gray-200 truncate font-semibold"><a href="${run.html_url}" target="_blank" class="hover:text-cinematic-accent2">${escapeHTML(run.name)}</a></div>
+                    <div class="text-sm text-gray-200 truncate font-semibold"><a href="${escapeHTML(run.html_url)}" target="_blank" class="hover:text-cinematic-accent2">${escapeHTML(run.name)}</a></div>
                     <div class="text-xs text-cinematic-muted font-mono truncate">
                         ${escapeHTML(run.display_title)} &bull; ${escapeHTML(run.head_branch)}
                     </div>

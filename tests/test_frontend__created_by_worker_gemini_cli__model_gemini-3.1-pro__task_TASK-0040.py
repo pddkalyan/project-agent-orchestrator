@@ -39,6 +39,8 @@ class TestFrontend(unittest.TestCase):
         self.assertIn('escapeHTML(pr.title)', content, "PR title not escaped")
         self.assertIn('escapeHTML(pr.user.login)', content, "PR user not escaped")
         self.assertIn('escapeHTML(run.name)', content, "Run name not escaped")
+        self.assertIn('escapeHTML(pr.html_url)', content, "PR html_url not escaped")
+        self.assertIn('escapeHTML(run.html_url)', content, "Run html_url not escaped")
 
     def test_css_styling(self):
         with open(self.style_css_path, 'r', encoding='utf-8') as f:
