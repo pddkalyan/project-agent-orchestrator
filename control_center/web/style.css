@@ -62,3 +62,47 @@ body {
 
 /* Glow effects */
 .glow-text { text-shadow: 0 0 10px rgba(0, 229, 255, 0.5); }
+
+/* Avoid clipped model/status text on compact displays. A 320px screenshot
+   can hide clipped content despite reporting zero horizontal scroll. */
+@media (max-width: 639px) {
+    .movie-studio-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.75rem;
+        overflow: visible;
+    }
+
+    .movie-studio-header .header-brand,
+    .movie-studio-header .header-brand > div:last-child {
+        min-width: 0;
+    }
+
+    .movie-studio-header .header-summary {
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.5rem 1rem;
+        align-items: flex-start;
+        min-width: 0;
+    }
+
+    .movie-studio-header .header-meta {
+        max-width: 100%;
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+}
+
+@media (max-width: 420px) {
+    .movie-studio-header .header-summary {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.35rem;
+    }
+
+    .movie-studio-header .header-meta {
+        text-align: left;
+        font-size: 0.6875rem;
+        line-height: 1.4;
+    }
+}
