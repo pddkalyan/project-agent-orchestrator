@@ -268,8 +268,13 @@ class AntigravityRemoteBridge:
         workspace = self.config.get("workspace_dir", "").strip()
         if not workspace:
             return False, "workspace_dir is not configured"
+        # Checking isabs(abspath(...)) is vacuous: abspath always returns
+        # an absolute path. Reject an ambiguous relative workspace before
+        # any local Git verification or native command execution.
+        if not os.path.isabs(workspace):
+            return False, "workspace_dir must be an absolute existing path"
         abs_workspace = os.path.abspath(workspace)
-        if not os.path.isabs(abs_workspace) or not os.path.exists(abs_workspace):
+        if not os.path.exists(abs_workspace):
             return False, "workspace_dir must be an absolute existing path"
         if not os.path.isdir(abs_workspace):
             return False, "workspace_dir directory does not exist"
