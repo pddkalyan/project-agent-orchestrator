@@ -1,0 +1,33 @@
+{
+  "task_id": "TASK-HANDOFF-0001",
+  "objective_type": "CODE_MODIFICATION",
+  "repository": "pddkalyan/project-agent-orchestrator",
+  "expected_base_sha": "1a759176a258619f85f2b612319cb6b6d20eeec6",
+  "requested_agent": "Google Jules",
+  "proposed_files_allowlist": [
+    "control_center/handoff/packet.py",
+    "control_center/handoff/store.py"
+  ],
+  "source_review_evidence_refs": {
+    "issue_number": 43,
+    "pr_number": 45
+  },
+  "dependencies": [],
+  "origin_trust_type": "UNTRUSTED_PROPOSAL",
+  "lease_epoch_expiry": {
+    "lease_owner": "Google Jules",
+    "epoch": 1,
+    "expires_at_utc": "2026-10-10T18:00:00Z"
+  },
+  "idempotent_receipt_id": "rcpt_TASK-HANDOFF-0001_1",
+  "checkpoint_last_tested_sha": "1a759176a258619f85f2b612319cb6b6d20eeec6",
+  "status_error": {
+    "status": "PROPOSED",
+    "error_code": null,
+    "error_message": null
+  },
+  "retry_counter": 0,
+  "metadata": {
+    "capacity": "UNKNOWN"
+  }
+}

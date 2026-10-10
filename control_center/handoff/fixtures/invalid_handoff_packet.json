@@ -1,0 +1,30 @@
+{
+  "task_id": "TASK-HANDOFF-MALICIOUS-0001",
+  "objective_type": "CODE_MODIFICATION",
+  "repository": "pddkalyan/project-agent-orchestrator",
+  "expected_base_sha": "1a759176a258619f85f2b612319cb6b6d20eeec6",
+  "requested_agent": "Google Jules",
+  "proposed_files_allowlist": [
+    "control_center/web/index.html",
+    "../../etc/passwd"
+  ],
+  "source_review_evidence_refs": {
+    "issue_number": 43
+  },
+  "dependencies": [],
+  "origin_trust_type": "UNTRUSTED_PROPOSAL",
+  "lease_epoch_expiry": {
+    "lease_owner": null,
+    "epoch": 0,
+    "expires_at_utc": null
+  },
+  "idempotent_receipt_id": "rcpt_malicious_1",
+  "checkpoint_last_tested_sha": null,
+  "status_error": {
+    "status": "PROPOSED",
+    "error_code": null,
+    "error_message": null
+  },
+  "retry_counter": 0,
+  "metadata": {}
+}
