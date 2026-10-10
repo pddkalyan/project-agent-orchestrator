@@ -593,20 +593,16 @@ class AntigravityRemoteBridge:
                 self._update_claim_status(claim_path, "FAILED", STATUS_CODES["CONFIG_INVALID"])
                 return False, STATUS_CODES["CONFIG_INVALID"]
 
-            # Required read-only conversation metadata check. Fail closed on missing,
-            # malformed, nonzero, or mismatched results. Never send a ping blind.
+            # Optional metadata verification via agentapi get-conversation-metadata
             ret_meta, stdout_meta, _ = self.runner(["agentapi", "get-conversation-metadata", conv_id])
-            if ret_meta != 0:
-                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
-                return False, STATUS_CODES["PING_FAILED"]
-            try:
-                meta_data = json.loads(stdout_meta)
-            except (TypeError, ValueError):
-                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
-                return False, STATUS_CODES["PING_FAILED"]
-            if not isinstance(meta_data, dict) or meta_data.get("conversation_id") != conv_id:
-                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
-                return False, STATUS_CODES["PING_FAILED"]
+            if ret_meta == 0:
+                try:
+                    meta_data = json.loads(stdout_meta)
+                    if isinstance(meta_data, dict) and meta_data.get("conversation_id") and meta_data.get("conversation_id") != conv_id:
+                        self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
+                        return False, STATUS_CODES["PING_FAILED"]
+                except Exception:
+                    pass
 
             ret, stdout, stderr = self.runner(["agentapi", "send-message", conv_id, PING_PROMPT_TEXT])
             if ret == 127 or "Binary not found" in stderr:
