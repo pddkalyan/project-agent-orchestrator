@@ -56,6 +56,7 @@ Save initial safe configuration to `%USERPROFILE%\.antigravity_bridge_state\conf
 {
   "workspace_dir": "C:\\path\\to\\project-agent-orchestrator",
   "dispatch_enabled": false,
+  "ping_enabled": false,
   "status_enabled": true,
   "conversation_id": "conv-your-active-id",
   "poll_interval_sec": 900,
@@ -82,7 +83,11 @@ For zero-spend, one-time local opt-in on the Windows host machine:
    Copy-Item "control_center\remote_bridge\bridge.py" "$env:USERPROFILE\.gemini\config\sidecars\github_bridge\bridge.py" -Force
    ```
 3. **Controlled Reload & Configuration Opt-In**: Update `%USERPROFILE%\.antigravity_bridge_state\config.json` with `"ping_enabled": true` or `"dispatch_enabled": true` by explicit user action, and trigger a controlled sidecar reload if required.
-4. **Two-Way Verification**: A public Issue #55 receipt code of `PING_DISPATCHED` confirms successful command processing and `agentapi send-message` invocation. However, an `agentapi` zero exit code alone is not full two-way proof; the operator/system must independently verify receipt of the prewritten acknowledgement ("Controller connectivity check only...") inside the active Antigravity conversation interface.
+4. **Two-Way Verification**: A public Issue #55 receipt code of `PING_DISPATCHED` confirms successful command processing and `agentapi send-message` invocation. However, an `agentapi` zero exit code alone is not full two-way proof; the operator/system must independently verify receipt of the prewritten acknowledgement ("Controller connectivity check only...") inside the active Antigravity conversation interface. The bridge preserves a result blocked by the 15-minute receipt cooldown or a temporary GitHub API error in `pending_status_result.json` and publishes it on the next successful heartbeat; an immediate absence of `PING_DISPATCHED` is not proof of failure. Never clear this state to force a retry.
+
+   **Hard activation gate:** The local `agentapi get-conversation-metadata <conversation_id>` response must exit successfully and return a JSON object with an exact `conversation_id` matching the configured active conversation. A CLI success with an unexpected/malformed schema is **not sufficient**. Investigate schema safely, fix/test the parser in a reviewable draft, and do not loosen this check or send a speculative ping. Check the actual sidecar process uses the pinned and tested script before adding any command. Keep `dispatch_enabled: false` while exercising `ping_enabled: true` for the one-time benign test.
+
+   **Last-moment safety:** Immediately before each native send, the bridge revalidates Git origin, exact `agent/control-center-standalone` branch, and exact expected HEAD SHA against the authenticated command. The ping can tolerate a dirty working tree on that verified commit, but cannot tolerate a changed branch, unverified remote, or HEAD drift.
 
 ### 4. Dry-Run Setup Verification & Offline Unit Testing
 To verify setup without creating GitHub comments or sending messages:
@@ -94,6 +99,43 @@ Run offline unit tests:
 ```powershell
 PYTHONPATH=. python -m unittest -v tests/test_control_center_remote_bridge.py
 ```
+
+### 4b. Exact-Candidate Offline Test + Redacted Native Probe
+
+**Do not test by replacing the installed sidecar first.** On Windows, use a
+separate checkout of PR #71 with its **exact reviewed commit SHA**. The current
+working frontend repository/PR #46 should not be reset or checked out.
+
+From the *root of the isolated candidate checkout* (PowerShell):
+
+```powershell
+python -m unittest discover -s tests -p "test_control_center_remote_bridge.py" -v
+python -m unittest discover -s tests -p "test_bridge_metadata_schema__created_by_agent_gpt6.py" -v
+python -m py_compile "control_center/remote_bridge/bridge.py" "control_center/remote_bridge/check_agentapi_metadata__created_by_agent_gpt6.py"
+git diff --check HEAD~1 HEAD
+```
+
+The redacted schema probe is also read-only; it reads the existing *local*
+`~/.antigravity_bridge_state/config.json` conversation ID, runs only
+`agentapi get-conversation-metadata` and prints field names and Boolean
+match results—**never raw metadata, IDs, prompts, paths or credentials**:
+
+```powershell
+python "control_center/remote_bridge/check_agentapi_metadata__created_by_agent_gpt6.py"
+```
+
+If the probe returns `FAIL_CLOSED`, `AGENTAPI_UNAVAILABLE` or any other
+non-`SCHEMA_VERIFIED` verdict, **do not enable or send a ping**. Verify
+`agentapi` location with trusted local read-only tools; if the actual
+metadata schema differs, correct the reviewed bridge parser and regression
+tests **before** installation. Do not work around this with skipped metadata
+checks or arbitrary commands.
+
+PR #71's current development branch has *diverged in Git history* from the
+already installed PR #69 stable bridge. A file-by-file audit found the prior
+bridge/security behavior retained in candidate source, but this is **not** a
+substitute for an exact-SHA offline suite and a safe local staging comparison.
+Never blindly merge both PRs or reinstall over the working process.
 
 ### 5. Revocation & Disabling
 To immediately disable the bridge:
