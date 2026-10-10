@@ -200,7 +200,13 @@ function renderBridgeStatus(receipt, currentMS) {
 async function fetchBridgeStatus() {
     renderBridgeStatus(null, Date.now());
     try {
-        const data = await getPublicJSON('/issues/55/comments?per_page=100');
+        // Issue #55 grows by roughly 96 receipts per day. Restrict the query
+        // to the recent window so the first GitHub page never silently shows
+        // yesterday's heartbeat once the issue has over 100 comments.
+        const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+        const data = await getPublicJSON(
+            '/issues/55/comments?per_page=100&since=' + encodeURIComponent(since)
+        );
         if (!Array.isArray(data)) throw new Error('Invalid status data');
         const receipts = data.map(receiptFromComment).filter(Boolean)
             .sort((a, b) => b.observed.getTime() - a.observed.getTime());
