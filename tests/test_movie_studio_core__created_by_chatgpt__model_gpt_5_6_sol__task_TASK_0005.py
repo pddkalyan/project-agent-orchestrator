@@ -4,10 +4,19 @@ import unittest
 import os
 import tempfile
 from dataclasses import replace
+from hashlib import sha256
 from unittest.mock import patch
 from pathlib import Path
 
 from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
+    TimelineClip,
+    TimelineRecord,
+    timeline_digest,
+    MasterRecord,
+    MasterQCRecord,
+    ArchiveReceipt,
+    CleanupArtifact,
+    CleanupAuthorization,
     AtomicCheckpointStore,
     OfflineGenerationCoordinator,
     ShotPlan,
@@ -173,6 +182,209 @@ class MovieStudioCoreTests(unittest.TestCase):
             ),
         )
         return attempt
+
+    def master_evidence_fixture(self, duration=300_000):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
+        ledger = ProductionLedger("master-policy", episode_id="episode-1")
+        for scene in ("SC2", "SC1"):  # insertion order deliberately differs from timeline policy
+            ledger.add_scene(Scene(scene))
+            for sequence in (1, 0):
+                shot_id = scene + "-" + str(sequence)
+                ledger.add_shot(Shot(shot_id, scene_id=scene, has_dialogue_or_audio=True))
+                ledger.add_shot_plan(ShotPlan(shot_id, scene, sequence, duration, "prompt-" + shot_id, True))
+                ledger.add_shot_continuity_binding(ShotContinuityBinding(shot_id, ledger.bible.revision, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset()))
+        ledger.freeze_plan()
+        ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
+        for scene in ledger.scenes:
+            ledger.transition_scene(scene, SceneStatus.GENERATING)
+            for shot in ledger.shots.values():
+                if shot.scene_id == scene:
+                    shot.bind_generated_asset("asset-" + shot.shot_id)
+                    for gate in required_gates(shot):
+                        shot.reviews[gate] = Review(gate, shot.asset_version, Verdict.PASS)
+                    canonicalize(shot)
+            ledger.transition_scene(scene, SceneStatus.REVIEW)
+            ledger.transition_scene(scene, SceneStatus.APPROVED)
+        ledger.transition_episode(EpisodeStatus.ASSEMBLING)
+        clips = tuple(TimelineClip(shot_id, ledger.shots[shot_id].asset_version, duration) for shot_id in sorted(ledger.shots))
+        timeline = TimelineRecord(ledger.episode_id, ledger.plan_revision, ("SC1", "SC2"), clips)
+        content = b"deterministic offline master fixture; no rendered media"
+        master = MasterRecord("master-1", sha256(content).hexdigest(), len(content), timeline_digest(timeline), duration * 4, 1920, 1080)
+        qc = MasterQCRecord(master.content_digest, master.timeline_digest, master.duration_ms, master.width, master.height, frozenset({Gate.AUDIO_QA, Gate.CONTINUITY_QA, Gate.TECHNICAL_QA}), "offline-reviewer", "qc-1")
+        archive = ArchiveReceipt(master.content_digest, master.content_digest, len(content), "Google Drive", "file-1", "file-1", "version-1", "version-1", True, True, "offline-verifier", "archive-1")
+        owned = CleanupArtifact("temp-agent-clip", "owned-run-1", True, "provenance-1")
+        ledger.register_temporary_artifact(owned)
+        cleanup = CleanupAuthorization(master.content_digest, archive.evidence_id, (owned,), "offline-authorizer", "cleanup-1")
+        return ledger, timeline, master, qc, archive, cleanup, content
+
+    def completed_master_fixture(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus
+        ledger, timeline, master, qc, archive, cleanup, content = self.master_evidence_fixture()
+        ledger.record_timeline(timeline)
+        ledger.record_master(master, content)
+        ledger.transition_episode(EpisodeStatus.FINAL_QC)
+        ledger.record_master_qc(qc)
+        ledger.transition_episode(EpisodeStatus.ARCHIVING)
+        ledger.record_archive(archive, content)
+        ledger.transition_episode(EpisodeStatus.COMPLETED)
+        ledger.authorize_cleanup(cleanup)
+        return ledger, timeline, master, qc, archive, cleanup, content
+
+    def test_exact_master_completion_cleanup_positive_roundtrip_and_replay(self):
+        ledger, timeline, master, qc, archive, cleanup, content = self.completed_master_fixture()
+        before = ledger.to_dict()
+        self.assertEqual(sum(clip.duration_ms for clip in timeline.clips), 1_200_000)
+        self.assertTrue(ledger.cleanup_eligible())
+        schema = json.loads(next(Path("schemas").glob("movie_studio_production_state*")).read_text())
+        for name in ledger._master_evidence_fields():
+            self.assertEqual(set(before[name]), set(schema["$defs"][name]["properties"]))
+            self.assertEqual(set(before[name]), set(schema["$defs"][name]["required"]))
+        self.assertEqual(set(before["temporary_artifacts"][0]), set(schema["$defs"]["cleanup_artifact"]["required"]))
+        for record in (lambda: ledger.record_timeline(timeline), lambda: ledger.record_master(master, content), lambda: ledger.record_master_qc(qc), lambda: ledger.record_archive(archive, content), lambda: ledger.authorize_cleanup(cleanup)):
+            record()
+            self.assertEqual(ledger.to_dict(), before)
+        self.assertEqual(ProductionLedger.from_dict(before).to_dict(), before)
+        with tempfile.TemporaryDirectory() as directory:
+            store = AtomicCheckpointStore(Path(directory) / "checkpoint.json")
+            store.save(ledger)
+            self.assertEqual(store.load().to_dict(), before)
+            self.assertTrue(store.load().cleanup_eligible())
+        self.assertFalse(episode_can_complete(all_shots_canonical=True, final_qc_passed=True, drive_master_verified=True))
+
+    def test_timeline_reorders_substitutions_runtime_and_types_reject_atomically(self):
+        ledger, timeline, master, qc, archive, cleanup, content = self.master_evidence_fixture()
+        before = ledger.to_dict()
+        for wrong in (replace(timeline, clips=tuple(reversed(timeline.clips))), replace(timeline, scene_ids=("SC2", "SC1")), replace(timeline, clips=timeline.clips[:-1]), replace(timeline, clips=(replace(timeline.clips[0], asset_version="substituted"),) + timeline.clips[1:]), replace(timeline, clips=(replace(timeline.clips[0], duration_ms=300001),) + timeline.clips[1:]), replace(timeline, clips=list(timeline.clips)), replace(timeline, plan_revision=2)):
+            with self.assertRaises(ProductionPolicyError):
+                ledger.record_timeline(wrong)
+            self.assertEqual(ledger.to_dict(), before)
+        for duration, accepted in ((285000, True), (315000, True), (284999, False), (315001, False), (1000, False)):
+            candidate, plan, *_ = self.master_evidence_fixture(duration)
+            if accepted:
+                candidate.record_timeline(plan)
+            else:
+                checkpoint = candidate.to_dict()
+                with self.assertRaisesRegex(ProductionPolicyError, "20 minutes"):
+                    candidate.record_timeline(plan)
+                self.assertEqual(candidate.to_dict(), checkpoint)
+
+    def test_master_and_qc_require_exact_bytes_timeline_measurements_and_gates(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus
+        ledger, timeline, master, qc, archive, cleanup, content = self.master_evidence_fixture()
+        ledger.record_timeline(timeline)
+        before = ledger.to_dict()
+        for wrong, payload in ((replace(master, content_digest="0" * 64), content), (replace(master, timeline_digest="0" * 64), content), (replace(master, duration_ms=master.duration_ms + 1), content), (replace(master, width=1080), content), (replace(master, byte_count=0), content), (master, b"substituted bytes")):
+            with self.assertRaises(ProductionPolicyError):
+                ledger.record_master(wrong, payload)
+            self.assertEqual(ledger.to_dict(), before)
+        ledger.record_master(master, content)
+        ledger.transition_episode(EpisodeStatus.FINAL_QC)
+        before = ledger.to_dict()
+        for wrong in (replace(qc, master_digest="0" * 64), replace(qc, timeline_digest="0" * 64), replace(qc, measured_duration_ms=qc.measured_duration_ms - 1), replace(qc, measured_width=1024), replace(qc, passed_gates=frozenset({Gate.AUDIO_QA})), replace(qc, passed_gates=frozenset(gate.value for gate in qc.passed_gates)), replace(qc, reviewer_id=""), replace(qc, evidence_id="")):
+            with self.assertRaises(ProductionPolicyError):
+                ledger.record_master_qc(wrong)
+            self.assertEqual(ledger.to_dict(), before)
+        with self.assertRaisesRegex(ProductionPolicyError, "evidence"):
+            ledger.transition_episode(EpisodeStatus.ARCHIVING)
+        self.assertEqual(ledger.to_dict(), before)
+
+    def test_archive_identity_readback_and_cleanup_ownership_require_matching_evidence(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus
+        ledger, timeline, master, qc, archive, cleanup, content = self.master_evidence_fixture()
+        ledger.record_timeline(timeline)
+        ledger.record_master(master, content)
+        ledger.transition_episode(EpisodeStatus.FINAL_QC)
+        ledger.record_master_qc(qc)
+        ledger.transition_episode(EpisodeStatus.ARCHIVING)
+        before = ledger.to_dict()
+        for wrong, payload in ((replace(archive, master_digest="0" * 64), content), (replace(archive, readback_file_id="other-file"), content), (replace(archive, readback_version="old-version"), content), (replace(archive, readable=False), content), (replace(archive, verified=False), content), (replace(archive, readback_digest="0" * 64), content), (replace(archive, offline_evidence=False), content), (archive, b"checksum substitution")):
+            with self.assertRaises(ProductionPolicyError):
+                ledger.record_archive(wrong, payload)
+            self.assertEqual(ledger.to_dict(), before)
+        with self.assertRaises(ProductionPolicyError):
+            ledger.transition_episode(EpisodeStatus.COMPLETED)
+        with self.assertRaises(ProductionPolicyError):
+            ledger.authorize_cleanup(cleanup)
+        self.assertFalse(ledger.cleanup_eligible())
+        ledger.record_archive(archive, content)
+        ledger.transition_episode(EpisodeStatus.COMPLETED)
+        before = ledger.to_dict()
+        for wrong in (replace(cleanup, master_digest="0" * 64), replace(cleanup, archive_evidence_id="stale-receipt"), replace(cleanup, artifacts=()), replace(cleanup, artifacts=(CleanupArtifact("temp", "", True),)), replace(cleanup, artifacts=(CleanupArtifact("permanent", "run", False),)), replace(cleanup, artifacts=cleanup.artifacts * 2), replace(cleanup, artifacts=(CleanupArtifact("unregistered", "run", True, "claimed"),))):
+            with self.assertRaises(ProductionPolicyError):
+                ledger.authorize_cleanup(wrong)
+            self.assertEqual(ledger.to_dict(), before)
+        self.assertFalse(ledger.cleanup_eligible())
+
+    def test_master_checkpoint_corruption_and_deleted_evidence_fail_closed(self):
+        ledger, *_ = self.completed_master_fixture()
+        before = ledger.to_dict()
+        corruptions = (
+            lambda d: d["timeline"]["clips"].reverse(),
+            lambda d: d["timeline"].__setitem__("scene_ids", ["SC2", "SC1"]),
+            lambda d: d["master"].__setitem__("content_digest", "0" * 64),
+            lambda d: d["master"].__setitem__("duration_ms", 1000),
+            lambda d: d["master"].__setitem__("width", 1080),
+            lambda d: d["master_qc"].__setitem__("master_digest", "0" * 64),
+            lambda d: d["master_qc"].__setitem__("passed_gates", ["AUDIO_QA"]),
+            lambda d: d["archive"].__setitem__("readback_file_id", "wrong"),
+            lambda d: d["archive"].__setitem__("readback_digest", "0" * 64),
+            lambda d: d["cleanup_authorization"].__setitem__("archive_evidence_id", "stale"),
+            lambda d: d.__setitem__("temporary_artifacts", []),
+            lambda d: d["temporary_artifacts"][0].__setitem__("ownership_evidence_id", ""),
+            lambda d: d["temporary_artifacts"][0].__setitem__("creator_id", "user"),
+            lambda d: d["shots"]["SC1-0"].__setitem__("asset_version", "substituted"),
+        )
+        for corrupt in corruptions:
+            data = copy.deepcopy(before)
+            corrupt(data)
+            with self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(data)
+        for field in ledger._master_evidence_fields():
+            for action in ("delete", "none"):
+                data = copy.deepcopy(before)
+                if action == "delete":
+                    data.pop(field)
+                else:
+                    data[field] = None
+                if field == "cleanup_authorization":  # completed episodes can remain ineligible for cleanup
+                    self.assertFalse(ProductionLedger.from_dict(data).cleanup_eligible())
+                else:
+                    with self.assertRaises(ProductionPolicyError):
+                        ProductionLedger.from_dict(data)
+        legacy = ProductionLedger("legacy").to_dict()
+        for field in ledger._master_evidence_fields():
+            legacy.pop(field)
+        restored = ProductionLedger.from_dict(legacy)
+        self.assertFalse(restored.cleanup_eligible())
+
+    def test_master_evidence_public_bypass_conflict_and_blocked_archive_restore_reject(self):
+        from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus
+        ledger, timeline, master, qc, archive, cleanup, content = self.completed_master_fixture()
+        before = ledger.to_dict()
+        for field in ledger._master_evidence_fields() + ("temporary_artifacts",):
+            with self.assertRaises(ProductionPolicyError):
+                setattr(ledger, field, None)
+            with self.assertRaises(ProductionPolicyError):
+                delattr(ledger, field)
+        with self.assertRaises(ProductionPolicyError):
+            ledger.record_master(replace(master, master_id="different"), content)
+        self.assertEqual(ledger.to_dict(), before)
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger("bypass", timeline=timeline)
+        partial, plan, master, qc, _, _, content = self.master_evidence_fixture()
+        partial.record_timeline(plan)
+        partial.record_master(master, content)
+        partial.transition_episode(EpisodeStatus.FINAL_QC)
+        partial.record_master_qc(qc)
+        partial.transition_episode(EpisodeStatus.ARCHIVING)
+        partial.transition_episode(EpisodeStatus.BLOCKED)
+        checkpoint = partial.to_dict()
+        self.assertEqual(ProductionLedger.from_dict(checkpoint).to_dict(), checkpoint)
+        for field in ("timeline", "master", "master_qc"):
+            corrupted = copy.deepcopy(checkpoint)
+            corrupted[field] = None
+            with self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(corrupted)
 
     def recovery_fixture(self, directory):
         ledger = self.complete_planning_fixture()
@@ -2173,7 +2385,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         self.assertEqual(restored.episode_status_history, (EpisodeStatus.PLANNED, EpisodeStatus.IN_PRODUCTION, EpisodeStatus.ASSEMBLING))
         self.assertEqual(restored.scenes["SC1"].status_history, (SceneStatus.PLANNED, SceneStatus.GENERATING, SceneStatus.REVIEW))
         for target in (EpisodeStatus.ARCHIVING, EpisodeStatus.COMPLETED):
-            with self.assertRaisesRegex(ProductionPolicyError, "unsupported"):
+            with self.assertRaisesRegex(ProductionPolicyError, "evidence"):
                 restored.transition_episode(target)
             self.assertEqual(restored.to_dict(), before)
 
@@ -2246,8 +2458,8 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_lifecycle_restore_rejects_skips_missing_history_and_false_completion(self):
         schema = json.loads((Path(__file__).resolve().parents[1] / "schemas/movie_studio_production_state__created_by_chatgpt__model_gpt-5.6-sol__task_TASK-0005.schema.json").read_text())
         for spec in (schema["properties"]["episode_status"], schema["properties"]["episode_status_history"]["items"]):
-            self.assertNotIn("ARCHIVING", spec["enum"])
-            self.assertNotIn("COMPLETED", spec["enum"])
+            self.assertIn("ARCHIVING", spec["enum"])
+            self.assertIn("COMPLETED", spec["enum"])
         ledger = ProductionLedger("movie")
         ledger.add_scene(Scene("SC1"))
         before = ledger.to_dict()

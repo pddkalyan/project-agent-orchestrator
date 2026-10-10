@@ -775,6 +775,84 @@ class PlanStateDict(MutableMapping):
         return self
 
 
+@dataclass(frozen=True)
+class TimelineClip:
+    shot_id: str
+    asset_version: str
+    duration_ms: int
+
+
+@dataclass(frozen=True)
+class TimelineRecord:
+    episode_id: str
+    plan_revision: int
+    scene_ids: Tuple[str, ...]
+    clips: Tuple[TimelineClip, ...]
+
+
+def timeline_digest(timeline):
+    return sha256(json.dumps(asdict(timeline), sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class MasterRecord:
+    master_id: str
+    content_digest: str
+    byte_count: int
+    timeline_digest: str
+    duration_ms: int
+    width: int
+    height: int
+
+
+@dataclass(frozen=True)
+class MasterQCRecord:
+    master_digest: str
+    timeline_digest: str
+    measured_duration_ms: int
+    measured_width: int
+    measured_height: int
+    passed_gates: FrozenSet[Gate]
+    reviewer_id: str
+    evidence_id: str
+
+
+@dataclass(frozen=True)
+class ArchiveReceipt:
+    master_digest: str
+    readback_digest: str
+    byte_count: int
+    storage_provider: str
+    requested_file_id: str
+    readback_file_id: str
+    requested_version: str
+    readback_version: str
+    readable: bool
+    verified: bool
+    verifier_id: str
+    evidence_id: str
+    offline_evidence: bool = True
+
+
+@dataclass(frozen=True)
+class CleanupArtifact:
+    artifact_id: str
+    owner_run_id: str
+    temporary: bool = True
+    ownership_evidence_id: str = ""
+    creator_id: str = "agent"
+
+
+@dataclass(frozen=True)
+class CleanupAuthorization:
+    master_digest: str
+    archive_evidence_id: str
+    artifacts: Tuple[CleanupArtifact, ...]
+    authorizer_id: str
+    evidence_id: str
+    offline_evidence: bool = True
+
+
 @dataclass
 class ProductionLedger:
     project_id: str
@@ -794,8 +872,16 @@ class ProductionLedger:
     authorization_index: Dict[str, str] = field(default_factory=dict)
     provider_request_index: Dict[str, str] = field(default_factory=dict)
     provider_adapters: Dict[str, ProviderAdapterRegistration] = field(default_factory=dict)
+    timeline: Optional[TimelineRecord] = None
+    master: Optional[MasterRecord] = None
+    master_qc: Optional[MasterQCRecord] = None
+    archive: Optional[ArchiveReceipt] = None
+    cleanup_authorization: Optional[CleanupAuthorization] = None
+    temporary_artifacts: Tuple[CleanupArtifact, ...] = ()
 
     def __post_init__(self):
+        if self.temporary_artifacts != () or any(getattr(self, name) is not None for name in self._master_evidence_fields()):
+            raise ProductionPolicyError("new ledger cannot fabricate master evidence")
         if self.episode_status is not EpisodeStatus.PLANNED or self.episode_status_history != ():
             raise ProductionPolicyError("new episodes must start planned without lifecycle history")
         frozen = self.plan_frozen
@@ -809,6 +895,8 @@ class ProductionLedger:
         object.__setattr__(self, "plan_frozen", frozen)
 
     def __setattr__(self, name, value):
+        if (name in self._master_evidence_fields() or name == "temporary_artifacts") and name in self.__dict__:
+            raise ProductionPolicyError("master evidence requires a guarded publication")
         if name in {"episode_status", "episode_status_history"} and name in self.__dict__:
             raise ProductionPolicyError("episode status requires a guarded transition")
         if name in {"plan_revision", "plan_frozen", "plan_revision_history"} and name in self.__dict__:
@@ -827,6 +915,132 @@ class ProductionLedger:
         if name in type(self).__dataclass_fields__:
             raise ProductionPolicyError("ledger fields cannot be deleted")
         object.__delattr__(self, name)
+
+    @staticmethod
+    def _master_evidence_fields():
+        return ("timeline", "master", "master_qc", "archive", "cleanup_authorization")
+
+    @staticmethod
+    def _restore_master_evidence(name, raw):
+        if raw is None:
+            return None
+        classes = {"timeline": TimelineRecord, "master": MasterRecord, "master_qc": MasterQCRecord, "archive": ArchiveReceipt, "cleanup_authorization": CleanupAuthorization}
+        record_type = classes[name]
+        if not isinstance(raw, Mapping) or set(raw) != {f.name for f in fields(record_type)}:
+            raise ProductionPolicyError("master evidence fields mismatch")
+        data = dict(raw)
+        if name == "timeline":
+            if type(data["scene_ids"]) is not list or type(data["clips"]) is not list:
+                raise ProductionPolicyError("invalid timeline collections")
+            data["scene_ids"] = tuple(data["scene_ids"])
+            data["clips"] = tuple(TimelineClip(**clip) for clip in data["clips"])
+        elif name == "master_qc":
+            if type(data["passed_gates"]) is not list or len(set(data["passed_gates"])) != len(data["passed_gates"]):
+                raise ProductionPolicyError("invalid master QC gates")
+            data["passed_gates"] = frozenset(Gate(gate) for gate in data["passed_gates"])
+        elif name == "cleanup_authorization":
+            if type(data["artifacts"]) is not list:
+                raise ProductionPolicyError("invalid cleanup artifact collection")
+            data["artifacts"] = tuple(CleanupArtifact(**artifact) for artifact in data["artifacts"])
+        return record_type(**data)
+
+    def _publish_master_evidence(self, name, record):
+        if getattr(self, name) is not None:
+            if getattr(self, name) == record:
+                self.validate()
+                return
+            raise ProductionPolicyError("conflicting master evidence cannot be replaced")
+        stages = {"timeline": {EpisodeStatus.ASSEMBLING}, "master": {EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC}, "master_qc": {EpisodeStatus.FINAL_QC}, "archive": {EpisodeStatus.ARCHIVING}, "cleanup_authorization": {EpisodeStatus.COMPLETED}}
+        if self.episode_status not in stages[name]:
+            raise ProductionPolicyError("master evidence conflicts with lifecycle stage")
+        candidate = type(self).from_dict(self.to_dict())
+        object.__setattr__(candidate, name, record)
+        candidate.validate()
+        object.__setattr__(self, name, record)
+
+    def record_timeline(self, timeline):
+        self._publish_master_evidence("timeline", timeline)
+
+    def record_master(self, master, content):
+        if type(master) is not MasterRecord or type(content) is not bytes or master.content_digest != sha256(content).hexdigest() or master.byte_count != len(content):
+            raise ProductionPolicyError("master content identity mismatch")
+        self._publish_master_evidence("master", master)
+
+    def record_master_qc(self, qc):
+        self._publish_master_evidence("master_qc", qc)
+
+    def record_archive(self, receipt, readback):
+        if type(receipt) is not ArchiveReceipt or type(readback) is not bytes or receipt.readback_digest != sha256(readback).hexdigest() or receipt.byte_count != len(readback):
+            raise ProductionPolicyError("archive readback content mismatch")
+        self._publish_master_evidence("archive", receipt)
+
+    def register_temporary_artifact(self, artifact):
+        self.validate()
+        if artifact in self.temporary_artifacts:
+            return
+        if self.cleanup_authorization is not None:
+            raise ProductionPolicyError("cleanup allowlist is already authorized")
+        candidate = type(self).from_dict(self.to_dict())
+        object.__setattr__(candidate, "temporary_artifacts", self.temporary_artifacts + (artifact,))
+        candidate.validate()
+        object.__setattr__(self, "temporary_artifacts", candidate.temporary_artifacts)
+
+    def authorize_cleanup(self, authorization):
+        self._publish_master_evidence("cleanup_authorization", authorization)
+
+    def cleanup_eligible(self):
+        self.validate()
+        return self.episode_status is EpisodeStatus.COMPLETED and self.cleanup_authorization is not None
+
+    def _validate_master_evidence(self):
+        if type(self.episode_status_history) is not tuple:
+            raise ProductionPolicyError("invalid lifecycle history")
+        chain = self.episode_status_history + (self.episode_status,)
+        required_stages = {"timeline": EpisodeStatus.ASSEMBLING, "master": EpisodeStatus.ASSEMBLING, "master_qc": EpisodeStatus.FINAL_QC, "archive": EpisodeStatus.ARCHIVING, "cleanup_authorization": EpisodeStatus.COMPLETED}
+        if any(getattr(self, name) is not None and stage not in chain for name, stage in required_stages.items()):
+            raise ProductionPolicyError("master evidence lacks applicable lifecycle history")
+        def text(value):
+            return type(value) is str and bool(value.strip())
+        def digest(value):
+            return type(value) is str and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+        def positive(value):
+            return type(value) is int and value > 0
+        if type(self.temporary_artifacts) is not tuple or any(type(artifact) is not CleanupArtifact or not text(artifact.artifact_id) or not text(artifact.owner_run_id) or artifact.temporary is not True or not text(artifact.ownership_evidence_id) or artifact.creator_id != "agent" for artifact in self.temporary_artifacts) or len({artifact.artifact_id for artifact in self.temporary_artifacts}) != len(self.temporary_artifacts):
+            raise ProductionPolicyError("invalid owned temporary artifact registry")
+        timeline = self.timeline
+        if timeline is not None:
+            if type(timeline) is not TimelineRecord or not text(self.episode_id) or timeline.episode_id != self.episode_id or type(timeline.plan_revision) is not int or timeline.plan_revision != self.plan_revision:
+                raise ProductionPolicyError("invalid timeline identity")
+            self._require_production_plan()
+            if type(timeline.scene_ids) is not tuple or any(not text(scene) for scene in timeline.scene_ids) or len(set(timeline.scene_ids)) != len(timeline.scene_ids) or timeline.scene_ids != tuple(sorted(self.scenes)):
+                raise ProductionPolicyError("timeline scenes mismatch")
+            if type(timeline.clips) is not tuple or any(type(clip) is not TimelineClip for clip in timeline.clips):
+                raise ProductionPolicyError("invalid timeline clips")
+            expected = [plan.shot_id for scene in timeline.scene_ids for plan in sorted((plan for plan in self.shot_plans.values() if plan.scene_id == scene), key=lambda plan: plan.sequence_index)]
+            if [clip.shot_id for clip in timeline.clips] != expected:
+                raise ProductionPolicyError("timeline clip ordering or membership mismatch")
+            for clip in timeline.clips:
+                shot = self.shots[clip.shot_id]
+                if not shot.canonical or not all_required_gates_pass(shot) or clip.asset_version != shot.asset_version or not positive(clip.duration_ms) or clip.duration_ms != self.shot_plans[clip.shot_id].planned_duration_ms:
+                    raise ProductionPolicyError("timeline requires exact canonical asset/duration evidence")
+            if abs(sum(clip.duration_ms for clip in timeline.clips) - 1_200_000) > 60_000:
+                raise ProductionPolicyError("timeline must be approximately 20 minutes (plus/minus 60 seconds)")
+        master = self.master
+        if master is not None:
+            if type(master) is not MasterRecord or timeline is None or not text(master.master_id) or not digest(master.content_digest) or not positive(master.byte_count) or master.timeline_digest != timeline_digest(timeline) or not positive(master.duration_ms) or master.duration_ms != sum(clip.duration_ms for clip in timeline.clips) or not positive(master.width) or not positive(master.height) or master.width * 9 != master.height * 16:
+                raise ProductionPolicyError("master identity/timeline/runtime/aspect evidence mismatch")
+        qc = self.master_qc
+        if qc is not None:
+            if type(qc) is not MasterQCRecord or master is None or qc.master_digest != master.content_digest or qc.timeline_digest != master.timeline_digest or type(qc.measured_duration_ms) is not int or qc.measured_duration_ms != master.duration_ms or type(qc.measured_width) is not int or qc.measured_width != master.width or type(qc.measured_height) is not int or qc.measured_height != master.height or type(qc.passed_gates) is not frozenset or any(type(gate) is not Gate for gate in qc.passed_gates) or qc.passed_gates != frozenset({Gate.AUDIO_QA, Gate.CONTINUITY_QA, Gate.TECHNICAL_QA}) or not text(qc.reviewer_id) or not text(qc.evidence_id):
+                raise ProductionPolicyError("exact master audio/continuity/technical QC evidence required")
+        archive = self.archive
+        if archive is not None:
+            if type(archive) is not ArchiveReceipt or qc is None or archive.master_digest != master.content_digest or archive.readback_digest != master.content_digest or type(archive.byte_count) is not int or archive.byte_count != master.byte_count or archive.storage_provider != "Google Drive" or not text(archive.requested_file_id) or archive.requested_file_id != archive.readback_file_id or not text(archive.requested_version) or archive.requested_version != archive.readback_version or archive.readable is not True or archive.verified is not True or archive.offline_evidence is not True or not text(archive.verifier_id) or not text(archive.evidence_id):
+                raise ProductionPolicyError("verified exact master archive/readback evidence required")
+        cleanup = self.cleanup_authorization
+        if cleanup is not None:
+            if type(cleanup) is not CleanupAuthorization or archive is None or cleanup.master_digest != master.content_digest or cleanup.archive_evidence_id != archive.evidence_id or type(cleanup.artifacts) is not tuple or not cleanup.artifacts or any(type(artifact) is not CleanupArtifact or not text(artifact.artifact_id) or not text(artifact.owner_run_id) or artifact.temporary is not True or artifact not in self.temporary_artifacts for artifact in cleanup.artifacts) or len({artifact.artifact_id for artifact in cleanup.artifacts}) != len(cleanup.artifacts) or not text(cleanup.authorizer_id) or not text(cleanup.evidence_id) or cleanup.offline_evidence is not True:
+                raise ProductionPolicyError("cleanup requires archive-bound owned temporary artifact evidence")
 
     def _require_lifecycle_mutable(self, scene_id="", *, allow_blocked=False):
         episode_allowed = {EpisodeStatus.PLANNED, EpisodeStatus.IN_PRODUCTION}
@@ -857,7 +1071,8 @@ class ProductionLedger:
             EpisodeStatus.PLANNED: (EpisodeStatus.IN_PRODUCTION, EpisodeStatus.BLOCKED),
             EpisodeStatus.IN_PRODUCTION: (EpisodeStatus.ASSEMBLING, EpisodeStatus.BLOCKED),
             EpisodeStatus.ASSEMBLING: (EpisodeStatus.FINAL_QC, EpisodeStatus.BLOCKED),
-            EpisodeStatus.FINAL_QC: (EpisodeStatus.BLOCKED,),
+            EpisodeStatus.FINAL_QC: (EpisodeStatus.ARCHIVING, EpisodeStatus.BLOCKED),
+            EpisodeStatus.ARCHIVING: (EpisodeStatus.COMPLETED, EpisodeStatus.BLOCKED),
         }
 
     @staticmethod
@@ -869,12 +1084,14 @@ class ProductionLedger:
         }
 
     def _require_episode_evidence(self, status):
-        if status in {EpisodeStatus.ARCHIVING, EpisodeStatus.COMPLETED}:
-            raise ProductionPolicyError("archive/completion unsupported until typed timeline and archive evidence exists")
-        if status in {EpisodeStatus.IN_PRODUCTION, EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC}:
+        if status in {EpisodeStatus.ARCHIVING, EpisodeStatus.COMPLETED} and (self.timeline is None or self.master is None or self.master_qc is None):
+            raise ProductionPolicyError("archive/completion requires exact timeline/master QC evidence")
+        if status is EpisodeStatus.COMPLETED and self.archive is None:
+            raise ProductionPolicyError("completion requires verified archive evidence")
+        if status in {EpisodeStatus.IN_PRODUCTION, EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC, EpisodeStatus.ARCHIVING, EpisodeStatus.COMPLETED}:
             if not self.scenes or not self.shots or any(not shot.scene_id or shot.scene_id not in self.scenes for shot in self.shots.values()):
                 raise ProductionPolicyError("episode lifecycle requires nonempty scene-bound shots")
-        if status in {EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC}:
+        if status in {EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC, EpisodeStatus.ARCHIVING, EpisodeStatus.COMPLETED}:
             if any(scene.status is not SceneStatus.APPROVED for scene in self.scenes.values()) or any(not shot.canonical or not all_required_gates_pass(shot) for shot in self.shots.values()):
                 raise ProductionPolicyError("episode assembly/QC requires approved scenes and canonical reviewed shots")
 
@@ -950,6 +1167,8 @@ class ProductionLedger:
 
     def _validate_lifecycle(self):
         self._require_episode_evidence(self.episode_status)
+        if EpisodeStatus.ARCHIVING in self.episode_status_history:
+            self._require_episode_evidence(EpisodeStatus.ARCHIVING)
         self._validate_status_history(self.episode_status, self.episode_status_history, EpisodeStatus.PLANNED, self._episode_edges())
         for scene_id, scene in self.scenes.items():
             self._validate_status_history(scene.status, scene.status_history, SceneStatus.PLANNED, self._scene_edges())
@@ -1597,6 +1816,8 @@ class ProductionLedger:
             "authorization_index": raw["authorization_index"],
             "provider_request_index": raw["provider_request_index"],
             "provider_adapters": raw["provider_adapters"],
+            **{name: raw[name] for name in self._master_evidence_fields()},
+            "temporary_artifacts": raw["temporary_artifacts"],
         }
 
     @classmethod
@@ -1631,6 +1852,9 @@ class ProductionLedger:
             data.get("plan_revision") is not None or data.get("shot_plans")
         ):
             raise ProductionPolicyError("missing plan revision history")
+        for name in cls._master_evidence_fields():
+            data.setdefault(name, None)
+        data.setdefault("temporary_artifacts", [])
         data.setdefault("episode_id", "")
         if "episode_status" not in data:
             raise ProductionPolicyError("episode checkpoint requires explicit lifecycle status")
@@ -1667,6 +1891,8 @@ class ProductionLedger:
             "provider_request_index",
             "provider_adapters",
         }
+        root_fields.update(cls._master_evidence_fields())
+        root_fields.add("temporary_artifacts")
         actual_fields = set(data.keys())
         if "provider_adapters" not in actual_fields:
             actual_fields.add("provider_adapters")
@@ -1995,6 +2221,11 @@ class ProductionLedger:
             episode_history = tuple(EpisodeStatus(item) for item in data["episode_status_history"])
         except (TypeError, ValueError) as exc:
             raise ProductionPolicyError("invalid episode lifecycle history") from exc
+        if type(data["temporary_artifacts"]) is not list:
+            raise ProductionPolicyError("invalid owned temporary artifact registry")
+        object.__setattr__(ledger, "temporary_artifacts", tuple(CleanupArtifact(**artifact) for artifact in data["temporary_artifacts"]))
+        for name in cls._master_evidence_fields():
+            object.__setattr__(ledger, name, cls._restore_master_evidence(name, data[name]))
         object.__setattr__(ledger, "episode_status_history", episode_history)
         object.__setattr__(ledger, "episode_status", episode_status)
         object.__setattr__(ledger, "plan_frozen", data["plan_frozen"])
@@ -2041,6 +2272,7 @@ class ProductionLedger:
             if type(shot.status) is not ShotStatus:
                 raise ProductionPolicyError("invalid shot status")
 
+        self._validate_master_evidence()
         self._validate_lifecycle()
 
         for binding_key, binding in self.shot_continuity_bindings.items():

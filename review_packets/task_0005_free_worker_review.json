@@ -2,8 +2,8 @@
   "schema_version": 1,
   "task_id": "TASK-0005",
   "issue": 35,
-  "stage": "PHASE_2_PACKAGE_3_DURABLE_OFFLINE_RECOVERY_CANDIDATE",
-  "base_sha": "4c4810ca4c7723de2ac8cc0a9f06cac1151cdb82",
+  "stage": "PHASE_2_PACKAGE_4_EXACT_MASTER_EVIDENCE_CANDIDATE",
+  "base_sha": "6a8fd14265f9f1e00808dfbfb750c0097a0c9635",
   "worker": "ChatGPT Work Mode",
   "worker_model": "gpt-6.1-sol",
   "source": {
@@ -15,18 +15,19 @@
     "narrow_approval": "Actual independent Astra approval reported by supervisor; upstream PR37 merged to becf9dc; dependent candidate remains unapproved",
     "package_1": "gpt-6.1-sol medium; isolated candidate branch from preserved953e source; PR38 remote remains unchanged",
     "package_2": "gpt-6.1-sol medium; separate clean planning worktree from immutable package1 correction; coordinator owns publication and actual review",
-    "package_3": "gpt-6.1-sol medium; separate recovery worktree from immutable complete-planning candidate; coordinator owns publication and actual Astra review"
+    "package_3": "gpt-6.1-sol medium; separate recovery worktree from immutable complete-planning candidate; coordinator owns publication and actual Astra review",
+    "package_4": "gpt-6.1-sol medium; separate master-evidence worktree from immutable recovery source; coordinator owns publication and actual review"
   },
-  "change": "AtomicCheckpointStore validates before writing, fsyncs adjacent temporary bytes, atomically replaces and fsyncs parent directory where supported. OfflineGenerationCoordinator persists authorization before invocation and reconciles AUTHORIZED/RUNNING by the stable request key; authoritative absent AUTHORIZED requests may submit, missing RUNNING requests reject. Counting fake-provider tests cover receipt loss, interruption before receipt save, repeated recovery, retry identity, stale/conflicting receipts and zero calls on policy/checkpoint rejection. Durable JSON parsing rejects duplicate root and nested object keys before adapter invocation.",
+  "change": "Typed explicit ordered timeline, exact bytes-derived master identity, measured master-bound audio/continuity/technical QC, requested/readback Drive identity/version/checksum/readability evidence and archive-derived completion. Offline cleanup authorization selects exact prior-registered agent-owned temporary artifact records with provenance evidence IDs. All publication is preflighted on a detached ledger; direct writes/conflicts/missing evidence reject. Duration remains approximately20min with documented implementation tolerance \u00b160s and exact measured/planned agreement; aspect16:9.",
   "test_evidence": {
-    "movie_studio": "127 tests passed, 0 failures (119 prior +8 durable storage/recovery methods)",
-    "test_discovery": "127 tests passed, 0 failures",
+    "movie_studio": "133 tests passed, 0 failures (127 prior +6 exact master/timeline/archive/cleanup methods)",
+    "test_discovery": "133 tests passed, 0 failures",
     "python_compile": "passed for core and tests",
     "json_schema_parse": "passed; runtime/schema shape tests passed; jsonschema package unavailable in both installed Python runtimes, so no independent JSON Schema meta-validation claimed",
     "git_diff_check": "passed",
-    "controller_regression": "34 tests passed; exact TASK-0002 deterministic workflow step passed in recovery worktree",
-    "reviewer_bridge_regression": "68 tests passed; exact TASK-0003 deterministic workflow step passed in recovery worktree",
-    "controller_production_fixtures": "All 5 exact Astra Review #4 production-path fixtures passed in recovery worktree; isolated RUNNER_TEMP/PYTHONPATH",
+    "controller_regression": "34 tests passed; exact TASK-0002 deterministic workflow step passed in master worktree",
+    "reviewer_bridge_regression": "68 tests passed; exact TASK-0003 deterministic workflow step passed in master worktree",
+    "controller_production_fixtures": "All 5 exact Astra Review #4 production-path fixtures passed in master worktree; isolated RUNNER_TEMP/PYTHONPATH",
     "windows_regression": "not run on package1 candidate; remote source/base evidence retained, no new Windows run claimed",
     "narrow_ci": "PR37 narrow candidate run 37892960500 SUCCESS per supervisor; dependent candidate not yet published",
     "safety_provenance": "passed changed-path worker allowlist, all changed artifact provenance, JSONL parse, zero-spend/cloud-only/no-merge boundaries and changed-file CI secret pattern; no provider calls or external workflow launches"
@@ -40,11 +41,11 @@
     "checkpoint_digest": "deterministic integrity/accounting aid, not an authenticated signature against an adversary who rewrites the entire checkpoint",
     "usage_metrics": "model/account usage unavailable; no usage estimate asserted"
   },
-  "phase_2_gap_assessment": "Package3 supplies executable single-process atomic checkpoint publication and fake-provider stable-key crash reconciliation. Actual provider activation, distributed execution and real platform/account crash tests remain excluded. Typed timeline/master/QC/archive/cleanup and minimum continuity/reference/QA accountability remain unfinished; no overall Phase2 completion claimed.",
-  "review_status": "PACKAGE_3_SELF_TESTED_PENDING_EXACT_SOURCE_ASTRA_REVIEW",
+  "phase_2_gap_assessment": "Package4 supplies executable offline timeline/master/QC/archive/completion/cleanup evidence. Positive metadata fixture is1,200,000ms at1920x1080 with deterministic fixture bytes, not generated media or external storage. Actual provider/Drive/cleanup actions remain excluded. Minimum character-to-voice/reference registry and attributable shot QA remain package5; no overall Phase2 approval claimed.",
+  "review_status": "PACKAGE_4_SELF_TESTED_PENDING_EXACT_SOURCE_ASTRA_REVIEW",
   "reviewed_sha": null,
   "tests": {
-    "passed": 127,
+    "passed": 133,
     "failed": 0
   },
   "corrections": [
@@ -103,7 +104,7 @@
       "regressions": "Deletion matrix for status/history/both across every supported lifecycle and BLOCKED variant; exact restoration, explicit planned history defaults, active method/map/attribute atomic rejection and legal scaffolding/moves. Existing corruption tests now inject internal corruption after legal insertion and retain original validation assertions."
     }
   ],
-  "migration": "No checkpoint shape/schema-version change. Existing complete frozen version-2 checkpoints load through the new durable boundary; truncated/invalid checkpoints reject. Package2 fail-closed migration remains: incomplete planning job checkpoints and old revision-independent plan digests reject without fabricated records.",
+  "migration": "Version2 unreleased offline extension adds nullable timeline/master/master_qc/archive/cleanup_authorization and empty temporary_artifacts registry defaults. Legacy absent evidence remains absent; ARCHIVING/COMPLETED and BLOCKED-after-ARCHIVING without required typed records reject. No rendered/QC/archive/ownership evidence is fabricated.",
   "worker_reasoning_effort": "medium",
   "prior_review_history": {
     "narrow_rejected_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",
@@ -138,8 +139,8 @@
     }
   },
   "next_actions": [
-    "Coordinator publishes exact package3 source/tree as dependent candidate; preserve this worktree immutable.",
-    "Continue exact timeline/master/QC/archive/cleanup evidence in a separate worktree.",
-    "After all mandatory packages, request actual exact-source Astra phase review; no merge or Phase3 authorization."
+    "Coordinator publishes exact package4 source/tree; preserve worktree immutable.",
+    "Continue package5 minimum character/voice/reference and attributable shot QA in separate worktree.",
+    "After all mandatory packages, obtain actual exact-source Astra phase review; no merge or Phase3 authorization."
   ]
 }
