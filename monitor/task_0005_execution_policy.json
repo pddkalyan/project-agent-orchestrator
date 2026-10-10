@@ -33,15 +33,15 @@
     "model": "gpt-6.1-sol",
     "effort": "medium",
     "status": "RUNNING",
-    "scope": "Package2 frozen planning authorization; package1 exact candidate under genuine Astra rereview",
+    "scope": "Package3 atomic checkpoint and fake-provider crash recovery",
     "preserved_source_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
     "base_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870",
-    "local_worktree": "phase2-planning"
+    "local_worktree": "phase2-recovery"
   },
-  "last_verified_at_utc": "2026-10-10T02:58:23.306Z",
+  "last_verified_at_utc": "2026-10-10T03:03:00.373Z",
   "phase2_approval": "STILL_REQUIRES_CORRECTIONS_ACTUAL_ASTRA_MATRIX_REVIEW",
   "latest_validation": {
-    "movie_studio_tests_passed": 116,
+    "movie_studio_tests_passed": 119,
     "controller_tests_passed": 34,
     "reviewer_tests_passed": 68,
     "controller_production_fixtures_passed": 5,
@@ -50,23 +50,24 @@
     "additional_spend_usd": 0,
     "actual_astra_binding_review": "APPROVED_SOURCE_953e72e_TREE_IDENTICAL",
     "schema_meta_validation": "UNAVAILABLE_LOCAL_DEPENDENCY",
-    "astra_malformed_map_restore_probes_passed": 98
+    "astra_malformed_map_restore_probes_passed": 98,
+    "actual_astra_lifecycle_review": "APPROVED_EXACT_CANDIDATE_d849338a"
   },
   "no_banked_resets": true,
   "automatic_reload_enabled": false,
   "latest_candidate": {
-    "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/39",
-    "head_sha": "d849338a546b92c0fd7f53397a08547b3aa74ebe",
-    "source_sha": "0da35bcaa0948f2e8f686802cf608b09a0909512",
-    "tree_sha": "574d67851110d17ff242ac2b12a899ad337f9f90",
-    "astra_scope_review": "CORRECTED_PENDING_GENUINE_ASTRA_REREVIEW",
+    "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/64",
+    "head_sha": "d60bbb47375b61de74a6c9a45f149368ced86d81",
+    "source_sha": "4c4810ca4c7723de2ac8cc0a9f06cac1151cdb82",
+    "tree_sha": "9d258b693f5be61c4cd3778853a675625f32ec35",
+    "astra_scope_review": "SELF_TESTED_FINAL_REVIEW_PENDING",
     "full_phase_review": "STILL_REQUIRES_CORRECTIONS_ACCEPTED_RECONSTRUCTED_MATRIX",
-    "github_ci": "SUCCESS_38018860204"
+    "github_ci": "SUCCESS_38019108358"
   },
   "phase2_acceptance": {
     "original_checklist": "NOT_RECOVERED_BOUNDED_SEARCH",
     "matrix_kind": "EXPLICITLY_RECONSTRUCTED_USER_AUTHORIZED",
-    "matrix_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/fe7842f423b1309a21f9f3e10a10337171cda225/docs/reconstructed_phase2_acceptance_matrix__created_by_chatgpt__model_gpt-6.1-sol__task_TASK-0005.md",
+    "matrix_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/bb2cd0666e69130aabdf3796160f09410b62532a/docs/reconstructed_phase2_acceptance_matrix__created_by_chatgpt__model_gpt-6.1-sol__task_TASK-0005.md",
     "matrix_source_sha": "6e5d5b8b9fd373dfec4c10c125495fabb7f88674",
     "review_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/af0b732110665633a97b92a4e5c69055b9dba289/reviews/task_0005_phase2_matrix_review__created_by_chatgpt__model_gpt-6-astra__run_20261009.md",
     "reviewer": "gpt-6-astra",
@@ -92,7 +93,8 @@
       ]
     },
     "no_phase3_promotion": true,
-    "execution_matrix_source_sha": "a5cc616a0c7f4ab388259d41a4e75f6ec7102ad7"
+    "execution_matrix_source_sha": "2ac4693365eb880cbfc13b19ae0e6a1b6ef09708",
+    "lifecycle_review_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/bb2cd0666e69130aabdf3796160f09410b62532a/reviews/task_0005_lifecycle_rereview__created_by_chatgpt__model_gpt-6-astra__run_20261010.md"
   },
   "deadline_target": {
     "local": "2026-10-10 22:00 Asia/Kolkata",
