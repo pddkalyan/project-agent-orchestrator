@@ -993,6 +993,8 @@ class ProductionLedger:
         if not self.plan_frozen:
             raise ProductionPolicyError("freeze the current plan before creating a new revision")
         self.validate()
+        if self.jobs:
+            raise ProductionPolicyError("plan revision is referenced by generation history")
         prior = self.to_dict()
         snapshot = {
             "movie_bible": prior["movie_bible"],
@@ -1167,6 +1169,19 @@ class ProductionLedger:
 
         self.shot_continuity_bindings._put(binding.shot_id, binding)
 
+    def _require_production_plan(self):
+        """Scaffolds are constructible, but cannot enter production incomplete."""
+        if not self.plan_frozen:
+            raise ProductionPolicyError("production requires a frozen plan")
+        if not self.shots or not self.scenes:
+            raise ProductionPolicyError("production requires nonempty scene-bound planning")
+        if set(self.shot_plans) != set(self.shots) or set(self.shot_continuity_bindings) != set(self.shots):
+            raise ProductionPolicyError("production requires every ShotPlan and continuity binding")
+        if any(not shot.scene_id or shot.scene_id not in self.scenes for shot in self.shots.values()):
+            raise ProductionPolicyError("production requires scene-bound shots")
+        for shot_id in self.shots:
+            self._shot_plan_state_digest(shot_id)
+
     def submit_generation(
         self,
         *,
@@ -1180,6 +1195,8 @@ class ProductionLedger:
             raise ProductionPolicyError("unknown shot")
         if not job_id or not idempotency_key or not input_fingerprint:
             raise ProductionPolicyError("job id, idempotency key and fingerprint are required")
+        self.validate()
+        self._require_production_plan()
         state_digest = self._shot_plan_state_digest(shot_id)
         existing_job_id = self.idempotency_index.get(idempotency_key)
         if existing_job_id:
@@ -1228,6 +1245,8 @@ class ProductionLedger:
         quote: ProviderQuote,
     ) -> AttemptAuthorization:
         job = self._job(job_id)
+        self.validate()
+        self._require_production_plan()
         self._validate_job_plan_state(job)
         shot = self.shots[job.shot_id]
         self._validate_quote(job, quote)
@@ -1422,7 +1441,7 @@ class ProductionLedger:
                      or plan.has_dialogue_or_audio != shot.has_dialogue_or_audio):
             raise ProductionPolicyError("shot plan does not match runtime shot")
         material = [
-            self.project_id, shot_id, shot.scene_id, shot.has_dialogue_or_audio,
+            self.project_id, self.plan_revision, shot_id, shot.scene_id, shot.has_dialogue_or_audio,
             self.bible.content_digest,
             plan_digest(plan) if plan else None,
             continuity_binding_digest(binding) if binding else None,
@@ -1430,6 +1449,7 @@ class ProductionLedger:
         return sha256(json.dumps(material, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
     def _validate_job_plan_state(self, job: GenerationJob) -> None:
+        self._require_production_plan()
         if job.plan_state_digest != self._shot_plan_state_digest(job.shot_id):
             raise ProductionPolicyError("generation job references stale plan or continuity content")
 

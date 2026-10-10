@@ -64,6 +64,25 @@ class MovieStudioCoreTests(unittest.TestCase):
             charge_cap_enforced=cap,
         )
 
+    def submit_planned_fixture(self, ledger, **request):
+        """Supply production prerequisites explicitly for older job-focused fixtures."""
+        if not ledger.jobs and not ledger.plan_frozen and request.get("shot_id") in ledger.shots:
+            for shot_id, shot in ledger.shots.items():
+                if not shot.scene_id:
+                    scene_id = "fixture-scene-" + shot_id
+                    ledger.add_scene(Scene(scene_id))
+                    shot.scene_id = scene_id
+                if shot_id not in ledger.shot_plans:
+                    used = {p.sequence_index for p in ledger.shot_plans.values() if p.scene_id == shot.scene_id}
+                    sequence = 0
+                    while sequence in used:
+                        sequence += 1
+                    ledger.add_shot_plan(ShotPlan(shot_id, shot.scene_id, sequence, 1000, "fixture-prompt-" + shot_id, shot.has_dialogue_or_audio))
+                if shot_id not in ledger.shot_continuity_bindings:
+                    ledger.add_shot_continuity_binding(ShotContinuityBinding(shot_id, ledger.bible.revision, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset()))
+            ledger.freeze_plan()
+        return ledger.submit_generation(**request)
+
     def register_provider(self, ledger, provider="afree"):
         quote = self.quote(provider=provider)
         adapter_key = f"{quote.provider_id}:{quote.adapter_id}:{quote.adapter_version}"
@@ -104,6 +123,118 @@ class MovieStudioCoreTests(unittest.TestCase):
             ),
         )
         return attempt
+
+    def complete_planning_fixture(self):
+        ledger = ProductionLedger("planning-policy")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        ledger.add_shot_plan(ShotPlan("S1", "SC1", 0, 1000, "prompt", False))
+        ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset()))
+        return ledger
+
+    def test_production_handoff_missing_prerequisites_rejects_before_publication(self):
+        cases = []
+        complete = self.complete_planning_fixture()
+        cases.append(complete)  # complete but unfrozen
+        for missing in ("plan", "binding", "scene", "unbound", "other-shot"):
+            ledger = self.complete_planning_fixture()
+            if missing == "plan":
+                ledger.shot_plans._data.clear()
+            elif missing == "binding":
+                ledger.shot_continuity_bindings._data.clear()
+            elif missing in {"scene", "unbound"}:
+                ledger.shot_plans._data.clear()
+                object.__setattr__(ledger.shots["S1"], "scene_id", "")
+                if missing == "scene":
+                    ledger.scenes._data.clear()
+            else:
+                ledger.add_shot(Shot("S2", scene_id="SC1"))
+            ledger.freeze_plan()
+            cases.append(ledger)
+        for ledger in cases:
+            before = ledger.to_dict()
+            with self.subTest(before=before["shot_plans"]), self.assertRaises(ProductionPolicyError):
+                ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+            self.assertEqual(ledger.to_dict(), before)
+            self.assertEqual(ledger.shots["S1"].generation_epoch, 0)
+            self.assertIs(ledger.shots["S1"]._plan_owner, ledger)
+
+    def test_authorization_and_restore_fail_closed_on_incomplete_or_stale_handoff(self):
+        ledger = self.complete_planning_fixture()
+        ledger.freeze_plan()
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        quote = self.register_provider(ledger)
+        checkpoint = ledger.to_dict()
+        mutations = (
+            lambda d: d.__setitem__("plan_frozen", False),
+            lambda d: d["shot_plans"].clear(),
+            lambda d: d["shot_continuity_bindings"].clear(),
+            lambda d: d["shot_continuity_bindings"]["S1"].__setitem__("bible_digest", "0" * 64),
+            lambda d: d["shot_continuity_bindings"]["S1"].__setitem__("bible_revision", 1),
+            lambda d: d["shots"]["S1"].__setitem__("scene_id", ""),
+            lambda d: d.__setitem__("plan_revision", 2) or d.__setitem__("plan_revision_history", ["0" * 64]),
+        )
+        for corrupt in mutations:
+            data = copy.deepcopy(checkpoint)
+            corrupt(data)
+            with self.subTest(corrupt=corrupt), self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(data)
+        for corrupt in (
+            lambda l: object.__setattr__(l, "plan_frozen", False),
+            lambda l: l.shot_plans._data.clear(),
+            lambda l: l.shot_continuity_bindings._data.clear(),
+            lambda l: l.bible.characters._data.__setitem__("A", {"name": "tamper"}),
+        ):
+            candidate = ProductionLedger.from_dict(checkpoint)
+            corrupt(candidate)
+            job_before = copy.deepcopy(candidate.jobs["J1"])
+            indexes = copy.deepcopy((candidate.idempotency_index, candidate.authorization_index, candidate.provider_request_index))
+            epoch = candidate.shots["S1"].generation_epoch
+            with self.assertRaises(ProductionPolicyError):
+                candidate.authorize_attempt("J1", quote)
+            self.assertEqual(candidate.jobs["J1"], job_before)
+            self.assertEqual((candidate.idempotency_index, candidate.authorization_index, candidate.provider_request_index), indexes)
+            self.assertEqual(candidate.shots["S1"].generation_epoch, epoch)
+
+    def test_complete_frozen_plan_replay_and_all_job_state_restore(self):
+        ledger = self.complete_planning_fixture()
+        ledger.freeze_plan()
+        request = dict(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        job = ledger.submit_generation(**request)
+        quote = self.register_provider(ledger)
+        observed_states = set()
+        def assert_checkpoint_and_replay():
+            observed_states.add(ledger.jobs["J1"].status)
+            before = ledger.to_dict()
+            restored = ProductionLedger.from_dict(before)
+            self.assertEqual(restored.to_dict(), before)
+            self.assertIs(restored.submit_generation(**request), restored.jobs["J1"])
+            self.assertEqual(restored.to_dict(), before)
+            with self.assertRaisesRegex(ProductionPolicyError, "generation history"):
+                restored.create_new_plan_revision()
+            self.assertEqual(restored.to_dict(), before)
+        assert_checkpoint_and_replay()  # QUEUED
+        auth = ledger.authorize_attempt("J1", quote)
+        before = ledger.to_dict()
+        self.assertIs(ledger.authorize_attempt("J1", quote), auth)
+        self.assertEqual(ledger.to_dict(), before)
+        assert_checkpoint_and_replay()  # AUTHORIZED
+        receipt = ProviderSubmissionReceipt(auth.authorization_id, "J1", 1, auth.provider_id, auth.adapter_id, auth.adapter_version, auth.provider_request_key, "provider-1")
+        ledger.start_generation("J1", receipt)
+        assert_checkpoint_and_replay()  # RUNNING
+        running = ledger.to_dict()
+        ledger.fail_generation("J1", 1, "provider-1", FailureClass.RETRYABLE_PROVIDER, "retry")
+        assert_checkpoint_and_replay()  # RETRYABLE
+        ledger.authorize_attempt("J1", quote)
+        assert_checkpoint_and_replay()  # second AUTHORIZED, first attempt retained
+        ledger = ProductionLedger.from_dict(running)
+        ledger.finish_generation("J1", 1, "provider-1", "v1")
+        assert_checkpoint_and_replay()  # SUCCEEDED
+        ledger = ProductionLedger.from_dict(running)
+        ledger.fail_generation("J1", 1, "provider-1", FailureClass.NON_RETRYABLE_PROVIDER, "failed")
+        assert_checkpoint_and_replay()  # EXHAUSTED
+        self.assertEqual(observed_states, set(JobStatus))
 
     def test_freeze_plan(self):
         ledger = ProductionLedger("movie")
@@ -190,17 +321,19 @@ class MovieStudioCoreTests(unittest.TestCase):
             ledger.add_shot_plan(ShotPlan("S1", "SC", 0, -1, "p2", False))
         binding = ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset())
         ledger.add_shot_continuity_binding(binding)
-        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="p1")
-        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement"):
+        self.submit_planned_fixture(ledger, job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="p1")
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
             ledger.add_shot_plan(ShotPlan("S1", "SC", 0, 2000, "p2", False))
-        with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement"):
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
             ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset({"new-reference"})))
-        with self.assertRaisesRegex(ProductionPolicyError, "conflicting continuity binding replacement"):
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
             ledger.shot_continuity_bindings["S1"] = ShotContinuityBinding("S1", 1, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset({"new-reference"}))
         self.assertEqual(ledger.shot_plans["S1"], first)
-        ledger.freeze_plan()
-        ledger.create_new_plan_revision()
-        with self.assertRaisesRegex(ProductionPolicyError, "conflicting shot plan replacement"):
+        before = ledger.to_dict()
+        with self.assertRaisesRegex(ProductionPolicyError, "generation history"):
+            ledger.create_new_plan_revision()
+        self.assertEqual(ledger.to_dict(), before)
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
             ledger.add_shot_plan(ShotPlan("S1", "SC", 0, 2000, "p2", False))
 
     def test_frozen_plan_guards_public_mutation_routes(self):
@@ -457,13 +590,13 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_generation_submission_is_idempotent(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        first = ledger.submit_generation(
+        first = self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
             input_fingerprint="F1",
         )
-        second = ledger.submit_generation(
+        second = self.submit_planned_fixture(ledger,
             job_id="ignored",
             shot_id="S1",
             idempotency_key="K1",
@@ -475,14 +608,14 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_idempotency_key_cannot_hide_changed_input(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
             input_fingerprint="F1",
         )
         with self.assertRaises(ProductionPolicyError):
-            ledger.submit_generation(
+            self.submit_planned_fixture(ledger,
                 job_id="J2",
                 shot_id="S1",
                 idempotency_key="K1",
@@ -492,7 +625,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_generation_success_binds_exact_asset(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -507,7 +640,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_retry_ceiling_blocks_shot(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -539,7 +672,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_job_rejects_double_completion(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        job = ledger.submit_generation(
+        job = self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -790,7 +923,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             ledger.add_shot_plan(ShotPlan("S1", "SC", 0, duration, "same-prompt", False))
             ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset()))
             ledger.freeze_plan()
-            job = ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+            job = self.submit_planned_fixture(ledger, job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
             quote = self.register_provider(ledger)
             auth = ledger.authorize_attempt("J1", quote)
             self.assertEqual(job.plan_state_digest, auth.plan_state_digest)
@@ -807,12 +940,12 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.add_shot(Shot("S1", scene_id="SC"))
         plan = ShotPlan("S1", "SC", 0, 1000, "prompt", False)
         ledger.add_shot_plan(plan)
-        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
-        with self.assertRaisesRegex(ProductionPolicyError, "generation history"):
+        self.submit_planned_fixture(ledger, job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
             ledger.bible.update_fact("story_rules", "new", "not while queued")
-        with self.assertRaisesRegex(ProductionPolicyError, "after generation job submission"):
+        with self.assertRaisesRegex(ProductionPolicyError, "plan is frozen"):
             ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", ledger.bible.revision, frozenset(), frozenset(), "", frozenset(), frozenset(), frozenset()))
-        self.assertIs(ledger.submit_generation(job_id="ignored", shot_id="S1", idempotency_key="I1", input_fingerprint="F1"), ledger.jobs["J1"])
+        self.assertIs(self.submit_planned_fixture(ledger, job_id="ignored", shot_id="S1", idempotency_key="I1", input_fingerprint="F1"), ledger.jobs["J1"])
         ledger.shot_plans._data["S1"] = ShotPlan("S1", "SC", 0, 2000, "prompt", False)
         quote = self.register_provider(ledger)
         with self.assertRaisesRegex(ProductionPolicyError, "stale plan"):
@@ -829,7 +962,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_generation_checkpoint_requires_plan_state_binding(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+        self.submit_planned_fixture(ledger, job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
         self.authorize_and_start(ledger)
         checkpoint = ledger.to_dict()
         for path in ("job_missing", "job_changed", "authorization_missing", "authorization_changed"):
@@ -854,7 +987,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.bible.characters["A"] = {"name": "Alice"}
         ledger.add_shot(Shot("S1"))
         ledger.add_shot_continuity_binding(ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset()))
-        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+        self.submit_planned_fixture(ledger, job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
         self.authorize_and_start(ledger)
         data = ledger.to_dict()
         samples = (
@@ -874,7 +1007,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             ledger = ProductionLedger("movie")
             ledger.add_scene(Scene("SC"))
             ledger.add_shot(Shot("S1", scene_id="SC"))
-            ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
+            self.submit_planned_fixture(ledger, job_id="J1", shot_id="S1", idempotency_key="I1", input_fingerprint="F1")
             self.authorize_and_start(ledger)
             if succeeded:
                 ledger.finish_generation("J1", 1, "provider-1", "v1")
@@ -882,14 +1015,15 @@ class MovieStudioCoreTests(unittest.TestCase):
                 ledger.fail_generation("J1", 1, "provider-1", FailureClass.NON_RETRYABLE_PROVIDER, "failed")
             ledger.validate()
             before = ledger.to_dict()
-            for mutate in (
+            for index, mutate in enumerate((
                 lambda: ledger.bible.update_fact("story_rules", "new", "blocked"),
                 lambda: setattr(ledger.scenes["SC"], "scene_id", "OTHER"),
                 lambda: setattr(ledger.shots["S1"], "scene_id", "OTHER"),
                 lambda: setattr(ledger.shots["S1"], "has_dialogue_or_audio", True),
                 lambda: setattr(ledger, "project_id", "other-movie"),
-            ):
-                with self.subTest(succeeded=succeeded, mutate=mutate), self.assertRaisesRegex(ProductionPolicyError, "generation history"):
+            )):
+                expected = "generation history" if index == 4 else "plan is frozen"
+                with self.subTest(succeeded=succeeded, mutate=mutate), self.assertRaisesRegex(ProductionPolicyError, expected):
                     mutate()
                 self.assertEqual(ledger.to_dict(), before)
             self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
@@ -904,7 +1038,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.shots["S1"].reviews = {
             Gate.VISUAL_QA: self.review(Gate.VISUAL_QA)
         }
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -919,7 +1053,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_corrupted_generation_job_map_rejects_key_mismatch(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -933,7 +1067,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_corrupted_generation_job_map_rejects_unknown_shot(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -948,13 +1082,13 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
         ledger.add_shot(Shot("S2"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
             input_fingerprint="F1",
         )
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J2",
             shot_id="S2",
             idempotency_key="K2",
@@ -968,7 +1102,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_corrupted_generation_job_map_rejects_invalid_attempt_count(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -998,7 +1132,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         shot = self.generated_shot()
         shot.reviews = {Gate.VISUAL_QA: self.review(Gate.VISUAL_QA)}
         ledger.add_shot(shot)
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1067,7 +1201,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_idempotency_index_must_be_exact_bijection(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1081,7 +1215,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_negative_attempts_are_rejected_on_restore(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1095,7 +1229,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_impossible_succeeded_job_is_rejected_on_restore(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1109,14 +1243,14 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_second_active_job_for_same_shot_is_rejected(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
             input_fingerprint="F1",
         )
         with self.assertRaises(ProductionPolicyError):
-            ledger.submit_generation(
+            self.submit_planned_fixture(ledger,
                 job_id="J2",
                 shot_id="S1",
                 idempotency_key="K2",
@@ -1131,7 +1265,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         shot.status = ShotStatus.CANONICAL
         shot.upscale_allowed = True
         ledger.add_shot(shot)
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1182,7 +1316,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_empty_ids_and_inconsistent_shot_lifecycle_fail_closed(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1222,7 +1356,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_attempt_authorization_rejects_ineligible_quotes(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1251,7 +1385,7 @@ class MovieStudioCoreTests(unittest.TestCase):
 
         job_status_ledger = ProductionLedger("movie")
         job_status_ledger.add_shot(Shot("S1"))
-        job = job_status_ledger.submit_generation(
+        job = self.submit_planned_fixture(job_status_ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1275,7 +1409,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_start_requires_persisted_zero_cost_authorization(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1292,7 +1426,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_authorization_replay_is_exactly_idempotent(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1317,7 +1451,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_retry_preserves_first_attempt_and_rejects_late_callback(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1346,7 +1480,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_provider_job_id_must_match_current_attempt(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1359,7 +1493,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_duplicate_terminal_callback_is_idempotent_but_conflict_rejects(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1376,7 +1510,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_non_retryable_failure_exhausts_immediately(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1401,7 +1535,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_authorized_and_running_checkpoints_round_trip(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1438,7 +1572,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_corrupt_attempt_indexes_and_history_fail_closed(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1471,7 +1605,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_submission_receipt_must_match_authorized_adapter_and_request(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1499,7 +1633,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_provider_receipt_is_idempotent_and_rejects_blank_job_id(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1537,7 +1671,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_derived_authorization_identifiers_are_verified_on_restore(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1563,7 +1697,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_start_revalidates_ledger_authenticated_zero_cost_authorization(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1598,7 +1732,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_failed_authorization_preflight_does_not_claim_shot_epoch(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        job = ledger.submit_generation(
+        job = self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1614,7 +1748,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_generation_owner_lifecycle_is_verified_on_restore(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1644,7 +1778,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         for project_id in ("movie-a", "movie-b"):
             ledger = ProductionLedger(project_id)
             ledger.add_shot(Shot("S1"))
-            ledger.submit_generation(
+            self.submit_planned_fixture(ledger,
                 job_id="J1",
                 shot_id="S1",
                 idempotency_key="K1",
@@ -1661,7 +1795,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.add_shot(Shot("S1"))
         for number in (1, 2):
             job_id = f"J{number}"
-            ledger.submit_generation(
+            self.submit_planned_fixture(ledger,
                 job_id=job_id,
                 shot_id="S1",
                 idempotency_key=f"K{number}",
@@ -1678,7 +1812,7 @@ class MovieStudioCoreTests(unittest.TestCase):
                 FailureClass.RETRYABLE_PROVIDER,
                 "exhausted",
             )
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J3",
             shot_id="S1",
             idempotency_key="K3",
@@ -1704,7 +1838,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_old_job_epoch_callback_cannot_mutate_new_job(self):
         ledger = ProductionLedger("movie")
         ledger.add_shot(Shot("S1"))
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="K1",
@@ -1719,7 +1853,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             FailureClass.RETRYABLE_PROVIDER,
             "exhausted",
         )
-        ledger.submit_generation(
+        self.submit_planned_fixture(ledger,
             job_id="J2",
             shot_id="S1",
             idempotency_key="K2",
@@ -1833,7 +1967,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         with self.assertRaises(ProductionPolicyError):
             ledger.transition_scene("SC1", SceneStatus.REVIEW)
         ledger.shots["S1"].bind_generated_asset("v1")
-        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        self.submit_planned_fixture(ledger, job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
         before = ledger.to_dict()
         with self.assertRaisesRegex(ProductionPolicyError, "active jobs"):
             ledger.transition_scene("SC1", SceneStatus.REVIEW)
@@ -1852,7 +1986,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         with self.assertRaises(ProductionPolicyError):
             clean.transition_episode(EpisodeStatus.ASSEMBLING)
         with self.assertRaisesRegex(ProductionPolicyError, "lifecycle"):
-            clean.submit_generation(job_id="J2", shot_id="S1", idempotency_key="K2", input_fingerprint="F2")
+            self.submit_planned_fixture(clean,job_id="J2", shot_id="S1", idempotency_key="K2", input_fingerprint="F2")
         self.assertEqual(clean.to_dict(), before)
 
     def test_lifecycle_restore_rejects_skips_missing_history_and_false_completion(self):
@@ -1930,7 +2064,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.add_shot(Shot("S1", scene_id="SC1"))
         ledger.transition_episode(EpisodeStatus.IN_PRODUCTION)
         ledger.transition_scene("SC1", SceneStatus.GENERATING)
-        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        self.submit_planned_fixture(ledger, job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
         self.authorize_and_start(ledger)
         ledger.finish_generation("J1", 1, "provider-1", "v1")
         ledger.transition_scene("SC1", SceneStatus.REVIEW)
@@ -1946,7 +2080,7 @@ class MovieStudioCoreTests(unittest.TestCase):
             mutations = (
                 lambda: shot.bind_generated_asset("v2"),
                 lambda: ledger.authorize_attempt("J1", self.quote()),
-                lambda: ledger.submit_generation(job_id="J2", shot_id="S1", idempotency_key="K2", input_fingerprint="F2"),
+                lambda: self.submit_planned_fixture(ledger, job_id="J2", shot_id="S1", idempotency_key="K2", input_fingerprint="F2"),
                 lambda: ledger.add_shot(Shot("S2", scene_id="SC1")),
                 lambda: setattr(shot, "scene_id", ""),
                 lambda: setattr(ledger.scenes["SC1"], "scene_id", "changed"),
@@ -2171,7 +2305,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger = ProductionLedger("movie")
         ledger.add_scene(Scene("SC1"))
         ledger.add_shot(Shot("S1", scene_id="SC1"))
-        job = ledger.submit_generation(
+        job = self.submit_planned_fixture(ledger,
             job_id="J1",
             shot_id="S1",
             idempotency_key="ik1",
@@ -2197,7 +2331,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger2 = ProductionLedger("movie")
         ledger2.add_scene(Scene("SC1"))
         ledger2.add_shot(Shot("S1", scene_id="SC1"))
-        job = ledger2.submit_generation(
+        job = self.submit_planned_fixture(ledger2,
             job_id="J1", shot_id="S1", idempotency_key="ik1", input_fingerprint="fp1"
         )
         ledger2.register_provider_adapter(ProviderAdapterRegistration(
@@ -2604,7 +2738,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_start_generation_idempotent_after_success(self):
         ledger = ProductionLedger(project_id="test-idem-success")
         ledger.add_shot(Shot(shot_id="shot-1"))
-        ledger.submit_generation(job_id="job-1", shot_id="shot-1", idempotency_key="ik1", input_fingerprint="f1")
+        self.submit_planned_fixture(ledger, job_id="job-1", shot_id="shot-1", idempotency_key="ik1", input_fingerprint="f1")
         quote = ProviderQuote(
             quote_id="Q1", provider_id="P1", adapter_id="A1", adapter_version="V1",
             request_fingerprint="f1", estimated_cost_usd_micros=0, maximum_cost_usd_micros=0,
@@ -2635,7 +2769,7 @@ class MovieStudioCoreTests(unittest.TestCase):
     def test_start_generation_idempotent_after_failure(self):
         ledger = ProductionLedger(project_id="test-idem-fail")
         ledger.add_shot(Shot(shot_id="shot-1"))
-        ledger.submit_generation(job_id="job-1", shot_id="shot-1", idempotency_key="ik1", input_fingerprint="f1")
+        self.submit_planned_fixture(ledger, job_id="job-1", shot_id="shot-1", idempotency_key="ik1", input_fingerprint="f1")
         quote = ProviderQuote(
             quote_id="Q1", provider_id="P1", adapter_id="A1", adapter_version="V1",
             request_fingerprint="f1", estimated_cost_usd_micros=0, maximum_cost_usd_micros=0,

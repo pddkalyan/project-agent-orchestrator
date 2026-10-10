@@ -748,5 +748,38 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "generation_jobs": {
+            "minProperties": 1
+          }
+        },
+        "required": [
+          "generation_jobs"
+        ]
+      },
+      "then": {
+        "properties": {
+          "plan_frozen": {
+            "const": true
+          },
+          "scenes": {
+            "minProperties": 1
+          },
+          "shots": {
+            "minProperties": 1
+          },
+          "shot_plans": {
+            "minProperties": 1
+          },
+          "shot_continuity_bindings": {
+            "minProperties": 1
+          }
+        }
+      }
+    }
+  ]
 }

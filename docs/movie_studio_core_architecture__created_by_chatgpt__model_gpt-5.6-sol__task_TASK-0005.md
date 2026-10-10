@@ -74,3 +74,12 @@ Checkpoint episode statuses and every present scene status must be explicit; del
 
 
 Package 1 Astra correction: scene/shot insertion and owned shot structural writes validate a detached prospective ledger before publishing data or ownership. Active production cannot acquire an unbound shot or lose a generating scene's last shot. Existing ShotPlan agreement and lifecycle evidence are checked in the prospective graph. Owned scene/shot IDs cannot be renamed independently of their map keys. Planned scaffolding still permits unbound shots and later scene assignment; legal active moves require the source generating scene to retain a shot. Rejected methods, map writes and attributes preserve state, histories and original ownership.
+
+
+## Complete planning handoff — package 2
+
+Planning scaffolds may remain unfrozen and incomplete while being constructed. Production submission requires a frozen, valid, nonempty ledger: every shot must belong to a present scene and have a matching ShotPlan and continuity binding to the exact current Bible revision/content digest. Submission and authorization preflight the full ledger before changing jobs, indexes, epochs, attempt history or ownership. Job plan identity includes the plan revision as well as exact shot, scene, audio policy, plan, binding and Bible content. Every restored job state requires the same complete frozen handoff; old job checkpoints lacking it reject without invented planning evidence. Legacy empty/planned scaffolds retain their documented restore routes.
+
+Exact submission replay returns the original job in queued, authorized, running, retryable and terminal states; exact authorization replay preserves the existing immutable authorization. A new plan revision is conservatively blocked whenever any generation job exists, including queued and terminal history. Historical snapshots are required before safe post-generation revision can be supported; the current revision digest is an integrity record rather than a complete historical planning snapshot.
+
+The schema expresses that nonempty generation jobs require frozen nonempty planning maps; exact key/reference/Bible equality and current lifecycle evidence remain runtime invariants. This is an unreleased offline schema-version-2 contract extension. Earlier incomplete production checkpoints are intentionally rejected, and no live migration, provider call or full Phase 2 approval is claimed.

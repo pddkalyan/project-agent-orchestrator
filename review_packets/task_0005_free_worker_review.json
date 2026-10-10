@@ -2,8 +2,8 @@
   "schema_version": 1,
   "task_id": "TASK-0005",
   "issue": 35,
-  "stage": "PHASE_2_PACKAGE_1_ASTRA_CORRECTION_CANDIDATE",
-  "base_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
+  "stage": "PHASE_2_PACKAGE_2_COMPLETE_FROZEN_PLANNING_CANDIDATE",
+  "base_sha": "0da35bcaa0948f2e8f686802cf608b09a0909512",
   "worker": "ChatGPT Work Mode",
   "worker_model": "gpt-6.1-sol",
   "source": {
@@ -13,18 +13,19 @@
     "preserved_worktree": "Original feature/TASK-0005-phase2-bible-binding and its uncommitted correction preserved; net diff reapplied to new feature baseline in separate worktree",
     "narrow_approved_sha": "b2772922f8b39a0be7b6ae1787fa5477ed064f0d",
     "narrow_approval": "Actual independent Astra approval reported by supervisor; upstream PR37 merged to becf9dc; dependent candidate remains unapproved",
-    "package_1": "gpt-6.1-sol medium; isolated candidate branch from preserved953e source; PR38 remote remains unchanged"
+    "package_1": "gpt-6.1-sol medium; isolated candidate branch from preserved953e source; PR38 remote remains unchanged",
+    "package_2": "gpt-6.1-sol medium; separate clean planning worktree from immutable package1 correction; coordinator owns publication and actual review"
   },
-  "change": "Package1 adds guarded legal episode/scene lifecycle transitions and immutable prior-status history, rejects direct lifecycle writes/advanced constructors, validates restored histories and current state evidence, and enables BLOCKED resume only to the immediately preceding legal state. Nonempty scene-bound shots are required to enter production; scene review requires assets/no active jobs; approval, assembly and final-QC entry require current canonical reviewed shots. ARCHIVING/COMPLETED remain unsupported until typed timeline/archive evidence exists. Reviewed/approved lifecycle content rejects incompatible regeneration and planning changes before mutation; historic exact callback/asset replay remains idempotent. Legacy boolean completion helper now always returns False and cannot certify completion.",
+  "change": "Package2 requires frozen complete valid scene/ShotPlan/current-Bible continuity planning for every shot before new generation submission and attempt authorization. Every durable job requires that handoff during restoration. Exact job content digest now includes the plan revision; any generation history blocks explicit new revision until historical snapshot support exists. Exact submit replay across all supported job states and exact authorization replay remain idempotent. Old incomplete production checkpoints reject rather than receive fabricated planning evidence.",
   "test_evidence": {
-    "movie_studio": "116 tests passed, 0 failures (preserved 113 +3 focused correction methods)",
-    "test_discovery": "116 tests passed, 0 failures",
+    "movie_studio": "119 tests passed, 0 failures (116 prior +3 raw API planning-handoff methods)",
+    "test_discovery": "119 tests passed, 0 failures",
     "python_compile": "passed for core and tests",
     "json_schema_parse": "passed; runtime/schema shape tests passed; jsonschema package unavailable in both installed Python runtimes, so no independent JSON Schema meta-validation claimed",
     "git_diff_check": "passed",
-    "controller_regression": "34 tests passed; exact TASK-0002 deterministic workflow step passed in correction worktree",
-    "reviewer_bridge_regression": "68 tests passed; exact TASK-0003 deterministic workflow step passed in correction worktree",
-    "controller_production_fixtures": "All 5 exact Astra Review #4 production-path fixtures passed in correction worktree; isolated RUNNER_TEMP/PYTHONPATH",
+    "controller_regression": "34 tests passed; exact TASK-0002 deterministic workflow step passed in planning worktree",
+    "reviewer_bridge_regression": "68 tests passed; exact TASK-0003 deterministic workflow step passed in planning worktree",
+    "controller_production_fixtures": "All 5 exact Astra Review #4 production-path fixtures passed in planning worktree; isolated RUNNER_TEMP/PYTHONPATH",
     "windows_regression": "not run on package1 candidate; remote source/base evidence retained, no new Windows run claimed",
     "narrow_ci": "PR37 narrow candidate run 37892960500 SUCCESS per supervisor; dependent candidate not yet published",
     "safety_provenance": "passed changed-path worker allowlist, all changed artifact provenance, JSONL parse, zero-spend/cloud-only/no-merge boundaries and changed-file CI secret pattern; no provider calls or external workflow launches"
@@ -38,11 +39,11 @@
     "checkpoint_digest": "deterministic integrity/accounting aid, not an authenticated signature against an adversary who rewrites the entire checkpoint",
     "usage_metrics": "model/account usage unavailable; no usage estimate asserted"
   },
-  "phase_2_gap_assessment": "Package1 addresses legal guarded episode/scene transitions, false completion and recoverable BLOCKED lifecycle. Exact source/base generation contracts remain covered. Complete frozen planning at dispatch, executable reconcile/durable writer, typed timeline/master QC, authenticated archive/cleanup evidence and accepted story/reference provenance remain separate unfinished packages. Reconstructed matrix maintained separately; no full Phase2 pass or Phase3 authorization claimed.",
-  "review_status": "PACKAGE_1_CORRECTED_SELF_TESTED_PENDING_EXACT_SOURCE_ASTRA_REVIEW",
+  "phase_2_gap_assessment": "Package2 closes complete frozen planning dispatch and restore handoff. Package1 actual review remains owned by coordinator; no approval fabricated. Durable checkpoint/reconciliation, typed timeline/master/QC/archive/cleanup and minimum continuity/reference/QA accountability remain unfinished.",
+  "review_status": "PACKAGE_2_SELF_TESTED_PENDING_EXACT_SOURCE_ASTRA_REVIEW",
   "reviewed_sha": null,
   "tests": {
-    "passed": 116,
+    "passed": 119,
     "failed": 0
   },
   "corrections": [
@@ -101,7 +102,7 @@
       "regressions": "Deletion matrix for status/history/both across every supported lifecycle and BLOCKED variant; exact restoration, explicit planned history defaults, active method/map/attribute atomic rejection and legal scaffolding/moves. Existing corruption tests now inject internal corruption after legal insertion and retain original validation assertions."
     }
   ],
-  "migration": "All checkpoints require explicit episode_status and every present scene status. Only explicit PLANNED legacy lifecycle records may default empty histories. Advanced/BLOCKED absent history rejects. No status defaulting, invented transitions, live migration or new approval claimed. Schema remains unreleased offline version 2.",
+  "migration": "Schema version remains unreleased offline version 2. Every job checkpoint now requires complete frozen scene/ShotPlan/exact-Bible continuity planning and a plan-state digest including plan_revision. Old incomplete/unfrozen job checkpoints and old plan digests reject without fabricated metadata. Planned scaffold and explicit PLANNED missing-history legacy routes remain supported.",
   "worker_reasoning_effort": "medium",
   "prior_review_history": {
     "narrow_rejected_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",
@@ -129,9 +130,8 @@
     }
   },
   "next_actions": [
-    "Publish package1 as explicit dependent candidate through coordinator; do not push/merge automatically.",
-    "Independent milestone review of exact package1 commit; apply concrete corrections.",
-    "After publication checkpoint proceed sequentially to package2 complete planning and reference/association integrity within accepted scope.",
+    "Coordinator publishes exact package2 source/tree as a dependent candidate and obtains actual independent Astra review.",
+    "Continue package3 durable atomic checkpoints and counting fake-provider stable-key recovery in a separate worktree.",
     "Keep ARCHIVING/COMPLETED unsupported until typed evidence package safely enables them."
   ]
 }
