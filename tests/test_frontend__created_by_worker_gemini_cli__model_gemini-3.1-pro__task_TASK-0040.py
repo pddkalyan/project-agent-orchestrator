@@ -166,7 +166,15 @@ global.fetch = async () => ({ok: false, status: 429});
     assert(!prs.children[0].textContent.includes('undefined'));
     await app.fetchActions();
     assert(actions.children[0].textContent.includes('rate limit'));
-    console.log('Behavior tests passed: URL injection, DOM escaping, workflow state, heartbeat, stale status, and 429.');
+    let requestURL = '';
+    global.fetch = async url => {
+        requestURL = url;
+        return {ok: true, json: async () => []};
+    };
+    await app.fetchBridgeStatus();
+    assert(requestURL.includes('/issues/55/comments?per_page=100&since='),
+        'heartbeat comments must use recent-since window to avoid truncated old page');
+    console.log('Behavior tests passed: URL injection, DOM escaping, workflow state, heartbeat, recent-page filtering, stale status, and 429.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
 
