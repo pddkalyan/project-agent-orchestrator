@@ -25,9 +25,17 @@ The Executive Producer is the deterministic authority. Specialist agents propose
 
 The Movie Bible persists revisioned story rules, character identity, voice identity, locations, and continuity facts outside conversational memory. Episode, scene, and shot ledgers refer to this durable baseline. A later increment will add reference-asset digests and explicit council evidence without weakening these bindings.
 
+Entity and fact map writes now advance the Bible revision and SHA-256 content digest. Namespace construction and restore require mappings, without list/pair coercion or duplicate-ID collapse. All keys and string values must encode as UTF-8. Each write computes the complete proposed content digest and next revision/history before publishing any state, so rejected encoding or digest computation leaves the existing checkpoint intact. Entity values are copied on write and exposed as read-only mappings, so nested edits cannot silently alter the persisted identity. Batch map updates validate before committing one revision. An explicit entity update can compare an expected revision. Frozen plans reject Bible writes; after any generation job exists, Bible and referenced shot structure remain fixed because historical jobs have no independent full-content snapshot. A later historical-snapshot contract would be needed to safely permit post-generation Bible edits.
+
+Before any meaningful Bible change with continuity bindings, the ledger requires an explicit unfrozen new plan revision and preflights every bound shot for safe replacement. Revision-1 bindings, generated assets, reviews, ownership, epochs, or generation history reject the change before maps, revision, digest, or history change. Exact map assignment/update and an empty clear remain idempotent. After a permitted change, replace every stale binding before validating or freezing the plan.
+
+Continuity bindings persist the exact Bible content digest as well as its revision. A new plan revision can replace a binding for an untouched shot after the Bible changes; stale bindings fail validation. The old empty revision-1 Bible checkpoint may receive a deterministic empty digest on restore. A populated or revisioned checkpoint lacking digest/history, and any old job or binding checkpoint lacking the new exact-content evidence, fails closed instead of receiving invented history.
+
 ## Resumable generation jobs
 
 Generation jobs store stable job IDs, idempotency keys, input fingerprints, provider job identifiers, output versions, attempt counts, retry ceilings, and failure reasons. Resubmission returns the existing job only when shot, fingerprint, and retry policy match exactly. Key reuse with changed input is rejected.
+
+Each job also records a deterministic digest of its actual shot structure, ShotPlan, continuity binding, and Bible content. The authorization and provider request key carry this digest alongside the caller's input fingerprint. Authorization, receipt replay, provider callbacks, and checkpoint restore reject changed content; terminal job history remains verifiable because the referenced content cannot be publicly rewritten. These digests are deterministic integrity records, not authenticated signatures against an attacker who can rewrite an entire checkpoint.
 
 Retryable failures return a shot to planned state. Exhaustion blocks it. Restored ledgers fail closed when a job references an unknown shot, an idempotency index references a missing job, or attempts exceed the ceiling.
 
@@ -50,3 +58,19 @@ Google Drive is the intended permanent master store. An episode reaches complete
 ## Activation boundary
 
 This core performs no provider calls, media generation, Drive upload, purchase, local inference, merge, auto-merge, or TASK-0004/PR #6 change.
+
+
+## Guarded episode and scene lifecycle — package 1
+
+New episodes and scenes start PLANNED. Lifecycle fields and histories reject direct assignment; public constructors cannot fabricate advanced states. `transition_episode` permits PLANNED → IN_PRODUCTION → ASSEMBLING → FINAL_QC, or BLOCKED from an intermediate state. `transition_scene` permits PLANNED → GENERATING → REVIEW → APPROVED, or BLOCKED before approval. Exact transition replay is idempotent. Episode production requires nonempty scene-bound shots; scene generation requires an episode in production. Scene review requires generated assets and no active jobs. Scene approval, episode assembly and entry into final QC require current canonical shots with applicable QA. Entering FINAL_QC does not claim that master-level QC has passed.
+
+ARCHIVING and COMPLETED are explicitly unsupported until typed timeline/master QC and archive verification contracts exist. The deprecated `episode_can_complete` boolean API always returns False: caller booleans cannot establish completion evidence. This intentional safety change removes the former false certification path.
+
+`resume_episode` and `resume_scene` recover BLOCKED state only to the immediately preceding status, rechecking its current evidence; generating scenes require episode recovery first. Resume replay is idempotent. Prior-status tuples persist every transition including BLOCKED and resume; restore rejects missing, skipped or impossible history. These histories are deterministic records, not authenticated signatures against an actor rewriting the entire checkpoint.
+
+Reviewed/approved scene content and assembling/final-QC episode content reject incompatible asset replacement, new generation authorization/submission and public planning changes before mutation. Exact historic callback and canonical-asset replay remain harmless. Existing in-flight callbacks may settle blocked production without advancing its lifecycle. No controlled re-edit of an approved scene is implemented; that requires a future revision/invalidation contract rather than silently discarding approvals.
+
+Checkpoint episode statuses and every present scene status must be explicit; deleting them rejects rather than defaulting to PLANNED. Only explicitly PLANNED legacy records may default empty lifecycle histories. Advanced legacy checkpoints without histories reject instead of acquiring invented transitions. This is an unreleased offline schema-version-2 extension, without a live checkpoint migration. Provider activation, durable file writing, typed timeline/QC/archive evidence and full Phase 2 approval remain unfinished.
+
+
+Package 1 Astra correction: scene/shot insertion and owned shot structural writes validate a detached prospective ledger before publishing data or ownership. Active production cannot acquire an unbound shot or lose a generating scene's last shot. Existing ShotPlan agreement and lifecycle evidence are checked in the prospective graph. Owned scene/shot IDs cannot be renamed independently of their map keys. Planned scaffolding still permits unbound shots and later scene assignment; legal active moves require the source generating scene to retain a shot. Rejected methods, map writes and attributes preserve state, histories and original ownership.
