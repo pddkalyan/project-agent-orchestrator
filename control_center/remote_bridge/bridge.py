@@ -154,6 +154,7 @@ class AntigravityRemoteBridge:
         self.watermark_file = os.path.join(self.state_dir, "watermark.json")
         self.claims_dir = os.path.join(self.state_dir, "claims")
         self.status_file = os.path.join(self.state_dir, "status_state.json")
+        self.pending_status_file = os.path.join(self.state_dir, "pending_status_result.json")
         self.config_file = os.path.join(self.state_dir, "config.json")
         os.makedirs(self.claims_dir, exist_ok=True)
 
@@ -555,7 +556,18 @@ class AntigravityRemoteBridge:
         else:
             self._update_claim_status(claim_path, "FAILED", STATUS_CODES["INVALID_PAYLOAD"])
             return False, STATUS_CODES["INVALID_PAYLOAD"]
+        # The workspace may have changed after the inbox envelope was
+        # authenticated. Re-check the exact repo/branch/SHA immediately before
+        # any native send-message, even on a clean working tree.
         git_info = self.get_local_git_info()
+        if not (git_info.get("valid_repo") is True
+                and git_info.get("branch") == EXPECTED_BRANCH
+                and git_info.get("head_sha", "").lower() == str(payload.get("expected_head_sha", "")).lower()
+                and git_info.get("head_sha", "").lower() == str(auth_context.get("expected_head_sha", "")).lower()
+                and auth_context.get("expected_branch") == EXPECTED_BRANCH
+                and auth_context.get("issue_number") == payload.get("issue_number")):
+            self._update_claim_status(claim_path, "FAILED", STATUS_CODES["INVALID_PAYLOAD"])
+            return False, STATUS_CODES["INVALID_PAYLOAD"]
         if git_info.get("is_dirty", True):
             allow_dirty = self.config.get("allow_dirty_continue", False)
             issue_num = payload.get("issue_number")
@@ -722,6 +734,30 @@ class AntigravityRemoteBridge:
         self.set_watermark(new_highest_id)
         return {"status": "SUCCESS", "processed_count": len(results), "results": results}
 
+    def _queue_pending_status_result(self, result_code):
+        """Persist only a fixed, public-safe result enum until the next receipt."""
+        if result_code not in STATUS_CODES or result_code == STATUS_CODES["NO_OP"]:
+            return True
+        temp_file = self.pending_status_file + ".tmp"
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump({"result_code": result_code}, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_file, self.pending_status_file)
+            return True
+        except Exception:
+            return False
+
+    def _read_pending_status_result(self):
+        try:
+            with open(self.pending_status_file, "r", encoding="utf-8") as f:
+                record = json.load(f)
+            code = record.get("result_code") if isinstance(record, dict) else None
+            return code if code in STATUS_CODES and code != STATUS_CODES["NO_OP"] else None
+        except (FileNotFoundError, ValueError, OSError, TypeError):
+            return None
+
     def post_status_receipt(self, force=False, last_result_code=STATUS_CODES["NO_OP"]):
         if not self.config.get("status_enabled", False):
             return False, "STATUS_DISABLED"
@@ -754,10 +790,19 @@ class AntigravityRemoteBridge:
         elapsed = now_ts - last_posted_ts
         min_interval = self.config.get("min_status_interval_sec", 900)
 
+        # Preserve a meaningful command result during the 15-minute posting
+        # cooldown (or API outage), so a later idle NO_OP cannot erase it.
+        if last_result_code in STATUS_CODES and last_result_code != STATUS_CODES["NO_OP"]:
+            self._queue_pending_status_result(last_result_code)
+        queued_result = self._read_pending_status_result()
+
         # Strictly enforce min_status_interval_sec cap (no force bypass permitted)
         if elapsed < min_interval and last_posted_ts > 0:
             return False, STATUS_CODES["RATE_LIMITED"]
 
+        selected_result = queued_result or (
+            last_result_code if last_result_code in STATUS_CODES else STATUS_CODES["NO_OP"]
+        )
         git_info = self.get_local_git_info()
 
         receipt_seed = f"{now.isoformat()}-{git_info['head_sha']}"
@@ -770,7 +815,7 @@ class AntigravityRemoteBridge:
             "git_head_sha": git_info["head_sha"],
             "git_dirty": git_info["is_dirty"],
             "bridge_process_alive": True,
-            "last_command_result_code": last_result_code if last_result_code in STATUS_CODES else STATUS_CODES["NO_OP"],
+            "last_command_result_code": selected_result,
             "antigravity_execution": "UNKNOWN",
             "antigravity_model": "UNKNOWN",
             "antigravity_quota": "UNKNOWN",
@@ -792,6 +837,14 @@ class AntigravityRemoteBridge:
                 with open(self.status_file, "w", encoding="utf-8") as f:
                     json.dump({"last_posted_timestamp": now_ts, "last_posted_utc": now.isoformat()}, f)
             except Exception:
+                pass
+            # A queued result is cleared only after GitHub accepted the receipt.
+            # Corrupt/unknown pending state cannot authorize a dispatch.
+            try:
+                os.remove(self.pending_status_file)
+            except FileNotFoundError:
+                pass
+            except OSError:
                 pass
             return True, "STATUS_POSTED"
         else:
