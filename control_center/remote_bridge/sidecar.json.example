@@ -1,0 +1,21 @@
+{
+  "name": "antigravity-github-bridge-sidecar",
+  "version": "1.0.0",
+  "description": "Example Antigravity 2.0 sidecar configuration template for GitHub remote bridge supervision",
+  "enabled": false,
+  "exec": {
+    "command": "python",
+    "args": [
+      "control_center/remote_bridge/bridge.py"
+    ]
+  },
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  },
+  "settings": {
+    "dispatch_enabled": false,
+    "status_enabled": false,
+    "conversation_id": "",
+    "poll_interval_sec": 900
+  }
+}
