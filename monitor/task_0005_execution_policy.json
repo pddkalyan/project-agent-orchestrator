@@ -32,16 +32,16 @@
   "active_worker": {
     "model": "gpt-6.1-sol",
     "effort": "medium",
-    "status": "RUNNING",
-    "scope": "Package5 character–voice/reference associations and attributable QA",
+    "status": "WAITING_FINAL_REVIEW_READY_FOR_CORRECTIONS",
+    "scope": "All five accepted packages frozen; apply concrete Astra findings if any",
     "preserved_source_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
     "base_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870",
     "local_worktree": "phase2-accountability"
   },
-  "last_verified_at_utc": "2026-10-10T03:15:05.917Z",
+  "last_verified_at_utc": "2026-10-10T03:22:56.194Z",
   "phase2_approval": "STILL_REQUIRES_CORRECTIONS_ACTUAL_ASTRA_MATRIX_REVIEW",
   "latest_validation": {
-    "movie_studio_tests_passed": 133,
+    "movie_studio_tests_passed": 138,
     "controller_tests_passed": 34,
     "reviewer_tests_passed": 68,
     "controller_production_fixtures_passed": 5,
@@ -56,18 +56,18 @@
   "no_banked_resets": true,
   "automatic_reload_enabled": false,
   "latest_candidate": {
-    "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/66",
-    "head_sha": "7d0d11d88ec401dea3628f70d973404e136e4e0b",
-    "source_sha": "f34102571a9d255739e43cbe45f3140e118a4190",
-    "tree_sha": "98c92276adc1385302cbefb0633f0aba2039e225",
-    "astra_scope_review": "SELF_TESTED_FINAL_REVIEW_PENDING",
+    "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/68",
+    "head_sha": "a9c1ceb0bc93d814bd349884ee7c2b8485fcd585",
+    "source_sha": "a692c56af7768e9383a684662d67646f49709ae7",
+    "tree_sha": "1adf0773e3d083668ee104293ba81150f77b7ee2",
+    "astra_scope_review": "FINAL_EXACT_CANDIDATE_REVIEW_IN_PROGRESS",
     "full_phase_review": "STILL_REQUIRES_CORRECTIONS_ACCEPTED_RECONSTRUCTED_MATRIX",
-    "github_ci": "SUCCESS_38019824351"
+    "github_ci": "SUCCESS_38020256829"
   },
   "phase2_acceptance": {
     "original_checklist": "NOT_RECOVERED_BOUNDED_SEARCH",
     "matrix_kind": "EXPLICITLY_RECONSTRUCTED_USER_AUTHORIZED",
-    "matrix_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/8e87327aa5a20222c0d6d212378062d8babbc83a/docs/reconstructed_phase2_acceptance_matrix__created_by_chatgpt__model_gpt-6.1-sol__task_TASK-0005.md",
+    "matrix_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/b4d01e235f9d416eb077fbc7c88e93582465d0a1/docs/reconstructed_phase2_acceptance_matrix__created_by_chatgpt__model_gpt-6.1-sol__task_TASK-0005.md",
     "matrix_source_sha": "6e5d5b8b9fd373dfec4c10c125495fabb7f88674",
     "review_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/af0b732110665633a97b92a4e5c69055b9dba289/reviews/task_0005_phase2_matrix_review__created_by_chatgpt__model_gpt-6-astra__run_20261009.md",
     "reviewer": "gpt-6-astra",
@@ -93,12 +93,60 @@
       ]
     },
     "no_phase3_promotion": true,
-    "execution_matrix_source_sha": "1a8ad33772362e4d9c0a61cb70eedbb3a7b392c0",
+    "execution_matrix_source_sha": "3a65611eb362750387c0df125377b28c0c7b4415",
     "lifecycle_review_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/bb2cd0666e69130aabdf3796160f09410b62532a/reviews/task_0005_lifecycle_rereview__created_by_chatgpt__model_gpt-6-astra__run_20261010.md"
   },
   "deadline_target": {
     "local": "2026-10-10 22:00 Asia/Kolkata",
     "utc": "2026-10-10T16:30:00Z",
     "guaranteed": false
-  }
+  },
+  "active_review": {
+    "model": "gpt-6-astra",
+    "effort": "high",
+    "status": "RUNNING",
+    "candidate_sha": "a9c1ceb0bc93d814bd349884ee7c2b8485fcd585",
+    "source_sha": "a692c56af7768e9383a684662d67646f49709ae7",
+    "tree_sha": "1adf0773e3d083668ee104293ba81150f77b7ee2",
+    "scope": "Final exact-candidate reconstructed Phase2 R2-01 through R2-08"
+  },
+  "phase3_user_approval_required": true,
+  "candidate_increments": [
+    {
+      "pr": 39,
+      "sha": "d849338a546b92c0fd7f53397a08547b3aa74ebe",
+      "ci_run": 38018860204,
+      "ci": "success",
+      "scope": "lifecycle",
+      "astra": "APPROVED_BOUNDED"
+    },
+    {
+      "pr": 64,
+      "sha": "d60bbb47375b61de74a6c9a45f149368ced86d81",
+      "ci_run": 38019108358,
+      "ci": "success",
+      "scope": "frozen planning"
+    },
+    {
+      "pr": 65,
+      "sha": "64daf87c455c74902d35fdd5e1d5bbd0ae33425d",
+      "ci_run": 38019372139,
+      "ci": "success",
+      "scope": "durable recovery"
+    },
+    {
+      "pr": 66,
+      "sha": "7d0d11d88ec401dea3628f70d973404e136e4e0b",
+      "ci_run": 38019824351,
+      "ci": "success",
+      "scope": "master archive cleanup evidence"
+    },
+    {
+      "pr": 68,
+      "sha": "a9c1ceb0bc93d814bd349884ee7c2b8485fcd585",
+      "ci_run": 38020256829,
+      "ci": "success",
+      "scope": "character voice references QA and cumulative final candidate"
+    }
+  ]
 }
