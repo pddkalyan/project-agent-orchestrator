@@ -29,30 +29,36 @@ body {
     background: #ff2a5f;
 }
 
-/* Status Indicators */
+/* Standard CSS, no build-stage directives required. */
 .status-badge {
-    @apply px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wider;
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 .status-open {
-    @apply bg-green-900/40 text-green-400 border border-green-800;
+    color: #86efac;
+    background-color: rgba(20, 83, 45, 0.4);
+    border: 1px solid #166534;
 }
 .status-merged {
-    @apply bg-purple-900/40 text-purple-400 border border-purple-800;
+    color: #d8b4fe;
+    background-color: rgba(88, 28, 135, 0.4);
+    border: 1px solid #6b21a8;
+}
+.status-closed, .status-failure {
+    color: #fca5a5;
 }
 .status-closed {
-    @apply bg-red-900/40 text-red-400 border border-red-800;
+    background-color: rgba(127, 29, 29, 0.4);
+    border: 1px solid #991b1b;
 }
-.status-success {
-    @apply text-green-400;
-}
-.status-failure {
-    @apply text-red-400;
-}
-.status-in_progress {
-    @apply text-yellow-400;
-}
+.status-success { color: #86efac; }
+.status-in_progress { color: #fde047; }
+.status-neutral { color: #d1d5db; }
 
 /* Glow effects */
-.glow-text {
-    text-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
-}
+.glow-text { text-shadow: 0 0 10px rgba(0, 229, 255, 0.5); }
