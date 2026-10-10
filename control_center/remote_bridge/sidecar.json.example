@@ -1,0 +1,12 @@
+{
+  "display_name": "Antigravity GitHub Remote Bridge",
+  "description": "Antigravity 2.0 sidecar for GitHub issue supervision bridge",
+  "command": "python",
+  "args": [
+    "bridge.py"
+  ],
+  "restart_policy": "on_failure",
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  }
+}
