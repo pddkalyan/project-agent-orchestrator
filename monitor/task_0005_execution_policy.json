@@ -33,15 +33,15 @@
     "model": "gpt-6.1-sol",
     "effort": "medium",
     "status": "RUNNING",
-    "scope": "Package3 atomic checkpoint and fake-provider crash recovery",
+    "scope": "Package4 exact timeline/master QC/archive/completion/cleanup evidence",
     "preserved_source_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
     "base_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870",
-    "local_worktree": "phase2-recovery"
+    "local_worktree": "phase2-evidence"
   },
-  "last_verified_at_utc": "2026-10-10T03:03:00.373Z",
+  "last_verified_at_utc": "2026-10-10T03:07:05.123Z",
   "phase2_approval": "STILL_REQUIRES_CORRECTIONS_ACTUAL_ASTRA_MATRIX_REVIEW",
   "latest_validation": {
-    "movie_studio_tests_passed": 119,
+    "movie_studio_tests_passed": 127,
     "controller_tests_passed": 34,
     "reviewer_tests_passed": 68,
     "controller_production_fixtures_passed": 5,
@@ -56,18 +56,18 @@
   "no_banked_resets": true,
   "automatic_reload_enabled": false,
   "latest_candidate": {
-    "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/64",
-    "head_sha": "d60bbb47375b61de74a6c9a45f149368ced86d81",
-    "source_sha": "4c4810ca4c7723de2ac8cc0a9f06cac1151cdb82",
-    "tree_sha": "9d258b693f5be61c4cd3778853a675625f32ec35",
+    "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/65",
+    "head_sha": "64daf87c455c74902d35fdd5e1d5bbd0ae33425d",
+    "source_sha": "6a8fd14265f9f1e00808dfbfb750c0097a0c9635",
+    "tree_sha": "69e4e091a5b3956f14fa7f8ecf0b7160ba2b67fa",
     "astra_scope_review": "SELF_TESTED_FINAL_REVIEW_PENDING",
     "full_phase_review": "STILL_REQUIRES_CORRECTIONS_ACCEPTED_RECONSTRUCTED_MATRIX",
-    "github_ci": "SUCCESS_38019108358"
+    "github_ci": "SUCCESS_38019372139"
   },
   "phase2_acceptance": {
     "original_checklist": "NOT_RECOVERED_BOUNDED_SEARCH",
     "matrix_kind": "EXPLICITLY_RECONSTRUCTED_USER_AUTHORIZED",
-    "matrix_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/bb2cd0666e69130aabdf3796160f09410b62532a/docs/reconstructed_phase2_acceptance_matrix__created_by_chatgpt__model_gpt-6.1-sol__task_TASK-0005.md",
+    "matrix_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/172c90a3edfbeb6cc234670390dbf101ea52f36d/docs/reconstructed_phase2_acceptance_matrix__created_by_chatgpt__model_gpt-6.1-sol__task_TASK-0005.md",
     "matrix_source_sha": "6e5d5b8b9fd373dfec4c10c125495fabb7f88674",
     "review_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/af0b732110665633a97b92a4e5c69055b9dba289/reviews/task_0005_phase2_matrix_review__created_by_chatgpt__model_gpt-6-astra__run_20261009.md",
     "reviewer": "gpt-6-astra",
@@ -93,7 +93,7 @@
       ]
     },
     "no_phase3_promotion": true,
-    "execution_matrix_source_sha": "2ac4693365eb880cbfc13b19ae0e6a1b6ef09708",
+    "execution_matrix_source_sha": "36c8b4450356895f6099197768fafbc0370eedaa",
     "lifecycle_review_url": "https://github.com/pddkalyan/project-agent-orchestrator/blob/bb2cd0666e69130aabdf3796160f09410b62532a/reviews/task_0005_lifecycle_rereview__created_by_chatgpt__model_gpt-6-astra__run_20261010.md"
   },
   "deadline_target": {
