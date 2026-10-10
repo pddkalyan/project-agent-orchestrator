@@ -33,15 +33,15 @@
     "model": "gpt-6.1-sol",
     "effort": "medium",
     "status": "RUNNING",
-    "scope": "User-prioritized lifecycle/completion guards, then remaining accepted correction packages",
+    "scope": "Preserve PR38/39; close two actual Astra lifecycle findings, then remaining four accepted packages",
     "preserved_source_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
     "base_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870",
-    "local_worktree": "phase2-lifecycle"
+    "local_worktree": "phase2-lifecycle-correction"
   },
-  "last_verified_at_utc": "2026-10-09T12:45:36.857Z",
+  "last_verified_at_utc": "2026-10-10T02:53:48.640Z",
   "phase2_approval": "STILL_REQUIRES_CORRECTIONS_ACTUAL_ASTRA_MATRIX_REVIEW",
   "latest_validation": {
-    "movie_studio_tests_passed": 107,
+    "movie_studio_tests_passed": 113,
     "controller_tests_passed": 34,
     "reviewer_tests_passed": 68,
     "controller_production_fixtures_passed": 5,
@@ -55,13 +55,13 @@
   "no_banked_resets": true,
   "automatic_reload_enabled": false,
   "latest_candidate": {
-    "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/38",
-    "head_sha": "9e09d3ff54c3bf76f2aeb20e08f30b2e37cce7f7",
-    "source_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
-    "tree_sha": "74e47c905c1d018ca61e60bc98435b5fef1eeb87",
-    "astra_scope_review": "APPROVED",
-    "full_phase_review": "WITHHELD_MISSING_A_H_DEFINITION",
-    "github_ci": "SUCCESS_37929451170"
+    "pr_url": "https://github.com/pddkalyan/project-agent-orchestrator/pull/39",
+    "head_sha": "8e1b9e6103e7311b4de66ffc7c6bc8da7b9cbf44",
+    "source_sha": "6fcec7da56dd960ae8b9827fbde3e0403a03aac6",
+    "tree_sha": "d853a03225b62b26572796d369d5c0e2c2b5360d",
+    "astra_scope_review": "REJECTED_TWO_BOUNDED_FINDINGS_PENDING_CORRECTION",
+    "full_phase_review": "STILL_REQUIRES_CORRECTIONS_ACCEPTED_RECONSTRUCTED_MATRIX",
+    "github_ci": "SUCCESS_37933201266"
   },
   "phase2_acceptance": {
     "original_checklist": "NOT_RECOVERED_BOUNDED_SEARCH",
@@ -92,5 +92,10 @@
       ]
     },
     "no_phase3_promotion": true
+  },
+  "deadline_target": {
+    "local": "2026-10-10 22:00 Asia/Kolkata",
+    "utc": "2026-10-10T16:30:00Z",
+    "guaranteed": false
   }
 }
