@@ -104,11 +104,26 @@ class ProductionPolicyError(ValueError):
     pass
 
 
+def valid_evidence_text(value):
+    if type(value) is not str or not value.strip():
+        return False
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeError:
+        return False
+    return True
+
+
 @dataclass(frozen=True)
 class Review:
     gate: Gate
     asset_version: str
     verdict: Verdict
+    shot_id: str = ""
+    reviewer_id: str = ""
+    reviewer_role: str = ""
+    policy_id: str = ""
+    evidence_id: str = ""
 
 
 @dataclass
@@ -248,8 +263,8 @@ class Shot:
             if asset_version == self.asset_version and self.canonical:
                 return
             owner._require_lifecycle_mutable(self.scene_id, allow_blocked=True)
-        if not asset_version:
-            raise ProductionPolicyError("asset version must not be empty")
+        if not valid_evidence_text(asset_version):
+            raise ProductionPolicyError("asset version must be a nonempty UTF-8 string")
         if asset_version != self.asset_version:
             self.reviews.clear()
             self.canonical = False
@@ -630,6 +645,9 @@ class BibleStateDict(MutableMapping):
 
     def _commit(self, proposed):
         # Every operation that can fail completes before publishing any state.
+        ledger = getattr(self._bible, "_ledger", None)
+        if ledger is not None:
+            ledger._preflight_bible_relations(self._name, proposed)
         digest = self._bible._digest(self._name, proposed)
         history = self._bible.revision_history + (self._bible.content_digest,)
         revision = self._bible.revision + 1
@@ -776,6 +794,20 @@ class PlanStateDict(MutableMapping):
 
 
 @dataclass(frozen=True)
+class ReferenceMediaRecord:
+    asset_version: str
+    reference_id: str
+    version: str
+    entity_namespace: str
+    entity_id: str
+    content_digest: str
+    byte_count: int
+    source_identity: str
+    creator_id: str
+    evidence_id: str
+
+
+@dataclass(frozen=True)
 class TimelineClip:
     shot_id: str
     asset_version: str
@@ -815,6 +847,8 @@ class MasterQCRecord:
     passed_gates: FrozenSet[Gate]
     reviewer_id: str
     evidence_id: str
+    reviewer_role: str = ""
+    policy_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -878,9 +912,10 @@ class ProductionLedger:
     archive: Optional[ArchiveReceipt] = None
     cleanup_authorization: Optional[CleanupAuthorization] = None
     temporary_artifacts: Tuple[CleanupArtifact, ...] = ()
+    reference_assets: Tuple[ReferenceMediaRecord, ...] = ()
 
     def __post_init__(self):
-        if self.temporary_artifacts != () or any(getattr(self, name) is not None for name in self._master_evidence_fields()):
+        if self.reference_assets != () or self.temporary_artifacts != () or any(getattr(self, name) is not None for name in self._master_evidence_fields()):
             raise ProductionPolicyError("new ledger cannot fabricate master evidence")
         if self.episode_status is not EpisodeStatus.PLANNED or self.episode_status_history != ():
             raise ProductionPolicyError("new episodes must start planned without lifecycle history")
@@ -895,7 +930,7 @@ class ProductionLedger:
         object.__setattr__(self, "plan_frozen", frozen)
 
     def __setattr__(self, name, value):
-        if (name in self._master_evidence_fields() or name == "temporary_artifacts") and name in self.__dict__:
+        if (name in self._master_evidence_fields() or name in {"temporary_artifacts", "reference_assets"}) and name in self.__dict__:
             raise ProductionPolicyError("master evidence requires a guarded publication")
         if name in {"episode_status", "episode_status_history"} and name in self.__dict__:
             raise ProductionPolicyError("episode status requires a guarded transition")
@@ -915,6 +950,59 @@ class ProductionLedger:
         if name in type(self).__dataclass_fields__:
             raise ProductionPolicyError("ledger fields cannot be deleted")
         object.__delattr__(self, name)
+
+    def _preflight_bible_relations(self, changed_name=None, proposed=None):
+        def namespace(name):
+            return proposed if name == changed_name else getattr(self.bible, name)
+        characters, voices = namespace("characters"), namespace("voices")
+        for voice in voices.values():
+            if "character_id" in voice and (not voice["character_id"] or voice["character_id"] not in characters):
+                raise ProductionPolicyError("voice association references unknown character")
+        for reference in self.reference_assets:
+            if reference.entity_namespace in self.bible.MAP_NAMES and reference.entity_id not in namespace(reference.entity_namespace):
+                raise ProductionPolicyError("reference media entity cannot become dangling")
+
+    def _validate_reference_registry(self):
+        if type(self.reference_assets) is not tuple:
+            raise ProductionPolicyError("invalid reference media registry")
+        ids, versions = set(), set()
+        for reference in self.reference_assets:
+            if type(reference) is not ReferenceMediaRecord or any(not valid_evidence_text(getattr(reference, name)) for name in ("asset_version", "reference_id", "version", "entity_namespace", "entity_id", "source_identity", "creator_id", "evidence_id")) or reference.entity_namespace not in {"characters", "voices", "locations", "costumes", "props"} or reference.entity_id not in getattr(self.bible, reference.entity_namespace) or type(reference.content_digest) is not str or len(reference.content_digest) != 64 or any(c not in "0123456789abcdef" for c in reference.content_digest) or type(reference.byte_count) is not int or reference.byte_count < 1:
+                raise ProductionPolicyError("invalid content-identified reference media record")
+            if reference.asset_version in ids or (reference.reference_id, reference.version) in versions:
+                raise ProductionPolicyError("duplicate reference media version identity")
+            ids.add(reference.asset_version)
+            versions.add((reference.reference_id, reference.version))
+        self._preflight_bible_relations()
+
+    def record_reference(self, reference, content):
+        if type(reference) is not ReferenceMediaRecord or type(content) is not bytes or reference.content_digest != sha256(content).hexdigest() or reference.byte_count != len(content):
+            raise ProductionPolicyError("reference media content identity mismatch")
+        self.validate()
+        if reference in self.reference_assets:
+            return
+        self._require_lifecycle_mutable()
+        if self.plan_frozen:
+            raise ProductionPolicyError("plan is frozen")
+        if self.jobs:
+            raise ProductionPolicyError("reference media is referenced by generation history")
+        candidate = type(self).from_dict(self.to_dict())
+        object.__setattr__(candidate, "reference_assets", self.reference_assets + (reference,))
+        candidate.validate()
+        object.__setattr__(self, "reference_assets", candidate.reference_assets)
+
+    def _validate_binding_associations(self, binding):
+        for voice_id in binding.voice_ids:
+            if self.bible.voices[voice_id].get("character_id") not in binding.character_ids:
+                raise ProductionPolicyError("voice must belong to a bound character")
+        registry = {reference.asset_version: reference for reference in self.reference_assets}
+        selected = {"characters": binding.character_ids, "voices": binding.voice_ids, "locations": {binding.location_id}, "costumes": binding.costume_ids, "props": binding.prop_ids}
+        for asset_version in binding.reference_asset_versions:
+            if asset_version not in registry:
+                raise ProductionPolicyError("binding references unknown reference media version")
+            reference = registry[asset_version]
+            if reference.entity_id not in selected[reference.entity_namespace]:
+                raise ProductionPolicyError("reference media does not belong to a bound entity")
 
     @staticmethod
     def _master_evidence_fields():
@@ -1000,7 +1088,7 @@ class ProductionLedger:
         if any(getattr(self, name) is not None and stage not in chain for name, stage in required_stages.items()):
             raise ProductionPolicyError("master evidence lacks applicable lifecycle history")
         def text(value):
-            return type(value) is str and bool(value.strip())
+            return valid_evidence_text(value)
         def digest(value):
             return type(value) is str and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
         def positive(value):
@@ -1031,7 +1119,7 @@ class ProductionLedger:
                 raise ProductionPolicyError("master identity/timeline/runtime/aspect evidence mismatch")
         qc = self.master_qc
         if qc is not None:
-            if type(qc) is not MasterQCRecord or master is None or qc.master_digest != master.content_digest or qc.timeline_digest != master.timeline_digest or type(qc.measured_duration_ms) is not int or qc.measured_duration_ms != master.duration_ms or type(qc.measured_width) is not int or qc.measured_width != master.width or type(qc.measured_height) is not int or qc.measured_height != master.height or type(qc.passed_gates) is not frozenset or any(type(gate) is not Gate for gate in qc.passed_gates) or qc.passed_gates != frozenset({Gate.AUDIO_QA, Gate.CONTINUITY_QA, Gate.TECHNICAL_QA}) or not text(qc.reviewer_id) or not text(qc.evidence_id):
+            if type(qc) is not MasterQCRecord or master is None or qc.master_digest != master.content_digest or qc.timeline_digest != master.timeline_digest or type(qc.measured_duration_ms) is not int or qc.measured_duration_ms != master.duration_ms or type(qc.measured_width) is not int or qc.measured_width != master.width or type(qc.measured_height) is not int or qc.measured_height != master.height or type(qc.passed_gates) is not frozenset or any(type(gate) is not Gate for gate in qc.passed_gates) or qc.passed_gates != frozenset({Gate.AUDIO_QA, Gate.CONTINUITY_QA, Gate.TECHNICAL_QA}) or not text(qc.reviewer_id) or not text(qc.evidence_id) or not text(qc.reviewer_role) or not text(qc.policy_id) or qc.reviewer_role not in {"human-reviewer", "offline-evaluator"} or qc.policy_id != "offline-master-qa-v1":
                 raise ProductionPolicyError("exact master audio/continuity/technical QC evidence required")
         archive = self.archive
         if archive is not None:
@@ -1383,6 +1471,7 @@ class ProductionLedger:
             if not isinstance(asset_version, str) or not asset_version:
                 raise ProductionPolicyError("reference_asset_versions must contain non-empty strings")
 
+        self._validate_binding_associations(binding)
         if binding.shot_id in self.shot_continuity_bindings:
             if self.shot_continuity_bindings[binding.shot_id] != binding:
                 self._require_safe_replacement(binding.shot_id, "continuity binding")
@@ -1670,6 +1759,10 @@ class ProductionLedger:
             plan_digest(plan) if plan else None,
             continuity_binding_digest(binding) if binding else None,
         ]
+        if binding and binding.reference_asset_versions:
+            self._validate_reference_registry()
+            self._validate_binding_associations(binding)
+            material.append([asdict(reference) for reference in sorted(self.reference_assets, key=lambda item: item.asset_version) if reference.asset_version in binding.reference_asset_versions])
         return sha256(json.dumps(material, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
     def _validate_job_plan_state(self, job: GenerationJob) -> None:
@@ -1818,6 +1911,7 @@ class ProductionLedger:
             "provider_adapters": raw["provider_adapters"],
             **{name: raw[name] for name in self._master_evidence_fields()},
             "temporary_artifacts": raw["temporary_artifacts"],
+            "reference_assets": raw["reference_assets"],
         }
 
     @classmethod
@@ -1855,6 +1949,7 @@ class ProductionLedger:
         for name in cls._master_evidence_fields():
             data.setdefault(name, None)
         data.setdefault("temporary_artifacts", [])
+        data.setdefault("reference_assets", [])
         data.setdefault("episode_id", "")
         if "episode_status" not in data:
             raise ProductionPolicyError("episode checkpoint requires explicit lifecycle status")
@@ -1892,7 +1987,7 @@ class ProductionLedger:
             "provider_adapters",
         }
         root_fields.update(cls._master_evidence_fields())
-        root_fields.add("temporary_artifacts")
+        root_fields.update({"temporary_artifacts", "reference_assets"})
         actual_fields = set(data.keys())
         if "provider_adapters" not in actual_fields:
             actual_fields.add("provider_adapters")
@@ -2084,10 +2179,11 @@ class ProductionLedger:
                     Gate(review["gate"]),
                     review["asset_version"],
                     Verdict(review["verdict"]),
+                    **{name: review[name] for name in ("shot_id", "reviewer_id", "reviewer_role", "policy_id", "evidence_id")},
                 )
                 for gate, review in raw.get("reviews", {}).items()
                 if isinstance(review, Mapping)
-                and set(review) == {"gate", "asset_version", "verdict"}
+                and set(review) == {item.name for item in fields(Review)}
             }
             if len(reviews) != len(raw["reviews"]):
                 raise ProductionPolicyError("review fields mismatch")
@@ -2221,6 +2317,9 @@ class ProductionLedger:
             episode_history = tuple(EpisodeStatus(item) for item in data["episode_status_history"])
         except (TypeError, ValueError) as exc:
             raise ProductionPolicyError("invalid episode lifecycle history") from exc
+        if type(data["reference_assets"]) is not list:
+            raise ProductionPolicyError("invalid reference media registry")
+        object.__setattr__(ledger, "reference_assets", tuple(ReferenceMediaRecord(**reference) for reference in data["reference_assets"]))
         if type(data["temporary_artifacts"]) is not list:
             raise ProductionPolicyError("invalid owned temporary artifact registry")
         object.__setattr__(ledger, "temporary_artifacts", tuple(CleanupArtifact(**artifact) for artifact in data["temporary_artifacts"]))
@@ -2252,6 +2351,7 @@ class ProductionLedger:
         if type(self.bible.revision) is not int or self.bible.revision < 1:
             raise ProductionPolicyError("invalid movie-bible revision")
         self._validate_bible_maps()
+        self._validate_reference_registry()
         self.bible.validate_digest()
         for scene_key, scene in self.scenes.items():
             if not isinstance(scene_key, str) or not scene_key:
@@ -2317,6 +2417,8 @@ class ProductionLedger:
             for asset_version in binding.reference_asset_versions:
                 if not isinstance(asset_version, str) or not asset_version:
                     raise ProductionPolicyError("invalid reference asset version in binding")
+
+            self._validate_binding_associations(binding)
 
         sequence_indices_by_scene = {}
         for plan_key, plan in self.shot_plans.items():
@@ -2806,8 +2908,8 @@ def required_gates(shot: Shot) -> FrozenSet[Gate]:
 
 
 def validate_review_binding(shot: Shot, *, allow_empty: bool = False) -> None:
-    if not shot.asset_version:
-        if allow_empty and not shot.reviews and not shot.canonical and not shot.upscale_allowed:
+    if not valid_evidence_text(shot.asset_version):
+        if allow_empty and shot.asset_version == "" and not shot.reviews and not shot.canonical and not shot.upscale_allowed:
             return
         raise ProductionPolicyError("shot has no generated asset")
     for gate, review in shot.reviews.items():
@@ -2817,9 +2919,11 @@ def validate_review_binding(shot: Shot, *, allow_empty: bool = False) -> None:
             or type(review.gate) is not Gate
             or type(review.verdict) is not Verdict
             or not isinstance(review.asset_version, str)
-            or not review.asset_version
+            or not valid_evidence_text(review.asset_version)
         ):
             raise ProductionPolicyError("invalid review evidence type")
+        if review.shot_id != shot.shot_id or any(not valid_evidence_text(getattr(review, name)) for name in ("shot_id", "reviewer_id", "evidence_id")) or not valid_evidence_text(review.reviewer_role) or not valid_evidence_text(review.policy_id) or review.reviewer_role not in {"human-reviewer", "offline-evaluator"} or review.policy_id != "offline-shot-qa-v1":
+            raise ProductionPolicyError("review requires exact-shot attributable QA evidence")
         if review.gate != gate:
             raise ProductionPolicyError("review gate/key mismatch")
         if review.asset_version != shot.asset_version:

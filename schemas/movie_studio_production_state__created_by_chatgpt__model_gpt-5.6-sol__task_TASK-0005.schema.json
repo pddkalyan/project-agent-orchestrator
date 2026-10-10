@@ -26,7 +26,8 @@
     "master_qc",
     "archive",
     "cleanup_authorization",
-    "temporary_artifacts"
+    "temporary_artifacts",
+    "reference_assets"
   ],
   "properties": {
     "schema_version": {
@@ -222,6 +223,12 @@
       "items": {
         "$ref": "#/$defs/cleanup_artifact"
       }
+    },
+    "reference_assets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/reference_media"
+      }
     }
   },
   "$defs": {
@@ -333,7 +340,12 @@
       "required": [
         "gate",
         "asset_version",
-        "verdict"
+        "verdict",
+        "shot_id",
+        "reviewer_id",
+        "reviewer_role",
+        "policy_id",
+        "evidence_id"
       ],
       "properties": {
         "gate": {
@@ -355,6 +367,27 @@
             "FAIL",
             "BLOCKED"
           ]
+        },
+        "shot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewer_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewer_role": {
+          "enum": [
+            "human-reviewer",
+            "offline-evaluator"
+          ]
+        },
+        "policy_id": {
+          "const": "offline-shot-qa-v1"
+        },
+        "evidence_id": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -928,7 +961,9 @@
         "measured_height",
         "passed_gates",
         "reviewer_id",
-        "evidence_id"
+        "evidence_id",
+        "reviewer_role",
+        "policy_id"
       ],
       "properties": {
         "master_digest": {
@@ -971,6 +1006,15 @@
         "evidence_id": {
           "type": "string",
           "minLength": 1
+        },
+        "reviewer_role": {
+          "enum": [
+            "human-reviewer",
+            "offline-evaluator"
+          ]
+        },
+        "policy_id": {
+          "const": "offline-master-qa-v1"
         }
       }
     },
@@ -1111,6 +1155,69 @@
         },
         "offline_evidence": {
           "const": true
+        }
+      }
+    },
+    "reference_media": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "asset_version",
+        "reference_id",
+        "version",
+        "entity_namespace",
+        "entity_id",
+        "content_digest",
+        "source_identity",
+        "creator_id",
+        "evidence_id",
+        "byte_count"
+      ],
+      "properties": {
+        "asset_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reference_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entity_namespace": {
+          "enum": [
+            "characters",
+            "voices",
+            "locations",
+            "costumes",
+            "props"
+          ]
+        },
+        "entity_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "source_identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "creator_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "byte_count": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     }

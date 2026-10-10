@@ -9,6 +9,7 @@ from unittest.mock import patch
 from pathlib import Path
 
 from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
+    ReferenceMediaRecord,
     TimelineClip,
     TimelineRecord,
     timeline_digest,
@@ -94,8 +95,17 @@ class CountingOfflineProvider:
 
 
 class MovieStudioCoreTests(unittest.TestCase):
+    def review_record(self, gate, version="v1", verdict=Verdict.PASS, shot_id="S1"):
+        return Review(gate, version, verdict, shot_id, "fixture-reviewer", "offline-evaluator", "offline-shot-qa-v1", "evidence-" + shot_id + "-" + str(gate) + "-" + version)
+
+    def register_reference_fixture(self, ledger, asset_version, character_id):
+        content = ("reference fixture " + asset_version).encode()
+        record = ReferenceMediaRecord(asset_version, "reference-" + asset_version, "1", "characters", character_id, sha256(content).hexdigest(), len(content), "offline-source-" + asset_version, "fixture-creator", "reference-evidence-" + asset_version)
+        ledger.record_reference(record, content)
+        return record
+
     def review(self, gate, version="v1", verdict=Verdict.PASS):
-        return Review(gate, version, verdict)
+        return self.review_record(gate, version, verdict)
 
     def generated_shot(self, dialogue=False):
         return Shot("S1", asset_version="v1", has_dialogue_or_audio=dialogue, status=ShotStatus.GENERATED)
@@ -183,6 +193,155 @@ class MovieStudioCoreTests(unittest.TestCase):
         )
         return attempt
 
+    def association_reference_fixture(self):
+        ledger = ProductionLedger("accountability")
+        ledger.bible.characters["A"] = {"name": "Alice"}
+        ledger.bible.characters["B"] = {"name": "Bob"}
+        ledger.bible.voices["voice-A"] = {"character_id": "A", "style": "quiet"}
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1", has_dialogue_or_audio=True))
+        ledger.add_shot_plan(ShotPlan("S1", "SC1", 0, 1000, "prompt", True))
+        reference = self.register_reference_fixture(ledger, "reference-A-v1", "A")
+        binding = ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset({"voice-A"}), "", frozenset(), frozenset(), frozenset({reference.asset_version}))
+        return ledger, reference, binding
+
+    def test_voice_and_reference_binding_associations_reject_mismatch_atomically(self):
+        ledger, reference, binding = self.association_reference_fixture()
+        before = ledger.to_dict()
+        for wrong in (replace(binding, character_ids=frozenset({"B"})), replace(binding, voice_ids=frozenset({"unknown"})), replace(binding, reference_asset_versions=frozenset({"unknown-reference"})), replace(binding, character_ids=frozenset({"B"}), voice_ids=frozenset())):
+            with self.assertRaises(ProductionPolicyError):
+                ledger.add_shot_continuity_binding(wrong)
+            self.assertEqual(ledger.to_dict(), before)
+        with self.assertRaises(ProductionPolicyError):
+            ledger.bible.voices["dangling"] = {"character_id": "unknown"}
+        self.assertEqual(ledger.to_dict(), before)
+        with self.assertRaises(ProductionPolicyError):
+            del ledger.bible.characters["A"]
+        self.assertEqual(ledger.to_dict(), before)
+        ledger.bible.voices["unassociated"] = {"style": "unassigned scaffold"}
+        current = replace(binding, bible_revision=ledger.bible.revision, voice_ids=frozenset({"unassociated"}))
+        before = ledger.to_dict()
+        with self.assertRaisesRegex(ProductionPolicyError, "belong"):
+            ledger.add_shot_continuity_binding(current)
+        self.assertEqual(ledger.to_dict(), before)
+
+    def test_content_identified_reference_registry_validation_and_public_guards(self):
+        ledger, reference, binding = self.association_reference_fixture()
+        content = ("reference fixture " + reference.asset_version).encode()
+        before = ledger.to_dict()
+        for wrong, payload in ((replace(reference, content_digest="0" * 64), content), (replace(reference, source_identity=""), content), (replace(reference, entity_namespace="unknown"), content), (replace(reference, entity_id="unknown"), content), (replace(reference, asset_version="other"), content), (replace(reference, source_identity="bad\ud800"), content), (reference, b"changed bytes")):
+            with self.assertRaises(ProductionPolicyError):
+                ledger.record_reference(wrong, payload)
+            self.assertEqual(ledger.to_dict(), before)
+        ledger.record_reference(reference, content)
+        self.assertEqual(ledger.to_dict(), before)
+        for action in (lambda: setattr(ledger, "reference_assets", ()), lambda: delattr(ledger, "reference_assets")):
+            with self.assertRaises(ProductionPolicyError):
+                action()
+        self.assertEqual(ledger.to_dict(), before)
+        ledger.add_shot_continuity_binding(binding)
+        ledger.freeze_plan()
+        ledger.record_reference(reference, content)  # exact replay while frozen
+        before = ledger.to_dict()
+        with self.assertRaisesRegex(ProductionPolicyError, "frozen"):
+            ledger.record_reference(replace(reference, asset_version="new-version", version="2"), content)
+        self.assertEqual(ledger.to_dict(), before)
+
+    def test_associations_references_revision_and_generation_checkpoint_identity(self):
+        ledger, reference, binding = self.association_reference_fixture()
+        ledger.add_shot_continuity_binding(binding)
+        ledger.freeze_plan()
+        ledger.create_new_plan_revision()
+        ledger.bible.characters["A"] = {"name": "Alice", "costume": "new"}
+        revised = replace(binding, bible_revision=ledger.bible.revision)
+        ledger.add_shot_continuity_binding(revised)
+        newer_reference = self.register_reference_fixture(ledger, "reference-A-v2", "A")
+        revised = replace(revised, reference_asset_versions=frozenset({newer_reference.asset_version}))
+        ledger.add_shot_continuity_binding(revised)
+        ledger.freeze_plan()
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        before = ledger.to_dict()
+        self.assertEqual(ProductionLedger.from_dict(before).to_dict(), before)
+        for corrupt in (
+            lambda d: d.__setitem__("reference_assets", []),
+            lambda d: d["reference_assets"][-1].__setitem__("content_digest", "0" * 64),
+            lambda d: d["reference_assets"][-1].__setitem__("source_identity", "substituted-source"),
+            lambda d: d["reference_assets"][-1].__setitem__("entity_id", "B"),
+            lambda d: d["shot_continuity_bindings"]["S1"].__setitem__("character_ids", ["B"]),
+            lambda d: d["movie_bible"]["voices"]["voice-A"].__setitem__("character_id", "B"),
+        ):
+            data = copy.deepcopy(before)
+            corrupt(data)
+            with self.assertRaises(ProductionPolicyError):
+                ProductionLedger.from_dict(data)
+        legacy = copy.deepcopy(before)
+        legacy.pop("reference_assets")
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(legacy)
+        empty = ProductionLedger("legacy").to_dict()
+        empty.pop("reference_assets")
+        self.assertEqual(ProductionLedger.from_dict(empty).reference_assets, ())
+
+    def test_reference_registry_supports_all_bound_entity_namespaces(self):
+        ledger, reference, binding = self.association_reference_fixture()
+        ledger.bible.locations["location-A"] = {"name": "Set"}
+        ledger.bible.costumes["costume-A"] = {"name": "Suit"}
+        ledger.bible.props["prop-A"] = {"name": "Watch"}
+        asset_versions = {reference.asset_version}
+        for namespace, entity_id in (("voices", "voice-A"), ("locations", "location-A"), ("costumes", "costume-A"), ("props", "prop-A")):
+            content = (namespace + " reference bytes").encode()
+            record = ReferenceMediaRecord(namespace + "-v1", namespace + "-reference", "1", namespace, entity_id, sha256(content).hexdigest(), len(content), "offline-source-" + namespace, "fixture-creator", "evidence-" + namespace)
+            ledger.record_reference(record, content)
+            asset_versions.add(record.asset_version)
+        full = replace(binding, bible_revision=ledger.bible.revision, location_id="location-A", costume_ids=frozenset({"costume-A"}), prop_ids=frozenset({"prop-A"}), reference_asset_versions=frozenset(asset_versions))
+        before = ledger.to_dict()
+        for wrong in (replace(full, voice_ids=frozenset()), replace(full, location_id=""), replace(full, costume_ids=frozenset()), replace(full, prop_ids=frozenset())):
+            with self.assertRaisesRegex(ProductionPolicyError, "bound entity"):
+                ledger.add_shot_continuity_binding(wrong)
+            self.assertEqual(ledger.to_dict(), before)
+        ledger.add_shot_continuity_binding(full)
+        ledger.freeze_plan()
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        self.assertEqual(ProductionLedger.from_dict(ledger.to_dict()).to_dict(), ledger.to_dict())
+
+    def test_attributable_qa_requires_exact_shot_asset_role_policy_and_evidence(self):
+        shot = self.generated_shot(True)
+        for gate in required_gates(shot):
+            shot.reviews[gate] = self.review_record(gate)
+        valid = shot.reviews[Gate.VISUAL_QA]
+        for wrong in (replace(valid, shot_id="other-shot"), replace(valid, asset_version="old-asset"), replace(valid, reviewer_id=""), replace(valid, reviewer_role="provider"), replace(valid, policy_id="unknown-policy"), replace(valid, evidence_id=""), replace(valid, evidence_id="invalid\ud800")):
+            shot.reviews[Gate.VISUAL_QA] = wrong
+            before = copy.deepcopy(shot)
+            for action in (canonicalize, authorize_upscale):
+                with self.assertRaises(ProductionPolicyError):
+                    action(shot)
+                self.assertEqual(shot, before)
+        shot.reviews[Gate.VISUAL_QA] = valid
+        checkpoint = copy.deepcopy(shot)
+        with self.assertRaises(ProductionPolicyError):
+            shot.bind_generated_asset("bad\ud800")
+        self.assertEqual(shot, checkpoint)
+        canonicalize(shot)
+        self.assertTrue(shot.canonical)
+        ledger = ProductionLedger("qa")
+        ledger.add_shot(shot)
+        before = ledger.to_dict()
+        self.assertEqual(ProductionLedger.from_dict(before).to_dict(), before)
+        for field in ("shot_id", "reviewer_id", "reviewer_role", "policy_id", "evidence_id"):
+            for operation in ("delete", "blank"):
+                data = copy.deepcopy(before)
+                record = data["shots"]["S1"]["reviews"]["VISUAL_QA"]
+                if operation == "delete":
+                    record.pop(field)
+                else:
+                    record[field] = ""
+                with self.assertRaises(ProductionPolicyError):
+                    ProductionLedger.from_dict(data)
+        substituted = copy.deepcopy(before)
+        substituted["shots"]["S1"]["reviews"]["VISUAL_QA"]["shot_id"] = "same-version-other-shot"
+        with self.assertRaises(ProductionPolicyError):
+            ProductionLedger.from_dict(substituted)
+
     def master_evidence_fixture(self, duration=300_000):
         from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import EpisodeStatus, SceneStatus
         ledger = ProductionLedger("master-policy", episode_id="episode-1")
@@ -201,7 +360,7 @@ class MovieStudioCoreTests(unittest.TestCase):
                 if shot.scene_id == scene:
                     shot.bind_generated_asset("asset-" + shot.shot_id)
                     for gate in required_gates(shot):
-                        shot.reviews[gate] = Review(gate, shot.asset_version, Verdict.PASS)
+                        shot.reviews[gate] = self.review_record(gate, shot.asset_version, Verdict.PASS, shot_id=shot.shot_id)
                     canonicalize(shot)
             ledger.transition_scene(scene, SceneStatus.REVIEW)
             ledger.transition_scene(scene, SceneStatus.APPROVED)
@@ -210,7 +369,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         timeline = TimelineRecord(ledger.episode_id, ledger.plan_revision, ("SC1", "SC2"), clips)
         content = b"deterministic offline master fixture; no rendered media"
         master = MasterRecord("master-1", sha256(content).hexdigest(), len(content), timeline_digest(timeline), duration * 4, 1920, 1080)
-        qc = MasterQCRecord(master.content_digest, master.timeline_digest, master.duration_ms, master.width, master.height, frozenset({Gate.AUDIO_QA, Gate.CONTINUITY_QA, Gate.TECHNICAL_QA}), "offline-reviewer", "qc-1")
+        qc = MasterQCRecord(master.content_digest, master.timeline_digest, master.duration_ms, master.width, master.height, frozenset({Gate.AUDIO_QA, Gate.CONTINUITY_QA, Gate.TECHNICAL_QA}), "offline-reviewer", "qc-1", "offline-evaluator", "offline-master-qa-v1")
         archive = ArchiveReceipt(master.content_digest, master.content_digest, len(content), "Google Drive", "file-1", "file-1", "version-1", "version-1", True, True, "offline-verifier", "archive-1")
         owned = CleanupArtifact("temp-agent-clip", "owned-run-1", True, "provenance-1")
         ledger.register_temporary_artifact(owned)
@@ -280,7 +439,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.record_master(master, content)
         ledger.transition_episode(EpisodeStatus.FINAL_QC)
         before = ledger.to_dict()
-        for wrong in (replace(qc, master_digest="0" * 64), replace(qc, timeline_digest="0" * 64), replace(qc, measured_duration_ms=qc.measured_duration_ms - 1), replace(qc, measured_width=1024), replace(qc, passed_gates=frozenset({Gate.AUDIO_QA})), replace(qc, passed_gates=frozenset(gate.value for gate in qc.passed_gates)), replace(qc, reviewer_id=""), replace(qc, evidence_id="")):
+        for wrong in (replace(qc, master_digest="0" * 64), replace(qc, timeline_digest="0" * 64), replace(qc, measured_duration_ms=qc.measured_duration_ms - 1), replace(qc, measured_width=1024), replace(qc, passed_gates=frozenset({Gate.AUDIO_QA})), replace(qc, passed_gates=frozenset(gate.value for gate in qc.passed_gates)), replace(qc, reviewer_id=""), replace(qc, evidence_id=""), replace(qc, reviewer_role="provider"), replace(qc, policy_id="unknown")):
             with self.assertRaises(ProductionPolicyError):
                 ledger.record_master_qc(wrong)
             self.assertEqual(ledger.to_dict(), before)
@@ -745,12 +904,14 @@ class MovieStudioCoreTests(unittest.TestCase):
         other = ShotPlan("S2", "SC", 1, 2000, "prompt-b", False)
         ledger.add_shot_plan(old)
         ledger.add_shot_plan(other)
+        self.register_reference_fixture(ledger, "asset:1", "A")
         initial = ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A"}), frozenset(), "", frozenset(), frozenset(), frozenset({"asset:1"}))
         ledger.add_shot_continuity_binding(initial)
         ledger.freeze_plan()
         ledger.create_new_plan_revision()
         self.assertEqual(len(ledger.plan_revision_history), 1)
         revised = ShotPlan("S1", "SC", 0, 3000, "prompt-c", False)
+        self.register_reference_fixture(ledger, "asset:2", "A")
         replacement = ShotContinuityBinding("S1", ledger.bible.revision, frozenset({"A", "B"}), frozenset(), "", frozenset(), frozenset(), frozenset({"asset:2"}))
         ledger.add_shot_plan(revised)
         ledger.add_shot_plan(revised)  # Exact replay has no further effect.
@@ -1863,7 +2024,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         review_shot = self.generated_shot()
         review_ledger.add_shot(review_shot)
         review_shot.reviews = {
-            Gate.VISUAL_QA: Review(Gate.VISUAL_QA, "v1", "BOGUS")
+            Gate.VISUAL_QA: self.review_record(Gate.VISUAL_QA, "v1", "BOGUS")
         }
 
         for ledger in (shot_status_ledger, job_status_ledger, review_ledger):
@@ -2371,7 +2532,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.transition_scene("SC1", SceneStatus.REVIEW)
         shot = ledger.shots["S1"]
         for gate in required_gates(shot):
-            shot.reviews[gate] = Review(gate, "v1", Verdict.PASS)
+            shot.reviews[gate] = self.review_record(gate, "v1", Verdict.PASS)
         canonicalize(shot)
         ledger.transition_scene("SC1", SceneStatus.APPROVED)
         ledger.transition_episode(EpisodeStatus.ASSEMBLING)
@@ -2536,7 +2697,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.transition_scene("SC1", SceneStatus.REVIEW)
         shot = ledger.shots["S1"]
         for gate in required_gates(shot):
-            shot.reviews[gate] = Review(gate, "v1", Verdict.PASS)
+            shot.reviews[gate] = self.review_record(gate, "v1", Verdict.PASS)
         canonicalize(shot)
         ledger.transition_scene("SC1", SceneStatus.APPROVED)
         for stage in (EpisodeStatus.IN_PRODUCTION, EpisodeStatus.ASSEMBLING, EpisodeStatus.FINAL_QC):
@@ -2593,7 +2754,7 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.transition_scene("SC1", SceneStatus.REVIEW)
         record_with_blocked_variants()
         for gate in required_gates(ledger.shots["S1"]):
-            ledger.shots["S1"].reviews[gate] = Review(gate, "v1", Verdict.PASS)
+            ledger.shots["S1"].reviews[gate] = self.review_record(gate, "v1", Verdict.PASS)
         canonicalize(ledger.shots["S1"])
         ledger.transition_scene("SC1", SceneStatus.APPROVED)
         record_with_blocked_variants()
@@ -3146,10 +3307,11 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger = ProductionLedger(project_id="test-happy")
         ledger.add_shot(Shot(shot_id="shot-1"))
         ledger.bible.characters["char-1"] = {"name": "Alice"}
-        ledger.bible.voices["voice-1"] = {"style": "soft"}
+        ledger.bible.voices["voice-1"] = {"style": "soft", "character_id": "char-1"}
         ledger.bible.locations["loc-1"] = {"setting": "park"}
         ledger.bible.costumes["costume-1"] = {"desc": "red jacket"}
         ledger.bible.props["prop-1"] = {"desc": "watch"}
+        self.register_reference_fixture(ledger, "asset-v1", "char-1")
         binding = ShotContinuityBinding(
             shot_id="shot-1",
             bible_revision=ledger.bible.revision,
@@ -3178,10 +3340,11 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger = ProductionLedger(project_id="test-roundtrip")
         ledger.add_shot(Shot(shot_id="shot-1"))
         ledger.bible.characters["char-1"] = {"name": "Alice"}
-        ledger.bible.voices["voice-1"] = {"style": "soft"}
+        ledger.bible.voices["voice-1"] = {"style": "soft", "character_id": "char-1"}
         ledger.bible.locations["loc-1"] = {"setting": "park"}
         ledger.bible.costumes["costume-1"] = {"desc": "red jacket"}
         ledger.bible.props["prop-1"] = {"desc": "watch"}
+        self.register_reference_fixture(ledger, "asset-v1", "char-1")
         binding = ShotContinuityBinding(
             shot_id="shot-1",
             bible_revision=ledger.bible.revision,
