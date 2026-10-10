@@ -36,9 +36,11 @@ class TestReadOnlyMetadataSchema(unittest.TestCase):
         report = summarize_metadata(json.dumps({
             "conversation_id": "someone_else_" + "\\u200b" * 500,
             "metadata": {"access_token": "secret"},
+            "secret_custom_key_123456": "private-data",
         }), expected)
         self.assertEqual(report["verdict"], "FAIL_CLOSED")
         self.assertNotIn("secret", json.dumps(report))
+        self.assertNotIn("private-data", json.dumps(report))
         self.assertFalse(report["exact_conversation_id_match"])
 
 
