@@ -645,6 +645,30 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         self.assertFalse(res["results"][0]["dispatched"])
         self.assertEqual(res["results"][0]["code"], STATUS_CODES["PING_FAILED"])
 
+    def test_ping_requires_status_receipts_enabled(self):
+        # A native message must not be sent silently when the owner has
+        # opted out of the public status/acknowledgement channel.
+        self.write_local_config({
+            "workspace_dir": self.workspace_dir,
+            "dispatch_enabled": False, "ping_enabled": True,
+            "status_enabled": False, "conversation_id": "conv-existing",
+        })
+        bridge = AntigravityRemoteBridge(
+            state_dir=self.state_dir, runner=self.mock_runner, now_fn=self.mock_now
+        )
+        bridge.set_watermark(100)
+        self.mock_gh_comments_pages = [[
+            self.make_comment(101, command_id="11112222-3333-4444-5555-666677778888",
+                              action="ping_conversation", issue_number=47)
+        ]]
+        result = bridge.process_inbox()
+        self.assertEqual(result["results"][0]["code"], STATUS_CODES["PING_FAILED"])
+        self.assertFalse(result["results"][0]["dispatched"])
+        self.assertFalse(any(
+            call["args"][:2] == ["agentapi", "send-message"]
+            for call in self.mock_runner_calls
+        ))
+
     def test_ping_conversation_allowed_when_dirty_on_validated_sha(self):
         self.write_local_config({
             "workspace_dir": self.workspace_dir,
