@@ -41,6 +41,19 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn(".status-neutral", css)
         self.assertNotIn("@apply", css)
 
+    def test_compact_header_keeps_status_metadata_readable(self):
+        # Source regression guard. Exact viewport geometry must also be
+        # verified in the real-browser smoke test at 320px and 390px.
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        css = (WEB / "style.css").read_text(encoding="utf-8")
+        for hook in ('movie-studio-header', 'header-brand', 'header-summary', 'header-meta'):
+            self.assertIn(hook, html, hook)
+            self.assertIn(hook, css, hook)
+        self.assertIn('@media (max-width: 639px)', css)
+        self.assertIn('@media (max-width: 420px)', css)
+        self.assertIn('flex-direction: column', css)
+        self.assertIn('overflow-wrap: anywhere', css)
+
     def test_no_untrusted_innerhtml_sink(self):
         js = (WEB / "app.js").read_text(encoding="utf-8")
         self.assertNotIn(".innerHTML", js)
