@@ -28,6 +28,8 @@ class BridgePreflightTests(unittest.TestCase):
     def runner(self, argv, timeout=8):
         if argv[:2] == ['gh', 'auth']:
             return 0, ''
+        if argv[:2] == ['gh', 'api']:
+            return 0, '159762630'
         if argv[-3:] == ['remote', 'get-url', 'origin']:
             return 0, preflight.ALLOWED_ORIGINS[0]
         if argv[-2:] == ['branch', '--show-current']:
@@ -84,6 +86,13 @@ class BridgePreflightTests(unittest.TestCase):
         config['ping_enabled'] = True
         state.write_text(json.dumps(config))
         self.assertEqual(self.by_name(self.inspect()['checks'], 'no_unverified_ping')['result'], 'BLOCKED')
+
+    def test_wrong_authenticated_owner_is_blocked(self):
+        def runner(argv, timeout=8):
+            if argv[:2] == ['gh', 'api']:
+                return 0, '999'
+            return self.runner(argv, timeout)
+        self.assertEqual(self.by_name(self.inspect(runner)['checks'], 'exact_github_owner')['result'], 'BLOCKED')
 
     def test_missing_host_workspace_is_blocked(self):
         result = preflight.inspect(None, self.home, run=self.runner)
