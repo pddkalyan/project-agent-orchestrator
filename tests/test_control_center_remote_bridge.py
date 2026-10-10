@@ -247,6 +247,26 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("Unknown configuration key", msg)
 
+    def test_relative_workspace_dir_fails_closed(self):
+        self.write_local_config({
+            "workspace_dir": "relative-folder",
+            "dispatch_enabled": False,
+            "ping_enabled": True,
+            "status_enabled": True,
+            "conversation_id": "conv-existing",
+        })
+        bridge = AntigravityRemoteBridge(
+            state_dir=self.state_dir, runner=self.mock_runner, now_fn=self.mock_now
+        )
+        valid, message = bridge.is_config_valid()
+        self.assertFalse(valid)
+        self.assertIn("absolute", message)
+        self.assertEqual(bridge.process_inbox()["error"], STATUS_CODES["CONFIG_INVALID"])
+        self.assertFalse(any(
+            c["args"][:2] == ["agentapi", "send-message"]
+            for c in self.mock_runner_calls
+        ))
+
     def test_corrupt_watermark_fails_closed(self):
         bridge = self.create_bridge()
         watermark_file = os.path.join(self.state_dir, "watermark.json")
