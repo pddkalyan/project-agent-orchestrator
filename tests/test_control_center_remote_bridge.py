@@ -854,7 +854,7 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         self.write_local_config({
             "workspace_dir": self.workspace_dir,
             "dispatch_enabled": False, "ping_enabled": True,
-            "status_enabled": False, "conversation_id": "conv-existing",
+            "status_enabled": True, "conversation_id": "conv-existing",
         })
         bridge = AntigravityRemoteBridge(
             state_dir=self.state_dir, runner=self.mock_runner, now_fn=self.mock_now
@@ -886,7 +886,7 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         self.write_local_config({
             "workspace_dir": self.workspace_dir,
             "dispatch_enabled": False, "ping_enabled": True,
-            "status_enabled": False, "conversation_id": "conv-existing",
+            "status_enabled": True, "conversation_id": "conv-existing",
         })
         bridge = AntigravityRemoteBridge(
             state_dir=self.state_dir, runner=self.mock_runner, now_fn=self.mock_now
