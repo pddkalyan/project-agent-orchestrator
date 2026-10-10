@@ -2,8 +2,8 @@
   "schema_version": 1,
   "task_id": "TASK-0005",
   "issue": 35,
-  "stage": "PHASE_2_PACKAGE_2_COMPLETE_FROZEN_PLANNING_CANDIDATE",
-  "base_sha": "0da35bcaa0948f2e8f686802cf608b09a0909512",
+  "stage": "PHASE_2_PACKAGE_3_DURABLE_OFFLINE_RECOVERY_CANDIDATE",
+  "base_sha": "4c4810ca4c7723de2ac8cc0a9f06cac1151cdb82",
   "worker": "ChatGPT Work Mode",
   "worker_model": "gpt-6.1-sol",
   "source": {
@@ -14,18 +14,19 @@
     "narrow_approved_sha": "b2772922f8b39a0be7b6ae1787fa5477ed064f0d",
     "narrow_approval": "Actual independent Astra approval reported by supervisor; upstream PR37 merged to becf9dc; dependent candidate remains unapproved",
     "package_1": "gpt-6.1-sol medium; isolated candidate branch from preserved953e source; PR38 remote remains unchanged",
-    "package_2": "gpt-6.1-sol medium; separate clean planning worktree from immutable package1 correction; coordinator owns publication and actual review"
+    "package_2": "gpt-6.1-sol medium; separate clean planning worktree from immutable package1 correction; coordinator owns publication and actual review",
+    "package_3": "gpt-6.1-sol medium; separate recovery worktree from immutable complete-planning candidate; coordinator owns publication and actual Astra review"
   },
-  "change": "Package2 requires frozen complete valid scene/ShotPlan/current-Bible continuity planning for every shot before new generation submission and attempt authorization. Every durable job requires that handoff during restoration. Exact job content digest now includes the plan revision; any generation history blocks explicit new revision until historical snapshot support exists. Exact submit replay across all supported job states and exact authorization replay remain idempotent. Old incomplete production checkpoints reject rather than receive fabricated planning evidence.",
+  "change": "AtomicCheckpointStore validates before writing, fsyncs adjacent temporary bytes, atomically replaces and fsyncs parent directory where supported. OfflineGenerationCoordinator persists authorization before invocation and reconciles AUTHORIZED/RUNNING by the stable request key; authoritative absent AUTHORIZED requests may submit, missing RUNNING requests reject. Counting fake-provider tests cover receipt loss, interruption before receipt save, repeated recovery, retry identity, stale/conflicting receipts and zero calls on policy/checkpoint rejection. Durable JSON parsing rejects duplicate root and nested object keys before adapter invocation.",
   "test_evidence": {
-    "movie_studio": "119 tests passed, 0 failures (116 prior +3 raw API planning-handoff methods)",
-    "test_discovery": "119 tests passed, 0 failures",
+    "movie_studio": "127 tests passed, 0 failures (119 prior +8 durable storage/recovery methods)",
+    "test_discovery": "127 tests passed, 0 failures",
     "python_compile": "passed for core and tests",
     "json_schema_parse": "passed; runtime/schema shape tests passed; jsonschema package unavailable in both installed Python runtimes, so no independent JSON Schema meta-validation claimed",
     "git_diff_check": "passed",
-    "controller_regression": "34 tests passed; exact TASK-0002 deterministic workflow step passed in planning worktree",
-    "reviewer_bridge_regression": "68 tests passed; exact TASK-0003 deterministic workflow step passed in planning worktree",
-    "controller_production_fixtures": "All 5 exact Astra Review #4 production-path fixtures passed in planning worktree; isolated RUNNER_TEMP/PYTHONPATH",
+    "controller_regression": "34 tests passed; exact TASK-0002 deterministic workflow step passed in recovery worktree",
+    "reviewer_bridge_regression": "68 tests passed; exact TASK-0003 deterministic workflow step passed in recovery worktree",
+    "controller_production_fixtures": "All 5 exact Astra Review #4 production-path fixtures passed in recovery worktree; isolated RUNNER_TEMP/PYTHONPATH",
     "windows_regression": "not run on package1 candidate; remote source/base evidence retained, no new Windows run claimed",
     "narrow_ci": "PR37 narrow candidate run 37892960500 SUCCESS per supervisor; dependent candidate not yet published",
     "safety_provenance": "passed changed-path worker allowlist, all changed artifact provenance, JSONL parse, zero-spend/cloud-only/no-merge boundaries and changed-file CI secret pattern; no provider calls or external workflow launches"
@@ -39,11 +40,11 @@
     "checkpoint_digest": "deterministic integrity/accounting aid, not an authenticated signature against an adversary who rewrites the entire checkpoint",
     "usage_metrics": "model/account usage unavailable; no usage estimate asserted"
   },
-  "phase_2_gap_assessment": "Package2 closes complete frozen planning dispatch and restore handoff. Package1 actual review remains owned by coordinator; no approval fabricated. Durable checkpoint/reconciliation, typed timeline/master/QC/archive/cleanup and minimum continuity/reference/QA accountability remain unfinished.",
-  "review_status": "PACKAGE_2_SELF_TESTED_PENDING_EXACT_SOURCE_ASTRA_REVIEW",
+  "phase_2_gap_assessment": "Package3 supplies executable single-process atomic checkpoint publication and fake-provider stable-key crash reconciliation. Actual provider activation, distributed execution and real platform/account crash tests remain excluded. Typed timeline/master/QC/archive/cleanup and minimum continuity/reference/QA accountability remain unfinished; no overall Phase2 completion claimed.",
+  "review_status": "PACKAGE_3_SELF_TESTED_PENDING_EXACT_SOURCE_ASTRA_REVIEW",
   "reviewed_sha": null,
   "tests": {
-    "passed": 119,
+    "passed": 127,
     "failed": 0
   },
   "corrections": [
@@ -102,7 +103,7 @@
       "regressions": "Deletion matrix for status/history/both across every supported lifecycle and BLOCKED variant; exact restoration, explicit planned history defaults, active method/map/attribute atomic rejection and legal scaffolding/moves. Existing corruption tests now inject internal corruption after legal insertion and retain original validation assertions."
     }
   ],
-  "migration": "Schema version remains unreleased offline version 2. Every job checkpoint now requires complete frozen scene/ShotPlan/exact-Bible continuity planning and a plan-state digest including plan_revision. Old incomplete/unfrozen job checkpoints and old plan digests reject without fabricated metadata. Planned scaffold and explicit PLANNED missing-history legacy routes remain supported.",
+  "migration": "No checkpoint shape/schema-version change. Existing complete frozen version-2 checkpoints load through the new durable boundary; truncated/invalid checkpoints reject. Package2 fail-closed migration remains: incomplete planning job checkpoints and old revision-independent plan digests reject without fabricated records.",
   "worker_reasoning_effort": "medium",
   "prior_review_history": {
     "narrow_rejected_sha": "622f6a9be36b0f532adaeefbdeb3a224f92e3e8e",
@@ -127,11 +128,18 @@
       "sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
       "status": "ASTRA_SOURCE_APPROVED_PER_SUPERVISOR",
       "scope": "Bible/content binding correction source; no overall Phase 2 completion"
+    },
+    "package_1_correction": {
+      "status": "ACTUAL_ASTRA_BOUNDED_APPROVE_PER_SUPERVISOR",
+      "local_sha": "0da35bcaa0948f2e8f686802cf608b09a0909512",
+      "tree": "574d67851110d17ff242ac2b12a899ad337f9f90",
+      "published_sha_prefix": "d849338a",
+      "scope": "Package1 lifecycle and two bounded restore/prospective-graph corrections; no overall Phase2 approval"
     }
   },
   "next_actions": [
-    "Coordinator publishes exact package2 source/tree as a dependent candidate and obtains actual independent Astra review.",
-    "Continue package3 durable atomic checkpoints and counting fake-provider stable-key recovery in a separate worktree.",
-    "Keep ARCHIVING/COMPLETED unsupported until typed evidence package safely enables them."
+    "Coordinator publishes exact package3 source/tree as dependent candidate; preserve this worktree immutable.",
+    "Continue exact timeline/master/QC/archive/cleanup evidence in a separate worktree.",
+    "After all mandatory packages, request actual exact-source Astra phase review; no merge or Phase3 authorization."
   ]
 }

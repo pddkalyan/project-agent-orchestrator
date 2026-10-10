@@ -11,6 +11,9 @@ from types import MappingProxyType
 from enum import Enum
 from hashlib import sha256
 import json
+import os
+from pathlib import Path
+import tempfile
 from copy import copy
 from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Protocol, Tuple
 
@@ -333,7 +336,9 @@ class GenerationProviderAdapter(Protocol):
         self, authorization: AttemptAuthorization
     ) -> ProviderSubmissionReceipt: ...
 
-    def reconcile(self, provider_request_key: str) -> ProviderSubmissionReceipt: ...
+    def reconcile(self, provider_request_key: str) -> Optional[ProviderSubmissionReceipt]:
+        """Return the exact receipt, or None only for authoritative absence."""
+        ...
 
 
 @dataclass
@@ -2660,3 +2665,98 @@ def episode_can_complete(
 ) -> bool:
     """Deprecated advisory API: booleans cannot certify typed completion evidence."""
     return False
+
+
+class AtomicCheckpointStore:
+    """Single-writer local durable storage; no distributed ownership is implied."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def load(self) -> ProductionLedger:
+        def reject_duplicate_keys(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ProductionPolicyError("duplicate durable checkpoint key")
+                result[key] = value
+            return result
+        try:
+            data = json.loads(self.path.read_bytes(), object_pairs_hook=reject_duplicate_keys)
+        except ProductionPolicyError:
+            raise
+        except (ValueError, UnicodeError) as exc:
+            raise ProductionPolicyError("invalid durable production checkpoint") from exc
+        return ProductionLedger.from_dict(data)
+
+    def save(self, ledger: ProductionLedger) -> None:
+        # Validate and encode completely before creating or replacing any file.
+        data = ledger.to_dict()
+        ProductionLedger.from_dict(data)
+        encoded = (json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="wb", dir=self.path.parent, prefix=self.path.name + ".pending-", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.path)
+            temporary = None
+            # Persist the rename on platforms exposing directory fsync.
+            if hasattr(os, "O_DIRECTORY"):
+                descriptor = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+
+class OfflineGenerationCoordinator:
+    """Exercise durable dispatch/recovery with explicitly offline adapters only."""
+
+    def __init__(self, store: AtomicCheckpointStore, adapter: GenerationProviderAdapter):
+        self.store = store
+        self.adapter = adapter
+
+    def _require_adapter(self, authorization):
+        if getattr(self.adapter, "offline_simulation", None) is not True:
+            raise ProductionPolicyError("coordinator requires an offline simulation adapter")
+        if tuple(getattr(self.adapter, name, None) for name in ("provider_id", "adapter_id", "adapter_version")) != (
+            authorization.provider_id, authorization.adapter_id, authorization.adapter_version
+        ):
+            raise ProductionPolicyError("coordinator adapter does not match authorization")
+
+    def dispatch(self, job_id: str, quote: ProviderQuote) -> ProductionLedger:
+        ledger = self.store.load()
+        authorization = ledger.authorize_attempt(job_id, quote)
+        self._require_adapter(authorization)
+        # Authorization and ownership must be durable before any adapter call.
+        self.store.save(ledger)
+        return self._resume(ledger, job_id)
+
+    def recover(self, job_id: str) -> ProductionLedger:
+        ledger = self.store.load()
+        job = ledger._job(job_id)
+        if job.status not in {JobStatus.AUTHORIZED, JobStatus.RUNNING} or not job.attempt_history:
+            raise ProductionPolicyError("recovery requires durable authorized or running state")
+        self._require_adapter(job.attempt_history[-1].authorization)
+        return self._resume(ledger, job_id)
+
+    def _resume(self, ledger, job_id):
+        ledger.validate()
+        job = ledger._job(job_id)
+        authorization = job.attempt_history[-1].authorization
+        self._require_adapter(authorization)
+        receipt = self.adapter.reconcile(authorization.provider_request_key)
+        if receipt is None:
+            if job.status is JobStatus.RUNNING:
+                raise ProductionPolicyError("running provider request cannot be confirmed")
+            # None means verified absence; submit uses the persisted stable key.
+            receipt = self.adapter.submit(authorization)
+        ledger.start_generation(job_id, receipt)
+        self.store.save(ledger)
+        return ledger

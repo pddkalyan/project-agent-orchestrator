@@ -1,10 +1,15 @@
 import copy
 import json
 import unittest
+import os
+import tempfile
+from dataclasses import replace
 from unittest.mock import patch
 from pathlib import Path
 
 from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK_0005 import (
+    AtomicCheckpointStore,
+    OfflineGenerationCoordinator,
     ShotPlan,
     plan_digest,
     ShotContinuityBinding,
@@ -32,6 +37,51 @@ from scripts.movie_studio_core__created_by_chatgpt__model_gpt_5_6_sol__task_TASK
     episode_can_complete,
     required_gates,
 )
+
+
+class CountingOfflineProvider:
+    offline_simulation = True
+    provider_id = "afree"
+    adapter_id = "adapter-afree"
+    adapter_version = "1"
+
+    def __init__(self, store):
+        self.store = store
+        self.remote = {}
+        self.submit_calls = 0
+        self.reconcile_calls = 0
+        self.remote_accepts = 0
+        self.lose_receipt_once = False
+        self.override_receipt = None
+
+    def reconcile(self, key):
+        self.reconcile_calls += 1
+        ledger = self.store.load()
+        self.assert_durable_key(ledger, key)
+        return self.override_receipt or self.remote.get(key)
+
+    @staticmethod
+    def assert_durable_key(ledger, key):
+        assert key in ledger.provider_request_index
+        assert any(job.status in {JobStatus.AUTHORIZED, JobStatus.RUNNING} and job.attempt_history[-1].authorization.provider_request_key == key for job in ledger.jobs.values())
+
+    def submit(self, authorization):
+        self.submit_calls += 1
+        ledger = self.store.load()
+        self.assert_durable_key(ledger, authorization.provider_request_key)
+        assert ledger.jobs[authorization.job_id].status is JobStatus.AUTHORIZED
+        key = authorization.provider_request_key
+        if key not in self.remote:
+            self.remote_accepts += 1
+            self.remote[key] = ProviderSubmissionReceipt(
+                authorization.authorization_id, authorization.job_id, authorization.attempt_number,
+                authorization.provider_id, authorization.adapter_id, authorization.adapter_version,
+                key, "remote-" + str(self.remote_accepts)
+            )
+        if self.lose_receipt_once:
+            self.lose_receipt_once = False
+            raise RuntimeError("remote accepted; local receipt lost")
+        return self.remote[key]
 
 
 class MovieStudioCoreTests(unittest.TestCase):
@@ -123,6 +173,210 @@ class MovieStudioCoreTests(unittest.TestCase):
             ),
         )
         return attempt
+
+    def recovery_fixture(self, directory):
+        ledger = self.complete_planning_fixture()
+        ledger.freeze_plan()
+        ledger.submit_generation(job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        quote = self.register_provider(ledger)
+        store = AtomicCheckpointStore(Path(directory) / "checkpoint.json")
+        store.save(ledger)
+        adapter = CountingOfflineProvider(store)
+        return ledger, quote, store, adapter, OfflineGenerationCoordinator(store, adapter)
+
+    def test_atomic_checkpoint_validates_before_writing_and_syncs_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger, quote, store, adapter, coordinator = self.recovery_fixture(directory)
+            before = store.path.read_bytes()
+            object.__setattr__(ledger, "plan_frozen", False)
+            with self.assertRaises(ProductionPolicyError):
+                store.save(ledger)
+            self.assertEqual(store.path.read_bytes(), before)
+            self.assertEqual(list(Path(directory).glob("*.pending-*")), [])
+            ledger = store.load()
+            ledger.authorize_attempt("J1", quote)
+            actual_fsync = os.fsync
+            with patch("os.fsync", wraps=actual_fsync) as sync:
+                store.save(ledger)
+            self.assertEqual(sync.call_count, 2 if hasattr(os, "O_DIRECTORY") else 1)
+            self.assertEqual(store.load().to_dict(), ledger.to_dict())
+            self.assertEqual(list(Path(directory).glob("*.pending-*")), [])
+
+    def test_atomic_checkpoint_interruption_recovers_prior_or_next_complete_state(self):
+        for stage in ("file-sync", "before-replace", "after-replace", "directory-sync"):
+            if stage == "directory-sync" and not hasattr(os, "O_DIRECTORY"):
+                continue
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                ledger, quote, store, adapter, coordinator = self.recovery_fixture(directory)
+                previous = ledger.to_dict()
+                ledger.authorize_attempt("J1", quote)
+                following = ledger.to_dict()
+                actual_replace, actual_fsync = os.replace, os.fsync
+                def replace_fault(source, target):
+                    if stage == "after-replace":
+                        actual_replace(source, target)
+                    raise OSError("injected publication interruption")
+                calls = 0
+                def sync_fault(descriptor):
+                    nonlocal calls
+                    calls += 1
+                    if (stage == "file-sync" and calls == 1) or (stage == "directory-sync" and calls == 2):
+                        raise OSError("injected sync interruption")
+                    return actual_fsync(descriptor)
+                target, fault = ("os.replace", replace_fault) if "replace" in stage else ("os.fsync", sync_fault)
+                with patch(target, side_effect=fault), self.assertRaises(OSError):
+                    store.save(ledger)
+                expected = following if stage in {"after-replace", "directory-sync"} else previous
+                self.assertEqual(store.load().to_dict(), expected)
+                self.assertEqual(list(Path(directory).glob("*.pending-*")), [])
+
+    def test_durable_remote_receipt_loss_reconciles_without_duplicate_submission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger, quote, store, adapter, coordinator = self.recovery_fixture(directory)
+            adapter.lose_receipt_once = True
+            with self.assertRaisesRegex(RuntimeError, "receipt lost"):
+                coordinator.dispatch("J1", quote)
+            durable = store.load()
+            self.assertIs(durable.jobs["J1"].status, JobStatus.AUTHORIZED)
+            key = durable.jobs["J1"].attempt_history[-1].authorization.provider_request_key
+            self.assertIn(key, adapter.remote)
+            self.assertEqual((adapter.submit_calls, adapter.remote_accepts), (1, 1))
+            before = store.path.read_bytes()
+            adapter.override_receipt = replace(adapter.remote[key], authorization_id="stale")
+            with self.assertRaises(ProductionPolicyError):
+                OfflineGenerationCoordinator(store, adapter).recover("J1")
+            self.assertEqual(store.path.read_bytes(), before)
+            self.assertEqual(adapter.submit_calls, 1)
+            adapter.override_receipt = None
+            restarted = OfflineGenerationCoordinator(store, adapter)
+            running = restarted.recover("J1")
+            self.assertIs(running.jobs["J1"].status, JobStatus.RUNNING)
+            before = store.path.read_bytes()
+            restarted.recover("J1")
+            self.assertEqual(store.path.read_bytes(), before)
+            self.assertEqual((adapter.submit_calls, adapter.remote_accepts), (1, 1))
+            self.assertEqual(running.jobs["J1"].attempt_history[-1].authorization.provider_request_key, key)
+
+    def test_running_reconciliation_rejects_conflict_or_missing_receipt_atomically(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger, quote, store, adapter, coordinator = self.recovery_fixture(directory)
+            running = coordinator.dispatch("J1", quote)
+            before = store.path.read_bytes()
+            receipt = next(iter(adapter.remote.values()))
+            for wrong in (replace(receipt, provider_job_id="other"), replace(receipt, provider_request_key="stale"), replace(receipt, attempt_number=2)):
+                adapter.override_receipt = wrong
+                with self.assertRaises(ProductionPolicyError):
+                    coordinator.recover("J1")
+                self.assertEqual(store.path.read_bytes(), before)
+                self.assertEqual(adapter.submit_calls, 1)
+            adapter.override_receipt = None
+            adapter.remote.clear()
+            with self.assertRaisesRegex(ProductionPolicyError, "cannot be confirmed"):
+                coordinator.recover("J1")
+            self.assertEqual(store.path.read_bytes(), before)
+            self.assertEqual(adapter.submit_calls, 1)
+
+    def test_durable_retry_uses_new_key_and_rejects_old_receipt_or_callback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger, quote, store, adapter, coordinator = self.recovery_fixture(directory)
+            ledger = coordinator.dispatch("J1", quote)
+            first = ledger.jobs["J1"].attempt_history[-1]
+            ledger.fail_generation("J1", 1, first.provider_job_id, FailureClass.RETRYABLE_PROVIDER, "retry")
+            store.save(ledger)
+            self.assertIs(store.load().jobs["J1"].status, JobStatus.RETRYABLE)
+            ledger = coordinator.dispatch("J1", quote)
+            second = ledger.jobs["J1"].attempt_history[-1]
+            self.assertNotEqual(first.authorization.provider_request_key, second.authorization.provider_request_key)
+            self.assertEqual((adapter.submit_calls, adapter.remote_accepts), (2, 2))
+            before = store.path.read_bytes()
+            adapter.override_receipt = adapter.remote[first.authorization.provider_request_key]
+            with self.assertRaises(ProductionPolicyError):
+                coordinator.recover("J1")
+            self.assertEqual(store.path.read_bytes(), before)
+            checkpoint = ledger.to_dict()
+            with self.assertRaises(ProductionPolicyError):
+                ledger.finish_generation("J1", 1, first.provider_job_id, "old-asset")
+            self.assertEqual(ledger.to_dict(), checkpoint)
+            adapter.override_receipt = None
+            coordinator.recover("J1")
+            self.assertEqual((adapter.submit_calls, adapter.remote_accepts), (2, 2))
+            self.assertEqual(store.path.read_bytes(), before)
+
+    def test_rejected_dispatch_corrupt_checkpoint_and_queued_recovery_call_no_adapter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger, quote, store, adapter, coordinator = self.recovery_fixture(directory)
+            before = store.path.read_bytes()
+            with self.assertRaises(ProductionPolicyError):
+                coordinator.recover("J1")  # QUEUED has no durable authorization
+            for wrong in (replace(quote, maximum_cost_usd_micros=1), replace(quote, cloud_execution=False), replace(quote, request_fingerprint="wrong")):
+                with self.assertRaises(ProductionPolicyError):
+                    coordinator.dispatch("J1", wrong)
+                self.assertEqual(store.path.read_bytes(), before)
+            adapter.offline_simulation = False
+            with self.assertRaisesRegex(ProductionPolicyError, "offline simulation"):
+                coordinator.dispatch("J1", quote)
+            self.assertEqual(store.path.read_bytes(), before)
+            adapter.offline_simulation = True
+            adapter.adapter_version = "wrong"
+            with self.assertRaisesRegex(ProductionPolicyError, "does not match"):
+                coordinator.dispatch("J1", quote)
+            self.assertEqual(store.path.read_bytes(), before)
+            for data in (b'{"truncated":', b'[]', b'"invalid"', b'\xff'):
+                store.path.write_bytes(data)
+                with self.assertRaises(ProductionPolicyError):
+                    coordinator.dispatch("J1", quote)
+                self.assertEqual(store.path.read_bytes(), data)
+            for raw in (
+                before.decode().replace('"project_id":"planning-policy"', '"project_id":"planning-policy","project_id":"planning-policy"'),
+                before.decode().replace('"shot_id":"S1"', '"shot_id":"S1","shot_id":"S1"'),
+            ):
+                store.path.write_text(raw)
+                with self.assertRaisesRegex(ProductionPolicyError, "duplicate"):
+                    coordinator.dispatch("J1", quote)
+                self.assertEqual(store.path.read_text(), raw)
+            invalid = ledger.to_dict()
+            invalid["plan_frozen"] = False
+            store.path.write_text(json.dumps(invalid))
+            semantic_before = store.path.read_bytes()
+            with self.assertRaises(ProductionPolicyError):
+                coordinator.recover("J1")
+            self.assertEqual(store.path.read_bytes(), semantic_before)
+            self.assertEqual((adapter.submit_calls, adapter.reconcile_calls, adapter.remote_accepts), (0, 0, 0))
+
+    def test_authorized_recovery_after_pre_submit_interruption_submits_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger, quote, store, adapter, coordinator = self.recovery_fixture(directory)
+            authorization = ledger.authorize_attempt("J1", quote)
+            store.save(ledger)
+            self.assertEqual((adapter.submit_calls, adapter.reconcile_calls), (0, 0))
+            recovered = coordinator.recover("J1")
+            self.assertIs(recovered.jobs["J1"].status, JobStatus.RUNNING)
+            coordinator.recover("J1")
+            self.assertEqual((adapter.submit_calls, adapter.remote_accepts), (1, 1))
+            self.assertIn(authorization.provider_request_key, adapter.remote)
+
+    def test_authorization_checkpoint_failure_prevents_calls_and_receipt_save_loss_recovers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger, quote, store, adapter, coordinator = self.recovery_fixture(directory)
+            before = store.path.read_bytes()
+            with patch.object(store, "save", side_effect=OSError("save interrupted")), self.assertRaises(OSError):
+                coordinator.dispatch("J1", quote)
+            self.assertEqual(store.path.read_bytes(), before)
+            self.assertEqual((adapter.submit_calls, adapter.reconcile_calls), (0, 0))
+            actual_save = store.save
+            calls = 0
+            def lose_receipt_checkpoint(state):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("receipt checkpoint lost")
+                return actual_save(state)
+            with patch.object(store, "save", side_effect=lose_receipt_checkpoint), self.assertRaises(OSError):
+                coordinator.dispatch("J1", quote)
+            self.assertIs(store.load().jobs["J1"].status, JobStatus.AUTHORIZED)
+            OfflineGenerationCoordinator(store, adapter).recover("J1")
+            self.assertEqual((adapter.submit_calls, adapter.remote_accepts), (1, 1))
+            self.assertIs(store.load().jobs["J1"].status, JobStatus.RUNNING)
 
     def complete_planning_fixture(self):
         ledger = ProductionLedger("planning-policy")
