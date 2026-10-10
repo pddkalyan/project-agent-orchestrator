@@ -106,3 +106,7 @@
 {"file":"memory/NEXT_ACTIONS.json","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
 {"file":"docs/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.md","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
 {"file":"PROVENANCE_REGISTRY.jsonl","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
+{"file":"control_center/remote_bridge/bridge.py","created_by":"worker_jules","model":"jules-standard","run":"TASK-0044","kind":"generated"}
+{"file":"control_center/remote_bridge/sidecar.json.example","created_by":"worker_jules","model":"jules-standard","run":"TASK-0044","kind":"generated"}
+{"file":"control_center/remote_bridge/README.md","created_by":"worker_jules","model":"jules-standard","run":"TASK-0044","kind":"generated"}
+{"file":"tests/test_control_center_remote_bridge.py","created_by":"worker_jules","model":"jules-standard","run":"TASK-0044","kind":"generated"}
