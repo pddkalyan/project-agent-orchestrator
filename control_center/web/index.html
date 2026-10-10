@@ -33,9 +33,9 @@
 </head>
 <body class="bg-cinematic-dark text-cinematic-text font-sans min-h-screen flex flex-col selection:bg-cinematic-accent2 selection:text-cinematic-dark">
     <!-- Header -->
-    <header class="border-b border-cinematic-border bg-cinematic-panel py-4 px-6 flex justify-between items-center shadow-lg relative z-10 overflow-hidden">
+    <header class="movie-studio-header border-b border-cinematic-border bg-cinematic-panel py-4 px-6 flex justify-between items-center shadow-lg relative z-10 overflow-hidden">
         <div class="absolute inset-0 opacity-20 pointer-events-none" style="background: linear-gradient(90deg, rgba(255,42,95,0.2) 0%, rgba(0,229,255,0.2) 100%);"></div>
-        <div class="flex items-center gap-4 relative z-10">
+        <div class="header-brand flex items-center gap-4 relative z-10">
             <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-cinematic-accent1 to-cinematic-accent2 flex items-center justify-center shadow-[0_0_15px_rgba(255,42,95,0.5)]">
                 <i class="fa-solid fa-film text-cinematic-dark"></i>
             </div>
@@ -44,11 +44,11 @@
                 <p class="text-xs text-cinematic-accent2 font-mono uppercase tracking-widest">Agent Orchestrator - Read Only Mode</p>
             </div>
         </div>
-        <div class="flex items-center gap-6 relative z-10">
+        <div class="header-summary flex items-center gap-6 relative z-10">
             <div class="flex items-center gap-2 text-sm">
                 <span id="bridge-status" class="text-yellow-400 font-mono" aria-live="polite">UNKNOWN</span>
             </div>
-            <div class="text-xs text-cinematic-muted font-mono text-right">
+            <div class="header-meta text-xs text-cinematic-muted font-mono text-right">
                 <div>Live model: <span class="text-cinematic-muted">UNKNOWN</span></div>
                 <div>Native agent execution: <span class="text-cinematic-muted">UNKNOWN</span></div>
             </div>
