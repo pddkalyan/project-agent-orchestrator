@@ -36,7 +36,7 @@
     "scope": "Package4 exact timeline/master QC/archive/completion/cleanup evidence",
     "preserved_source_sha": "953e72ee82582b9f7afea5ae11113bad62d89b64",
     "base_sha": "becf9dc50536b9a0cd57e5d8daaf2e8422de6870",
-    "local_worktree": "phase2-evidence"
+    "local_worktree": "phase2-master"
   },
   "last_verified_at_utc": "2026-10-10T03:07:05.123Z",
   "phase2_approval": "STILL_REQUIRES_CORRECTIONS_ACTUAL_ASTRA_MATRIX_REVIEW",
