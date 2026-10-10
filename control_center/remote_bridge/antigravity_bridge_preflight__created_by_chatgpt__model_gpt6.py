@@ -108,6 +108,9 @@ def inspect(workspace, home, expected_sha=EXPECTED_SHA, run=command):
     gh_rc, _ = run(['gh', 'auth', 'status'])
     check('github_cli_authorized', gh_rc == 0,
           'Local GitHub CLI must be authenticated; no tokens are printed')
+    owner_rc, owner_id = run(['gh', 'api', 'user', '--jq', '.id'])
+    check('exact_github_owner', owner_rc == 0 and owner_id == '159762630',
+          'CLI must authenticate as repository owner (identity redacted)')
     # Official published sidecars docs list send-message but not get-conversation-metadata.
     # Do NOT weaken the exact-target security check or send a probe based on this report.
     checks.append({'check': 'native_conversation_identity', 'result': 'UNVERIFIED',
