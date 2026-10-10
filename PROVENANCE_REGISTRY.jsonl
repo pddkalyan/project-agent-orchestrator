@@ -106,3 +106,11 @@
 {"file":"memory/NEXT_ACTIONS.json","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
 {"file":"docs/chatgpt_plan_reviewer_bridge__created_by_worker_gemini_cli__model_gemini-3.5-flash-lite__task_TASK-0003.md","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
 {"file":"PROVENANCE_REGISTRY.jsonl","actor":"bootstrap_chatgpt","model":"gpt-5.6-sol","task":"TASK-0003","run":"20261004_ASTRA_R2_CORRECTION","kind":"modified"}
+{"file":"control_center/web/index.html","created_by":"worker_gemini_cli","model":"gemini-3.1-pro","run":"TASK-0040","kind":"canonical"}
+{"file":"control_center/web/style.css","created_by":"worker_gemini_cli","model":"gemini-3.1-pro","run":"TASK-0040","kind":"canonical"}
+{"file":"control_center/web/app.js","created_by":"worker_gemini_cli","model":"gemini-3.1-pro","run":"TASK-0040","kind":"canonical"}
+{"file":"tests/test_frontend__created_by_worker_gemini_cli__model_gemini-3.1-pro__task_TASK-0040.py","created_by":"worker_gemini_cli","model":"gemini-3.1-pro","task":"TASK-0040","kind":"generated"}
+{"file":"control_center/web/app.js","actor":"chatgpt","model":"gpt-6","task":"ISSUE-47","run":"20261010_UI47_ISOLATED_REVIEW","kind":"modified","reason":"safe DOM rendering, HTTPS GitHub allowlist, real owner-authored bridge receipt and bounded recent status read"}
+{"file":"control_center/web/index.html","actor":"chatgpt","model":"gpt-6","task":"ISSUE-47","run":"20261010_UI47_ISOLATED_REVIEW","kind":"modified","reason":"remove fabricated live model/execution/quota state; show truthful UNKNOWN and bridge-only status"}
+{"file":"control_center/web/style.css","actor":"chatgpt","model":"gpt-6","task":"ISSUE-47","run":"20261010_UI47_ISOLATED_REVIEW","kind":"modified","reason":"replace uncompiled @apply directives with ordinary CSS"}
+{"file":"tests/test_frontend__created_by_worker_gemini_cli__model_gemini-3.1-pro__task_TASK-0040.py","actor":"chatgpt","model":"gpt-6","task":"ISSUE-47","run":"20261010_UI47_ISOLATED_REVIEW","kind":"modified","reason":"offline Node DOM behavior and security regression tests; original filename preserved"}

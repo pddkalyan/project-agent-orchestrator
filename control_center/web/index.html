@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movie Studio Control Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        cinematic: {
+                            dark: '#0a0a0c',
+                            panel: '#15151a',
+                            border: '#2a2a35',
+                            accent1: '#ff2a5f',
+                            accent2: '#00e5ff',
+                            text: '#e0e0e0',
+                            muted: '#888899'
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+                        mono: ['Fira Code', 'ui-monospace', 'SFMono-Regular', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-cinematic-dark text-cinematic-text font-sans min-h-screen flex flex-col selection:bg-cinematic-accent2 selection:text-cinematic-dark">
+    <!-- Header -->
+    <header class="movie-studio-header border-b border-cinematic-border bg-cinematic-panel py-4 px-6 flex justify-between items-center shadow-lg relative z-10 overflow-hidden">
+        <div class="absolute inset-0 opacity-20 pointer-events-none" style="background: linear-gradient(90deg, rgba(255,42,95,0.2) 0%, rgba(0,229,255,0.2) 100%);"></div>
+        <div class="header-brand flex items-center gap-4 relative z-10">
+            <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-cinematic-accent1 to-cinematic-accent2 flex items-center justify-center shadow-[0_0_15px_rgba(255,42,95,0.5)]">
+                <i class="fa-solid fa-film text-cinematic-dark"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold tracking-wider uppercase bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">Movie Studio Control Center</h1>
+                <p class="text-xs text-cinematic-accent2 font-mono uppercase tracking-widest">Agent Orchestrator - Read Only Mode</p>
+            </div>
+        </div>
+        <div class="header-summary flex items-center gap-6 relative z-10">
+            <div class="flex items-center gap-2 text-sm">
+                <span id="bridge-status" class="text-yellow-400 font-mono" aria-live="polite">UNKNOWN</span>
+            </div>
+            <div class="header-meta text-xs text-cinematic-muted font-mono text-right">
+                <div>Live model: <span class="text-cinematic-muted">UNKNOWN</span></div>
+                <div>Native agent execution: <span class="text-cinematic-muted">UNKNOWN</span></div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative">
+
+        <!-- Left Column: Tasks & Agent Info -->
+        <div class="lg:col-span-3 flex flex-col gap-6">
+            <!-- Active Task -->
+            <section class="glass-panel rounded-xl border border-cinematic-border bg-cinematic-panel flex flex-col overflow-hidden h-full">
+                <div class="p-3 border-b border-cinematic-border bg-black/20 flex justify-between items-center">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider flex items-center gap-2">
+                        <i class="fa-solid fa-microchip text-cinematic-accent1"></i> Task Activity
+                    </h2>
+                    <span class="text-xs bg-cinematic-border px-2 py-1 rounded font-mono text-cinematic-muted">READ ONLY</span>
+                </div>
+                <div class="p-4 flex-1 flex flex-col gap-4">
+                    <div class="p-3 rounded bg-black/30 border border-cinematic-border/50">
+                        <div class="text-xs text-cinematic-muted mb-1 font-mono">CURRENT OBJECTIVE</div>
+                        <div class="text-sm">Monitor published GitHub evidence and Control Center progress</div>
+                    </div>
+                    <div class="flex-1 border border-cinematic-border/50 rounded bg-black/40 p-3 font-mono text-xs overflow-y-auto text-cinematic-muted">
+                        <!-- We cannot invent thinking activity per instructions. -->
+                        <div class="italic text-gray-500 text-center mt-10">No live agent telemetry available without secured backend.</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Agent Status -->
+            <section class="glass-panel rounded-xl border border-cinematic-border bg-cinematic-panel flex flex-col">
+                <div class="p-3 border-b border-cinematic-border bg-black/20">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider flex items-center gap-2">
+                        <i class="fa-solid fa-robot text-blue-400"></i> Agent Status
+                    </h2>
+                </div>
+                <div class="p-4 flex flex-col gap-3 font-mono text-xs">
+                    <div class="flex justify-between border-b border-cinematic-border/30 pb-2">
+                        <span class="text-cinematic-muted">State:</span>
+                        <span id="agent-state" class="text-yellow-400">UNKNOWN (no native agent telemetry)</span>
+                    </div>
+                    <div class="flex justify-between border-b border-cinematic-border/30 pb-2">
+                        <span class="text-cinematic-muted">Role:</span>
+                        <span>GitHub status viewer (not a live coding agent)</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-cinematic-muted">Active Model:</span>
+                        <span class="text-cinematic-muted">UNKNOWN</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Middle Column: GitHub Monitoring -->
+        <div class="lg:col-span-6 flex flex-col gap-6">
+            <!-- Authenticated GitHub-owned status receipts (no native agent telemetry) -->
+            <section class="glass-panel rounded-xl border border-cinematic-border bg-cinematic-panel flex flex-col">
+                <div class="p-3 border-b border-cinematic-border bg-black/20 flex justify-between items-center">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider">Bridge heartbeat</h2>
+                    <button id="refresh-bridge" aria-label="Refresh bridge status" class="text-cinematic-muted hover:text-white">
+                        <i class="fa-solid fa-sync" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div id="bridge-detail" aria-live="polite" class="p-3 text-xs text-cinematic-muted font-mono">
+                    No verified bridge receipt available.
+                </div>
+            </section>
+
+            <!-- Pull Requests -->
+            <section class="glass-panel rounded-xl border border-cinematic-border bg-cinematic-panel flex flex-col h-1/2">
+                <div class="p-3 border-b border-cinematic-border bg-black/20 flex justify-between items-center">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider flex items-center gap-2">
+                        <i class="fa-solid fa-code-pull-request text-cinematic-accent2"></i> Active Pull Requests
+                    </h2>
+                    <button id="refresh-prs" aria-label="Refresh Pull Requests" class="text-cinematic-muted hover:text-white transition-colors"><i class="fa-solid fa-sync" aria-hidden="true"></i></button>
+                </div>
+                <div class="p-4 overflow-y-auto flex-1 custom-scrollbar" id="pr-container">
+                    <div class="flex items-center justify-center h-full text-cinematic-muted font-mono text-sm">
+                        <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Loading PRs...
+                    </div>
+                </div>
+            </section>
+
+            <!-- GitHub Actions -->
+            <section class="glass-panel rounded-xl border border-cinematic-border bg-cinematic-panel flex flex-col h-1/2">
+                <div class="p-3 border-b border-cinematic-border bg-black/20 flex justify-between items-center">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider flex items-center gap-2">
+                        <i class="fa-solid fa-play-circle text-green-400"></i> Workflow Runs
+                    </h2>
+                    <button id="refresh-actions" aria-label="Refresh Actions" class="text-cinematic-muted hover:text-white transition-colors"><i class="fa-solid fa-sync" aria-hidden="true"></i></button>
+                </div>
+                <div class="p-4 overflow-y-auto flex-1 custom-scrollbar" id="actions-container">
+                    <div class="flex items-center justify-center h-full text-cinematic-muted font-mono text-sm">
+                        <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Loading Actions...
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Right Column: System & Controls -->
+        <div class="lg:col-span-3 flex flex-col gap-6">
+            <!-- Usage & Quota -->
+            <section class="glass-panel rounded-xl border border-cinematic-border bg-cinematic-panel flex flex-col">
+                <div class="p-3 border-b border-cinematic-border bg-black/20">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider flex items-center gap-2">
+                        <i class="fa-solid fa-chart-pie text-purple-400"></i> Quota & Usage
+                    </h2>
+                </div>
+                <div class="p-4 flex flex-col gap-4">
+                    <!-- Quota availability -->
+                    <div>
+                        <div class="flex justify-between text-xs mb-1 font-mono"><span>Verified API Spend</span> <span class="text-yellow-400">UNKNOWN</span></div>
+                        <div class="w-full bg-gray-800 rounded-full h-1.5"><div class="bg-green-500 h-1.5 rounded-full" style="width: 0%"></div></div>
+                        <div class="text-[10px] text-cinematic-muted mt-1">Policy target: ₹0 additional spend; no provider billing evidence available.</div>
+                    </div>
+                    
+                    <!-- Pause/recovery indicators -->
+                    <div class="border border-yellow-600/30 bg-yellow-900/10 rounded p-2 flex items-center gap-2">
+                        <i class="fa-solid fa-pause-circle text-yellow-500"></i>
+                        <div class="text-xs">
+                            <div class="text-yellow-500 font-bold">Execution UNKNOWN</div>
+                            <div class="text-cinematic-muted font-mono mt-0.5">The GitHub bridge cannot prove native agent execution.</div>
+                        </div>
+                    </div>
+
+                    <!-- Handoff status UI -->
+                    <div class="border border-cinematic-border rounded p-2">
+                        <div class="text-xs font-mono text-cinematic-muted mb-1">HANDOFF STATUS</div>
+                        <div class="flex items-center gap-2 text-sm">
+                            <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+                            <span>Remote commands disabled pending verification</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Controls -->
+            <section class="glass-panel rounded-xl border border-cinematic-border bg-cinematic-panel flex flex-col flex-1">
+                <div class="p-3 border-b border-cinematic-border bg-black/20">
+                    <h2 class="text-sm font-semibold uppercase tracking-wider flex items-center gap-2">
+                        <i class="fa-solid fa-sliders text-yellow-500"></i> Command & Approval
+                    </h2>
+                </div>
+                <div class="p-4 flex flex-col gap-3 flex-1 relative">
+                    <!-- Disabled overlay -->
+                    <div class="absolute inset-0 bg-cinematic-panel/60 backdrop-blur-[1px] z-10 flex items-center justify-center">
+                        <div class="bg-black/80 text-xs px-3 py-2 rounded border border-cinematic-border text-center">
+                            <i class="fa-solid fa-lock mb-1"></i><br>Backend Disconnected
+                        </div>
+                    </div>
+
+                    <button disabled aria-label="Approve Next Step" class="w-full py-2 bg-green-600/20 text-green-500 border border-green-600/50 rounded font-bold uppercase text-sm hover:bg-green-600/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                        Approve Next Step
+                    </button>
+                    <button disabled aria-label="Halt Execution" class="w-full py-2 bg-red-600/20 text-red-500 border border-red-600/50 rounded font-bold uppercase text-sm hover:bg-red-600/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                        Halt Execution
+                    </button>
+                    <div class="mt-auto">
+                        <label for="command-input" class="text-xs text-cinematic-muted mb-1 block">Manual Command Override</label>
+                        <input id="command-input" type="text" disabled placeholder="Enter command..." class="w-full bg-black/50 border border-cinematic-border rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-cinematic-accent2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Footer Logs -->
+    <footer class="h-48 border-t border-cinematic-border bg-black/80 flex flex-col">
+        <div class="p-2 border-b border-cinematic-border/50 flex justify-between items-center text-xs text-cinematic-muted font-mono">
+            <span><i class="fa-solid fa-terminal mr-1"></i> System Logs</span>
+            <span>Local Instance</span>
+        </div>
+        <div class="flex-1 p-3 font-mono text-xs overflow-y-auto custom-scrollbar text-gray-400 space-y-1">
+            <div class="text-gray-400">[INFO] Public GitHub status viewer; no local agent execution controls.</div>
+            <div class="text-yellow-400">[INFO] Billing, agent model and quota: UNKNOWN until authoritative evidence exists.</div>
+            <div class="text-gray-500">[INFO] Pull requests and workflow runs are public GitHub evidence.</div>
+        </div>
+    </footer>
+
+    <script src="app.js"></script>
+</body>
+</html>
