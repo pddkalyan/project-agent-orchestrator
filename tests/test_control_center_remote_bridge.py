@@ -109,6 +109,8 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         elif cmd == "agentapi":
             if subcmd == "send-message":
                 return self.mock_agentapi_result
+            elif subcmd == "get-conversation-metadata":
+                return 0, json.dumps({"conversation_id": args[2]}), ""
             elif subcmd == "--version":
                 return 0, "agentapi 1.0.0", ""
 
@@ -713,6 +715,64 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         self.assertTrue(res["results"][0]["valid"])
         self.assertFalse(res["results"][0]["dispatched"])
         self.assertEqual(res["results"][0]["code"], STATUS_CODES["PING_FAILED"])
+
+    def test_ping_conversation_refuses_missing_metadata(self):
+        self.write_local_config({
+            "workspace_dir": self.workspace_dir,
+            "dispatch_enabled": False,
+            "ping_enabled": True,
+            "status_enabled": True,
+            "conversation_id": "conv-existing",
+        })
+        def failing_metadata_runner(args, cwd=None, input_data=None):
+            if args[:2] == ["agentapi", "get-conversation-metadata"]:
+                return 1, "", "metadata unavailable"
+            return self.mock_runner(args, cwd=cwd, input_data=input_data)
+
+        bridge = AntigravityRemoteBridge(
+            state_dir=self.state_dir, runner=failing_metadata_runner, now_fn=self.mock_now
+        )
+        bridge.set_watermark(100)
+        self.mock_gh_comments_pages = [[
+            self.make_comment(101, command_id="33333333-4444-5555-6666-777777777777",
+                              action="ping_conversation", issue_number=47)
+        ]]
+        result = bridge.process_inbox()
+        self.assertFalse(result["results"][0]["dispatched"])
+        self.assertEqual(result["results"][0]["code"], STATUS_CODES["PING_FAILED"])
+        self.assertFalse(any(c["args"][:2] == ["agentapi", "send-message"] for c in self.mock_runner_calls))
+
+    def test_ping_conversation_refuses_invalid_metadata(self):
+        for metadata in ["not JSON", "{}", "[]", '{"conversation_id": ""}']:
+            with self.subTest(metadata=metadata):
+                self.mock_runner_calls = []
+                def malformed_metadata_runner(args, cwd=None, input_data=None):
+                    if args[:2] == ["agentapi", "get-conversation-metadata"]:
+                        return 0, metadata, ""
+                    return self.mock_runner(args, cwd=cwd, input_data=input_data)
+                self.write_local_config({
+                    "workspace_dir": self.workspace_dir,
+                    "dispatch_enabled": False,
+                    "ping_enabled": True,
+                    "status_enabled": True,
+                    "conversation_id": "conv-existing",
+                })
+                bridge = AntigravityRemoteBridge(
+                    state_dir=self.state_dir, runner=malformed_metadata_runner, now_fn=self.mock_now
+                )
+                bridge.set_watermark(100)
+                command_id = "44444444-5555-6666-7777-888888888888"
+                claim = os.path.join(self.state_dir, "claims", command_id + ".json")
+                if os.path.exists(claim):
+                    os.remove(claim)
+                self.mock_gh_comments_pages = [[
+                    self.make_comment(101, command_id=command_id,
+                                      action="ping_conversation", issue_number=47)
+                ]]
+                result = bridge.process_inbox()
+                self.assertFalse(result["results"][0]["dispatched"])
+                self.assertEqual(result["results"][0]["code"], STATUS_CODES["PING_FAILED"])
+                self.assertFalse(any(c["args"][:2] == ["agentapi", "send-message"] for c in self.mock_runner_calls))
 
     def test_ping_conversation_windows_path_and_mock(self):
         windows_workspace = os.path.join(self.test_dir, "C_drive", "project")
