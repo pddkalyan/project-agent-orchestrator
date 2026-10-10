@@ -550,7 +550,11 @@ class AntigravityRemoteBridge:
                 self._update_claim_status(claim_path, "FAILED", STATUS_CODES["DISPATCH_FAILED"])
                 return False, STATUS_CODES["DISPATCH_FAILED"]
         elif action == "ping_conversation":
-            if not self.config.get("ping_enabled", False):
+            # Never enable native ping delivery without the public receipt
+            # channel explicitly enabled as well. A silent delivery cannot
+            # complete the authenticated two-way handshake.
+            if (not self.config.get("ping_enabled", False)
+                    or not self.config.get("status_enabled", False)):
                 self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
                 return False, STATUS_CODES["PING_FAILED"]
         else:
