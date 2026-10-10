@@ -56,6 +56,7 @@ Save initial safe configuration to `%USERPROFILE%\.antigravity_bridge_state\conf
 {
   "workspace_dir": "C:\\path\\to\\project-agent-orchestrator",
   "dispatch_enabled": false,
+  "ping_enabled": false,
   "status_enabled": true,
   "conversation_id": "conv-your-active-id",
   "poll_interval_sec": 900,
@@ -82,7 +83,11 @@ For zero-spend, one-time local opt-in on the Windows host machine:
    Copy-Item "control_center\remote_bridge\bridge.py" "$env:USERPROFILE\.gemini\config\sidecars\github_bridge\bridge.py" -Force
    ```
 3. **Controlled Reload & Configuration Opt-In**: Update `%USERPROFILE%\.antigravity_bridge_state\config.json` with `"ping_enabled": true` or `"dispatch_enabled": true` by explicit user action, and trigger a controlled sidecar reload if required.
-4. **Two-Way Verification**: A public Issue #55 receipt code of `PING_DISPATCHED` confirms successful command processing and `agentapi send-message` invocation. However, an `agentapi` zero exit code alone is not full two-way proof; the operator/system must independently verify receipt of the prewritten acknowledgement ("Controller connectivity check only...") inside the active Antigravity conversation interface.
+4. **Two-Way Verification**: A public Issue #55 receipt code of `PING_DISPATCHED` confirms successful command processing and `agentapi send-message` invocation. However, an `agentapi` zero exit code alone is not full two-way proof; the operator/system must independently verify receipt of the prewritten acknowledgement ("Controller connectivity check only...") inside the active Antigravity conversation interface. The bridge preserves a result blocked by the 15-minute receipt cooldown or a temporary GitHub API error in `pending_status_result.json` and publishes it on the next successful heartbeat; an immediate absence of `PING_DISPATCHED` is not proof of failure. Never clear this state to force a retry.
+
+   **Hard activation gate:** The local `agentapi get-conversation-metadata <conversation_id>` response must exit successfully and return a JSON object with an exact `conversation_id` matching the configured active conversation. A CLI success with an unexpected/malformed schema is **not sufficient**. Investigate schema safely, fix/test the parser in a reviewable draft, and do not loosen this check or send a speculative ping. Check the actual sidecar process uses the pinned and tested script before adding any command. Keep `dispatch_enabled: false` while exercising `ping_enabled: true` for the one-time benign test.
+
+   **Last-moment safety:** Immediately before each native send, the bridge revalidates Git origin, exact `agent/control-center-standalone` branch, and exact expected HEAD SHA against the authenticated command. The ping can tolerate a dirty working tree on that verified commit, but cannot tolerate a changed branch, unverified remote, or HEAD drift.
 
 ### 4. Dry-Run Setup Verification & Offline Unit Testing
 To verify setup without creating GitHub comments or sending messages:
