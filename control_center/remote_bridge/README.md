@@ -100,6 +100,43 @@ Run offline unit tests:
 PYTHONPATH=. python -m unittest -v tests/test_control_center_remote_bridge.py
 ```
 
+### 4b. Exact-Candidate Offline Test + Redacted Native Probe
+
+**Do not test by replacing the installed sidecar first.** On Windows, use a
+separate checkout of PR #71 with its **exact reviewed commit SHA**. The current
+working frontend repository/PR #46 should not be reset or checked out.
+
+From the *root of the isolated candidate checkout* (PowerShell):
+
+```powershell
+python -m unittest discover -s tests -p "test_control_center_remote_bridge.py" -v
+python -m unittest discover -s tests -p "test_bridge_metadata_schema__created_by_agent_gpt6.py" -v
+python -m py_compile "control_center/remote_bridge/bridge.py" "control_center/remote_bridge/check_agentapi_metadata__created_by_agent_gpt6.py"
+git diff --check HEAD~1 HEAD
+```
+
+The redacted schema probe is also read-only; it reads the existing *local*
+`~/.antigravity_bridge_state/config.json` conversation ID, runs only
+`agentapi get-conversation-metadata` and prints field names and Boolean
+match results—**never raw metadata, IDs, prompts, paths or credentials**:
+
+```powershell
+python "control_center/remote_bridge/check_agentapi_metadata__created_by_agent_gpt6.py"
+```
+
+If the probe returns `FAIL_CLOSED`, `AGENTAPI_UNAVAILABLE` or any other
+non-`SCHEMA_VERIFIED` verdict, **do not enable or send a ping**. Verify
+`agentapi` location with trusted local read-only tools; if the actual
+metadata schema differs, correct the reviewed bridge parser and regression
+tests **before** installation. Do not work around this with skipped metadata
+checks or arbitrary commands.
+
+PR #71's current development branch has *diverged in Git history* from the
+already installed PR #69 stable bridge. A file-by-file audit found the prior
+bridge/security behavior retained in candidate source, but this is **not** a
+substitute for an exact-SHA offline suite and a safe local staging comparison.
+Never blindly merge both PRs or reinstall over the working process.
+
 ### 5. Revocation & Disabling
 To immediately disable the bridge:
 - Set `"dispatch_enabled": false` and `"status_enabled": false` in `%USERPROFILE%\.antigravity_bridge_state\config.json`.
