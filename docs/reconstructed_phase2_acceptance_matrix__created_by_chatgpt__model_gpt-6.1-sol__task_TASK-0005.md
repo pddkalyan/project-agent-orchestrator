@@ -4,7 +4,23 @@ Creator: ChatGPT Work Mode
 Model: gpt-6.1-sol; reasoning effort: medium
 Run: 20261009_PHASE2_ACCEPTANCE_RECONSTRUCTION
 Code examined: `953e72ee82582b9f7afea5ae11113bad62d89b64`
-Decision: **pending independent Astra phase review; no overall Phase 2 pass claimed**
+Decision: **Astra accepted this reconstructed framework; Phase 2 still requires corrections.** The baseline assessment below examines source `953e72e`; current increment evidence is recorded separately below.
+
+## Accepted scope and current execution evidence
+
+The [actual GPT-6 Astra review](../reviews/task_0005_phase2_matrix_review__created_by_chatgpt__model_gpt-6-astra__run_20261009.md) accepted this framework and adopted the complete frozen handoff, atomic offline recovery, minimum character–voice/reference associations and attributable QA as mandatory offline acceptance. Formal story/council execution, trusted live issuers, distributed execution and actual rendered quality remain deferred as stated in that review. The original checklist remains unrecovered; that is not a sole blocker. The historical baseline matrix and recovered original D criteria below are retained without relabeling them as original A–H.
+
+Fresh GitHub verification on October 10 confirms the feature branch remains `becf9dc50536b9a0cd57e5d8daaf2e8422de6870`. PR #38 retains its scoped Bible/content-binding approval at published head `9e09d3ff54c3bf76f2aeb20e08f30b2e37cce7f7`, tree `74e47c905c1d018ca61e60bc98435b5fef1eeb87`. PR #38, PR #39 and master PR #8 remain draft and unmerged.
+
+| Accepted correction package | Current source / PR evidence | Current result |
+|---|---|---|
+| Lifecycle and completion guards (R2-06/07/08) | PR #39 head `8e1b9e6103e7311b4de66ffc7c6bc8da7b9cbf44`, source `6fcec7da56dd960ae8b9827fbde3e0403a03aac6`, identical tree `d853a03225b62b26572796d369d5c0e2c2b5360d`; 113 Movie Studio tests, 34 controller, 68 reviewer bridge and five controller fixtures passed; CI run 37933201266 succeeded. | Actual Astra milestone **rejected** two bounded gaps: deleted status/history defaults downgrade advanced checkpoints; planning mutations can publish invalid active graphs. Existing transitions, immutable histories, BLOCKED recovery and fail-closed completion remain preserved; focused corrections are in progress. |
+| Complete frozen planning handoff (R2-03/04) | No new implementation committed after lifecycle candidate. | **Pending**; accepted complete frozen planning is mandatory before authorization. |
+| Atomic checkpoint and fake-provider recovery (R2-05) | Existing restore/replay tests are retained. | **Pending** executable durable writer/coordinator and receipt-loss reconciliation. |
+| Exact timeline/master QC/archive/cleanup (R2-07/08) | Lifecycle candidate explicitly rejects ARCHIVING/COMPLETED and boolean helper certification. | **Pending** typed evidence and safe terminal-state enablement. |
+| Character–voice/reference and attributable QA (R2-02/06) | Existing exact Bible/continuity bindings and shot gates are retained. | **Pending** accepted minimum associations, registry and evidence accountability. |
+
+This is executable scaffold progress, not a generated episode, verified Drive upload or cleanup. The October 10 10 PM IST target is a user deadline target, not a completion guarantee. Account allowance/reset/credit balances are unavailable; successful tool execution does not establish remaining capacity. Zero incremental spending, no Jules, paid APIs, credits, resets/reload, automatic merges or Phase 3 promotion remain in force.
 
 ## Scope and authority
 
