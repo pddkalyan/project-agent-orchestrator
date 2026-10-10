@@ -1492,6 +1492,9 @@ class ProductionLedger:
             raise ProductionPolicyError("production requires every ShotPlan and continuity binding")
         if any(not shot.scene_id or shot.scene_id not in self.scenes for shot in self.shots.values()):
             raise ProductionPolicyError("production requires scene-bound shots")
+        covered_scene_ids = {shot.scene_id for shot in self.shots.values()}
+        if covered_scene_ids != set(self.scenes):
+            raise ProductionPolicyError("production requires at least one planned shot in every scene")
         for shot_id in self.shots:
             self._shot_plan_state_digest(shot_id)
 
