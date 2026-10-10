@@ -29,9 +29,36 @@ body {
     background: #ff2a5f;
 }
 
-
+/* Standard CSS, no build-stage directives required. */
+.status-badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: 0.25rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+.status-open {
+    color: #86efac;
+    background-color: rgba(20, 83, 45, 0.4);
+    border: 1px solid #166534;
+}
+.status-merged {
+    color: #d8b4fe;
+    background-color: rgba(88, 28, 135, 0.4);
+    border: 1px solid #6b21a8;
+}
+.status-closed, .status-failure {
+    color: #fca5a5;
+}
+.status-closed {
+    background-color: rgba(127, 29, 29, 0.4);
+    border: 1px solid #991b1b;
+}
+.status-success { color: #86efac; }
+.status-in_progress { color: #fde047; }
+.status-neutral { color: #d1d5db; }
 
 /* Glow effects */
-.glow-text {
-    text-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
-}
+.glow-text { text-shadow: 0 0 10px rgba(0, 229, 255, 0.5); }
