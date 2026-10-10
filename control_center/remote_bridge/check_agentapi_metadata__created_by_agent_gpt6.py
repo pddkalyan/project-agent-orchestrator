@@ -28,10 +28,18 @@ def summarize_metadata(output, expected_id):
     if not isinstance(document, dict):
         return {"json_object": False, "exact_conversation_id_match": False,
                 "field_names": [], "verdict": "FAIL_CLOSED"}
-    names = sorted(str(key) for key in document if isinstance(key, str))
+    # Do not leak arbitrary field names: some APIs may use user-supplied
+    # strings or identifiers as keys. Reveal only a fixed allowlist of
+    # schema labels to help diagnose camelCase vs snake_case safely.
+    public_schema_keys = {
+        "conversation_id", "conversationId", "id", "workspace", "workspace_dir",
+        "workspaceUri", "project", "projectPath", "metadata", "status", "title",
+    }
+    names = sorted(key for key in document
+                   if isinstance(key, str) and key in public_schema_keys)
     match = bool(expected_id) and document.get("conversation_id") == expected_id
     return {"json_object": True, "exact_conversation_id_match": bool(match),
-            "field_names": names[:30], "verdict": "SCHEMA_VERIFIED" if match else "FAIL_CLOSED"}
+            "field_names": names, "verdict": "SCHEMA_VERIFIED" if match else "FAIL_CLOSED"}
 
 
 def main():
