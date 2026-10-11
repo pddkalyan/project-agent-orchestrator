@@ -98,6 +98,10 @@ class QuotaSnapshot:
     weekly_limit: float
     paid_overage_disabled: bool
     auto_topup_disabled: bool
+    # Separate from paid overage: Excelnt may spend pre-existing $600 BALANCE
+    # when the included 5-hour or weekly window is exhausted. Zero-topups
+    # does NOT prove that prepaid-balance fallback is disabled.
+    balance_fallback_disabled: bool = False
 
 
 class TrustedQuotaFeed(Protocol):
@@ -277,8 +281,13 @@ class WorkerQuotaGuard:
         uw, lw = _number(snap.weekly_used), _number(snap.weekly_limit, allow_zero=False)
         if u5 > l5 or uw > lw:
             raise FeedUnavailable("Invalid quota counters")
-        if snap.paid_overage_disabled is not True or snap.auto_topup_disabled is not True:
-            raise GuardBlocked("Paid balance/overage/top-up safety not confirmed disabled")
+        if (snap.paid_overage_disabled is not True
+                or snap.auto_topup_disabled is not True
+                or snap.balance_fallback_disabled is not True):
+            raise GuardBlocked(
+                "Balance-funded fallback, paid overage or auto-topup is not"
+                " independently confirmed disabled"
+            )
         return snap
 
     def request_preflight(self, worker: str, *, request_id: str,
