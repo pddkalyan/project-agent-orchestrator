@@ -69,6 +69,9 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn('CI succeeded ≠ worker currently coding', html)
         self.assertIn('Bridge reported alive ≠ Antigravity executing', html)
         self.assertIn('Astra review paused', html)
+        self.assertIn('operator-reported as of 2026-10-11', html)
+        self.assertIn('Static task assignments:', html)
+        self.assertIn('Bounded API windows:', html)
         css = (WEB / "style.css").read_text(encoding="utf-8")
         self.assertIn('.workboard-card', css)
 
@@ -232,6 +235,69 @@ app.addRun(julesNode, {
 const julesText = gather(julesNode).map(n => n.textContent).join(' ');
 assert(julesText.includes('(Task acknowledgment only — not ongoing thought)'),
     'Jules bot comment missing task-acknowledgment note');
+// Contradictory workflows at same SHA (candidate success + worker failure)
+const runCandidateSuccess = {
+    name: 'Movie Studio Jules Candidate CI',
+    status: 'completed',
+    conclusion: 'success',
+    head_sha: '2535300665972d0f598d479ffd0169e5ce61d48b',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/101'
+};
+const runFreeWorkerFailure = {
+    name: '.github/workflows/movie_studio_task_0005_free_worker.yml',
+    path: '.github/workflows/movie_studio_task_0005_free_worker.yml',
+    status: 'completed',
+    conclusion: 'failure',
+    head_sha: '2535300665972d0f598d479ffd0169e5ce61d48b',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/102'
+};
+// Permutation 1: candidate first, worker second
+const evalPerm1 = app.evaluateCIForHead('2535300665972d0f598d479ffd0169e5ce61d48b', [runCandidateSuccess, runFreeWorkerFailure]);
+assert.equal(evalPerm1.label, 'SUCCESS');
+assert.equal(evalPerm1.colorClass, 'text-green-400');
+assert(evalPerm1.detail.includes('Movie Studio Jules Candidate CI (2535300)'));
+assert(evalPerm1.detail.includes('separate trigger: FAILED'));
+assert.equal(evalPerm1.url, 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/101');
+
+// Permutation 2: worker first, candidate second
+const evalPerm2 = app.evaluateCIForHead('2535300665972d0f598d479ffd0169e5ce61d48b', [runFreeWorkerFailure, runCandidateSuccess]);
+assert.equal(evalPerm2.label, 'SUCCESS');
+assert.equal(evalPerm2.colorClass, 'text-green-400');
+assert(evalPerm2.detail.includes('Movie Studio Jules Candidate CI (2535300)'));
+assert(evalPerm2.detail.includes('separate trigger: FAILED'));
+assert.equal(evalPerm2.url, 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/101');
+
+// Conflicting candidate CI runs at same SHA
+const runCandidateFail = {
+    name: 'Movie Studio Jules Candidate CI',
+    status: 'completed',
+    conclusion: 'failure',
+    head_sha: '2535300665972d0f598d479ffd0169e5ce61d48b',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/103'
+};
+const evalConflict = app.evaluateCIForHead('2535300665972d0f598d479ffd0169e5ce61d48b', [runCandidateSuccess, runCandidateFail]);
+assert.equal(evalConflict.label, 'AMBIGUOUS / CONFLICTING CANDIDATE CI');
+
+// Scheduled launcher success only (policy check, not candidate tests)
+const runLauncherOnly = {
+    name: 'Movie Studio TASK-0005 Trusted Jules Launcher',
+    status: 'completed',
+    conclusion: 'success',
+    head_sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/104'
+};
+const evalLauncher = app.evaluateCIForHead('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', [runLauncherOnly]);
+assert.equal(evalLauncher.label, 'NO MATCHING CANDIDATE CI IN RECENT WINDOW');
+assert(evalLauncher.detail.includes('Policy check only: SUCCESS'));
+assert(evalLauncher.detail.includes('not candidate tests for aaaaaaa'));
+
+// Missing CI in recent window
+const evalMissing = app.evaluateCIForHead('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', [runCandidateSuccess]);
+assert.equal(evalMissing.label, 'NO MATCHING CI IN RECENT WINDOW');
+assert.equal(evalMissing.url, null);
+assert(evalMissing.detail.includes('No matching CI in recent 20 runs for bbbbbbb'));
+
+// Async fetch & stale cache handling tests
 global.fetch = async () => ({ok: false, status: 429});
 (async () => {
     await app.fetchPRs();
@@ -247,7 +313,49 @@ global.fetch = async () => ({ok: false, status: 429});
     await app.fetchBridgeStatus();
     assert(requestURL.includes('/issues/55/comments?per_page=100&since='),
         'heartbeat comments must use recent-since window to avoid truncated old page');
-    console.log('Behavior tests passed: URL injection, DOM escaping, workflow state, heartbeat, recent-page filtering, stale status, and 429.');
+
+    // Fresh fetch followed by 429 stale retention test
+    const initialObserved = new Date('2026-10-11T12:00:00Z');
+    app.feedState.prs.data = [
+        {
+            number: 46,
+            head: { sha: '1111111111111111111111111111111111111111', ref: 'agent/control-center-standalone' },
+            created_at: '2026-10-11T00:00:00Z',
+            state: 'open'
+        }
+    ];
+    app.feedState.prs.status = 'fresh';
+    app.feedState.prs.observedAt = initialObserved;
+    app.feedState.runs.data = [];
+    app.feedState.runs.status = 'fresh';
+    app.feedState.runs.observedAt = initialObserved;
+
+    global.fetch = async () => ({ok: false, status: 429});
+    await app.fetchPRs();
+    assert.equal(app.feedState.prs.status, 'stale');
+    assert.equal(app.feedState.prs.data.length, 1);
+    assert.equal(app.feedState.prs.observedAt, initialObserved);
+    const summary = app.formatFeedSummary(app.feedState);
+    assert(summary.includes('PRs: STALE (observed '));
+
+    // Render workboard with stale PR feed
+    app.renderWorkboard();
+    const staleCardTexts = workboard.children.map(allCardText);
+    assert(staleCardTexts.some(t => t.includes('PRs feed stale (unverified)')));
+    // PR 83 not in recent 30 PRs window
+    assert(staleCardTexts.some(t => t.includes('NOT IN RECENT 30 PRS') && t.includes('PR #83 not in recent 30 PRs window')));
+
+    // Malformed PR record handling
+    app.feedState.prs.data = [
+        { number: 46 },
+        null,
+        { number: 83, head: null }
+    ];
+    app.feedState.runs.data = null;
+    app.renderWorkboard();
+    assert.equal(workboard.children.length, 4);
+
+    console.log('Behavior tests passed: URL injection, DOM escaping, workflow classification, ordering permutations, launcher policy check, heartbeat, recent-page filtering, stale retention on 429, missing CI window, and malformed PRs.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
 
