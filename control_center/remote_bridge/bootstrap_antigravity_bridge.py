@@ -1,8 +1,8 @@
-"""
-Windows Bridge Bootstrap Installer & Repair Tool for Antigravity Remote Bridge.
+"""Fail-closed Windows Antigravity ping-only bridge bootstrap.
 
-Pure standard library implementation for safe Windows-native one-time
-bootstrap and offline/pinned source repair without external dependencies.
+A preflight is strictly read-only. --activate-ping requires an existing,
+owner-controlled github_bridge sidecar and an exact reviewed source artifact.
+No shell commands or native agent messages are dispatched by this installer.
 """
 
 from __future__ import annotations
@@ -12,451 +12,321 @@ import base64
 import hashlib
 import json
 import os
-import py_compile
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
-import urllib.request
-import urllib.error
+import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Callable, Optional
 
 REPO_NAME = "pddkalyan/project-agent-orchestrator"
 AUTHORIZED_USER_ID = 159762630
 EXPECTED_BRANCH = "agent/control-center-standalone"
-SIDECAR_ID = "antigravity_bridge"
+EXPECTED_HEAD_SHA = "15b148cfbc3acc0eec10c51ab8e8bf413613f23f"
+SAFE_SOURCE_COMMIT = "1123e6ef988d18155c42257c54dd318e3f8aac2b"
+SAFE_SOURCE_BLOB = "adc3ac6c9c7156a1f135caaedb87fd89c9284b5e"
+SAFE_SOURCE_PATH = "control_center/remote_bridge/bridge.py"
 
-DEFAULT_CONFIG_DEFAULTS = {
-    "dispatch_enabled": False,
-    "ping_enabled": False,
-    "status_enabled": True,
-    "allow_dirty_continue": False,
-    "poll_interval_sec": 900,
-    "min_status_interval_sec": 900,
-    "expected_branch": EXPECTED_BRANCH,
-    "repo": REPO_NAME,
-    "authorized_user_id": AUTHORIZED_USER_ID,
-    "inbox_issue": 54,
-    "status_issue": 55,
-}
+TOKEN_PATTERNS = (
+    re.compile(r"github_pat_[A-Za-z0-9_]{16,}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9_]{16,}", re.I),
+    re.compile(r"(?i)bearer\s+\S+"),
+)
 
-SECRET_PATTERNS = [
-    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
-    re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}", re.IGNORECASE),
-    re.compile(r"bearer\s+\S+", re.IGNORECASE),
-]
+
+class BootstrapBlocked(Exception):
+    """Identified, fail-closed operator issue without secret-bearing details."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
 
 
 def sanitize_text(text: str) -> str:
-    if not text:
-        return ""
-    result = str(text)
-    for pattern in SECRET_PATTERNS:
-        result = pattern.sub("[REDACTED_SECRET]", result)
-    return result
+    value = str(text or "")
+    for pattern in TOKEN_PATTERNS:
+        value = pattern.sub("[REDACTED_SECRET]", value)
+    return value
 
 
 def find_agentapi_executable(custom_path: str = "") -> str:
-    if custom_path and os.path.exists(custom_path):
-        return os.path.abspath(custom_path)
-
-    which_path = shutil.which("agentapi")
-    if which_path:
-        return which_path
-
-    home = Path.home()
-    primary = home / ".gemini" / "antigravity-cli" / "bin" / "agentapi.bat"
-    if primary.is_file():
-        return str(primary)
-
-    secondary = home / ".gemini" / "antigravity" / "bin" / "agentapi.bat"
-    if secondary.is_file():
-        return str(secondary)
-
+    if custom_path and Path(custom_path).is_file():
+        return str(Path(custom_path).resolve())
+    candidate = shutil.which("agentapi")
+    if candidate:
+        return candidate
+    for part in ("antigravity-cli", "antigravity"):
+        filename = Path.home() / ".gemini" / part / "bin" / "agentapi.bat"
+        if filename.is_file():
+            return str(filename)
     return ""
 
 
-def run_subprocess_with_retry(
-    cmd: List[str],
-    cwd: Optional[str] = None,
-    max_retries: int = 3,
-    initial_delay: float = 0.5,
-    runner: Optional[Callable] = None,
-) -> Tuple[int, str, str, str]:
-    """Run subprocess with bounded retry and sanitized output categorization."""
-    if runner is not None:
-        return runner(cmd, cwd=cwd)
-
-    last_returncode = -1
-    last_stdout = ""
-    last_stderr = ""
-    category = "UNKNOWN"
-
-    for attempt in range(max_retries):
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd=cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                shell=False,
-                timeout=30,
-            )
-            last_returncode = proc.returncode
-            last_stdout = proc.stdout
-            last_stderr = sanitize_text(proc.stderr)
-
-            if proc.returncode == 0:
-                return 0, last_stdout, last_stderr, "SUCCESS"
-
-            # Categorize error
-            stderr_lower = last_stderr.lower()
-            if "rate limit" in stderr_lower or "429" in stderr_lower:
-                category = "RATE_LIMITED"
-            elif "unauthorized" in stderr_lower or "401" in stderr_lower or "bad credentials" in stderr_lower:
-                category = "UNAUTHORIZED"
-            elif "could not resolve host" in stderr_lower or "connection refused" in stderr_lower or "timeout" in stderr_lower:
-                category = "NETWORK_ERROR"
-            else:
-                category = "SUBPROCESS_ERROR"
-
-        except FileNotFoundError:
-            return 127, "", f"Executable not found: {cmd[0]}", "BINARY_NOT_FOUND"
-        except subprocess.TimeoutExpired:
-            last_returncode = 124
-            last_stderr = "Subprocess timed out after 30 seconds"
-            category = "NETWORK_TIMEOUT"
-        except Exception as exc:
-            last_returncode = 1
-            last_stderr = sanitize_text(str(exc))
-            category = "SYSTEM_ERROR"
-
-        if attempt < max_retries - 1:
-            time.sleep(initial_delay * (2 ** attempt))
-
-    return last_returncode, last_stdout, last_stderr, category
-
-
-def verify_gh_auth(
-    max_retries: int = 3,
-    runner: Optional[Callable] = None,
-) -> Tuple[bool, str, Dict[str, Any]]:
-    """Verify GitHub CLI auth status and user ID match with retry and sanitized errors."""
-    cmd = ["gh", "api", "user", "--jq", "{id: .id, login: .login}"]
-    ret, stdout, stderr, category = run_subprocess_with_retry(
-        cmd, max_retries=max_retries, runner=runner
-    )
-
-    if ret == 127 or category == "BINARY_NOT_FOUND":
-        return False, "BLOCKED: GH_CLI_MISSING", {"category": category, "stderr": stderr}
-
-    if ret != 0:
-        return False, "BLOCKED: GH_API_AUTH_FAILED", {"category": category, "stderr": stderr, "exit_code": ret}
-
+def _run(cmd: list[str], cwd: Optional[str] = None, runner: Optional[Callable] = None):
+    if runner:
+        value = runner(cmd, cwd=cwd)
+        return value[0], value[1], value[2]
     try:
-        data = json.loads(stdout.strip())
-        user_id = data.get("id")
-        login = data.get("login")
-
-        if user_id != AUTHORIZED_USER_ID:
-            return False, "BLOCKED: GH_API_AUTH_FAILED", {
-                "category": "WRONG_USER",
-                "expected_id": AUTHORIZED_USER_ID,
-                "found_login": sanitize_text(str(login)),
-            }
-
-        return True, "AUTH_SUCCESS", {"user_id": user_id, "login": login}
-    except (json.JSONDecodeError, AttributeError):
-        return False, "BLOCKED: GH_API_AUTH_FAILED", {"category": "MALFORMED_RESPONSE", "stdout": stdout}
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, shell=False, timeout=30)
+        return result.returncode, result.stdout, result.stderr
+    except (FileNotFoundError, OSError):
+        return 127, "", "COMMAND_UNAVAILABLE"
+    except subprocess.TimeoutExpired:
+        return 124, "", "COMMAND_TIMEOUT"
 
 
-def retrieve_bridge_source(
-    workspace_dir: str,
-    max_retries: int = 3,
-    allow_raw: bool = False,
-    runner: Optional[Callable] = None,
-    http_fetcher: Optional[Callable] = None,
-    check_script_dir: bool = True,
-) -> Tuple[Optional[str], str, Dict[str, Any]]:
-    """
-    Retrieve bridge.py source code using local checkout, GitHub API, or raw HTTP fallback.
-    Returns (source_code, status_code, diagnostics).
-    """
-    diagnostics: Dict[str, Any] = {}
+def run_subprocess_with_retry(cmd, cwd=None, max_retries=3, runner=None, sleep_fn=time.sleep):
+    count = min(max(1, int(max_retries)), 3)
+    last = (1, "", "", "CHILD_FAILED")
+    for n in range(count):
+        rc, stdout, stderr = _run(cmd, cwd=cwd, runner=runner)
+        if rc == 0:
+            return 0, stdout, "", "SUCCESS"
+        category = "BINARY_NOT_FOUND" if rc == 127 else "TIMEOUT" if rc == 124 else "CHILD_FAILED"
+        last = (rc, "", "", category)
+        if category == "BINARY_NOT_FOUND":
+            break
+        if n < count - 1:
+            sleep_fn(0.25 * (2 ** n))
+    return last
 
-    # 1. Try reading from local repository checkout if available
-    local_bridge_path = Path(workspace_dir) / "control_center" / "remote_bridge" / "bridge.py"
-    if local_bridge_path.is_file():
-        try:
-            content = local_bridge_path.read_text(encoding="utf-8")
-            if "class AntigravityRemoteBridge" in content:
-                diagnostics["source"] = "LOCAL_CHECKOUT"
-                diagnostics["path"] = str(local_bridge_path)
-                return content, "SOURCE_RETRIEVED", diagnostics
-        except OSError as exc:
-            diagnostics["local_error"] = str(exc)
 
-    # Check if script directory contains bridge.py
+def verify_gh_auth(max_retries=3, runner=None):
+    rc, stdout, _, category = run_subprocess_with_retry(
+        ["gh", "api", "user", "--jq", "{id: .id, login: .login}"],
+        max_retries=max_retries,
+        runner=runner,
+    )
+    if rc != 0:
+        return False, "GH_CLI_MISSING" if rc == 127 else "GH_API_AUTH_FAILED", {"category": category}
+    try:
+        user = json.loads(stdout.strip())
+        if (not isinstance(user, dict) or type(user.get("id")) is not int
+                or user["id"] != AUTHORIZED_USER_ID or user.get("login") != "pddkalyan"):
+            return False, "GH_OWNER_MISMATCH", {"category": "OWNER_MISMATCH"}
+        return True, "AUTH_SUCCESS", {"user_id": AUTHORIZED_USER_ID}
+    except (ValueError, TypeError):
+        return False, "GH_RESPONSE_INVALID", {"category": "MALFORMED"}
+
+
+def _repo_name_from_remote(url: str) -> Optional[str]:
+    if not isinstance(url, str):
+        return None
+    remote = url.strip().removesuffix(".git").rstrip("/")
+    match = re.fullmatch(r"https://github\.com/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)", remote)
+    if not match:
+        match = re.fullmatch(r"git@github\.com:([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)", remote)
+    return "/".join(match.groups()).lower() if match else None
+
+
+def validate_workspace(workspace_dir: str, runner=None):
+    workspace = Path(workspace_dir).resolve()
+    if not workspace.is_dir():
+        return False, "WORKSPACE_MISSING", {}
+    checks = (
+        (["git", "remote", "get-url", "origin"], "remote"),
+        (["git", "rev-parse", "--abbrev-ref", "HEAD"], "branch"),
+        (["git", "rev-parse", "HEAD"], "head"),
+        (["git", "status", "--porcelain"], "dirty"),
+    )
+    values = {}
+    for cmd, key in checks:
+        rc, out, _ = _run(cmd, cwd=str(workspace), runner=runner)
+        if rc != 0:
+            return False, f"GIT_{key.upper()}_FAILED", {}
+        values[key] = out.strip()
+    if _repo_name_from_remote(values["remote"]) != REPO_NAME:
+        return False, "REPO_MISMATCH", {}
+    if values["branch"] != EXPECTED_BRANCH:
+        return False, "BRANCH_MISMATCH", {}
+    if values["head"].lower() != EXPECTED_HEAD_SHA:
+        return False, "HEAD_SHA_MISMATCH", {}
+    return True, "WORKSPACE_VALID", {"branch": EXPECTED_BRANCH, "head_sha": EXPECTED_HEAD_SHA, "is_dirty": bool(values["dirty"]), "workspace": str(workspace)}
+
+
+def _git_blob_id(blob: bytes) -> str:
+    return hashlib.sha1(b"blob " + str(len(blob)).encode("ascii") + b"\x00" + blob).hexdigest()
+
+
+def _verified_source(content: bytes) -> bool:
+    return _git_blob_id(content) == SAFE_SOURCE_BLOB
+
+
+def _read_trusted_candidate(file_path: Path) -> Optional[bytes]:
+    if not file_path.is_file() or file_path.is_symlink():
+        return None
+    try:
+        data = file_path.read_bytes()
+        return data if _verified_source(data) else None
+    except OSError:
+        return None
+
+
+def retrieve_bridge_source(workspace_dir: str, runner=None, max_retries=3, check_script_dir=True):
+    """Never accept the default GitHub branch or unverified local source."""
+    checked = []
     if check_script_dir:
-        script_dir_bridge = Path(__file__).resolve().parent / "bridge.py"
-        if script_dir_bridge.is_file():
-            try:
-                content = script_dir_bridge.read_text(encoding="utf-8")
-                if "class AntigravityRemoteBridge" in content:
-                    diagnostics["source"] = "SCRIPT_DIRECTORY"
-                    diagnostics["path"] = str(script_dir_bridge)
-                    return content, "SOURCE_RETRIEVED", diagnostics
-            except OSError as exc:
-                diagnostics["script_dir_error"] = str(exc)
+        checked.append(Path(__file__).resolve().parent / "bridge.py")
+    checked.append(Path(workspace_dir) / SAFE_SOURCE_PATH)
+    for path in checked:
+        source = _read_trusted_candidate(path)
+        if source is not None:
+            return source, "SOURCE_RETRIEVED", {"source": "PINNED_LOCAL"}
 
-    # 2. Try fetching via GitHub CLI API
-    cmd = ["gh", "api", f"repos/{REPO_NAME}/contents/control_center/remote_bridge/bridge.py"]
-    ret, stdout, stderr, category = run_subprocess_with_retry(
-        cmd, max_retries=max_retries, runner=runner
-    )
-    if ret == 0:
-        try:
-            payload = json.loads(stdout)
-            if isinstance(payload, dict) and "content" in payload:
-                raw_b64 = payload["content"].replace("\n", "").replace("\r", "")
-                content = base64.b64decode(raw_b64).decode("utf-8")
-                if "class AntigravityRemoteBridge" in content:
-                    diagnostics["source"] = "GITHUB_API"
-                    return content, "SOURCE_RETRIEVED", diagnostics
-        except Exception as exc:
-            diagnostics["github_api_parse_error"] = str(exc)
-
-    # 3. Fallback to raw.githubusercontent.com if allowed/needed
-    if allow_raw or True:
-        raw_url = f"https://raw.githubusercontent.com/{REPO_NAME}/{EXPECTED_BRANCH}/control_center/remote_bridge/bridge.py"
-        for attempt in range(max_retries):
-            try:
-                if http_fetcher:
-                    content = http_fetcher(raw_url)
-                else:
-                    req = urllib.request.Request(raw_url, headers={"User-Agent": "Antigravity-Bootstrap/1.0"})
-                    with urllib.request.urlopen(req, timeout=15) as resp:
-                        content = resp.read().decode("utf-8")
-                if "class AntigravityRemoteBridge" in content:
-                    diagnostics["source"] = "RAW_GITHUB"
-                    return content, "SOURCE_RETRIEVED", diagnostics
-            except Exception as exc:
-                diagnostics[f"raw_attempt_{attempt}"] = sanitize_text(str(exc))
-                if attempt < max_retries - 1:
-                    time.sleep(0.5 * (2 ** attempt))
-
-    return None, "BLOCKED: PINNED_SOURCE_DOWNLOAD_FAILED", diagnostics
-
-
-class BackupManager:
-    """Manages staging backups and restoration of bridge configuration and scripts."""
-
-    def __init__(self, state_dir: Path):
-        self.state_dir = state_dir
-        self.backup_dir = state_dir / "backups" / f"backup_{int(time.time())}"
-        self.backups: List[Tuple[Path, Path]] = []
-
-    def backup_file(self, target_path: Path) -> Optional[Path]:
-        if not target_path.exists():
-            return None
-        self.backup_dir.mkdir(parents=True, exist_ok=True)
-        backup_path = self.backup_dir / target_path.name
-        shutil.copy2(target_path, backup_path)
-        self.backups.append((target_path, backup_path))
-        return backup_path
-
-    def restore(self) -> None:
-        for target_path, backup_path in reversed(self.backups):
-            if backup_path.exists():
-                shutil.copy2(backup_path, target_path)
-        if self.backup_dir.exists():
-            shutil.rmtree(self.backup_dir, ignore_errors=True)
-
-
-def validate_workspace(workspace_dir: str, runner: Optional[Callable] = None) -> Tuple[bool, str, Dict[str, Any]]:
-    """Validate workspace path, Git remote, branch, and dirty status."""
-    if not workspace_dir or not isinstance(workspace_dir, str):
-        return False, "WORKSPACE_INVALID: Path required", {}
-
-    abs_ws = os.path.abspath(workspace_dir)
-    if not os.path.exists(abs_ws) or not os.path.isdir(abs_ws):
-        return False, f"WORKSPACE_INVALID: Directory does not exist at {abs_ws}", {}
-
-    # Check Git repo
-    cmd_remote = ["git", "remote", "get-url", "origin"]
-    ret_r, out_r, err_r, _ = run_subprocess_with_retry(cmd_remote, cwd=abs_ws, runner=runner)
-    if ret_r != 0 or REPO_NAME.lower() not in out_r.lower():
-        return False, "WORKSPACE_INVALID: Git remote origin mismatch", {"stderr": err_r}
-
-    cmd_branch = ["git", "rev-parse", "--abbrev-ref", "HEAD"]
-    ret_b, out_b, _, _ = run_subprocess_with_retry(cmd_branch, cwd=abs_ws, runner=runner)
-    branch = out_b.strip() if ret_b == 0 else "UNKNOWN"
-
-    cmd_status = ["git", "status", "--porcelain"]
-    ret_s, out_s, _, _ = run_subprocess_with_retry(cmd_status, cwd=abs_ws, runner=runner)
-    is_dirty = bool(out_s.strip()) if ret_s == 0 else True
-
-    return True, "WORKSPACE_VALID", {
-        "abs_path": abs_ws,
-        "branch": branch,
-        "is_dirty": is_dirty,
-    }
-
-
-def execute_bootstrap(
-    workspace_dir: str,
-    defer_metadata_to_sidecar: bool = False,
-    activate_ping: bool = False,
-    custom_agentapi: str = "",
-    max_retries: int = 3,
-    runner: Optional[Callable] = None,
-    http_fetcher: Optional[Callable] = None,
-    check_script_dir: bool = True,
-) -> Tuple[int, Dict[str, Any]]:
-    """
-    Execute one-time bootstrap repair workflow.
-    Returns (exit_code, result_dict).
-    """
-    output: Dict[str, Any] = {
-        "native_metadata": "DEFERRED_TO_SIDECAR_RUNTIME" if defer_metadata_to_sidecar else "UNVERIFIED",
-        "worktree_dirty_preserved": True,
-        "native_message_sent": "NO",
-        "status": "UNKNOWN",
-        "diagnostics": {},
-    }
-
-    # 1. Validate Workspace
-    ws_ok, ws_msg, ws_info = validate_workspace(workspace_dir, runner=runner)
-    if not ws_ok:
-        output["status"] = ws_msg
-        return 1, output
-
-    output["worktree_dirty_preserved"] = ws_info.get("is_dirty", True)
-    abs_workspace = ws_info["abs_path"]
-
-    # 2. Verify GitHub CLI Authentication
-    auth_ok, auth_status, auth_diag = verify_gh_auth(max_retries=max_retries, runner=runner)
-    if not auth_ok:
-        output["status"] = auth_status
-        output["diagnostics"]["gh_auth"] = auth_diag
-        return 1, output
-
-    # 3. Retrieve Bridge Source
-    source_code, source_status, source_diag = retrieve_bridge_source(
-        abs_workspace, max_retries=max_retries, runner=runner, http_fetcher=http_fetcher, check_script_dir=check_script_dir
-    )
-    if not source_code:
-        output["status"] = source_status
-        output["diagnostics"]["source"] = source_diag
-        return 1, output
-
-    # 4. Compile Source Verification
-    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as tmp:
-        tmp.write(source_code)
-        tmp_path = tmp.name
-
+    endpoint = f"repos/{REPO_NAME}/contents/{SAFE_SOURCE_PATH}?ref={SAFE_SOURCE_COMMIT}"
+    rc, out, _, cat = run_subprocess_with_retry(["gh", "api", endpoint], runner=runner, max_retries=max_retries)
+    if rc != 0:
+        return None, "PINNED_SOURCE_UNAVAILABLE", {"category": cat}
     try:
-        py_compile.compile(tmp_path, doraise=True)
-    except py_compile.PyCompileError as exc:
-        output["status"] = "BLOCKED: CORRUPTED_SOURCE_CODE"
-        output["diagnostics"]["compile_error"] = str(exc)
-        return 1, output
+        payload = json.loads(out)
+        if not isinstance(payload, dict) or payload.get("sha") != SAFE_SOURCE_BLOB:
+            return None, "PINNED_SOURCE_MISMATCH", {}
+        if payload.get("encoding") != "base64":
+            return None, "PINNED_SOURCE_MISMATCH", {}
+        content = base64.b64decode(payload["content"], validate=False)
+        if not _verified_source(content):
+            return None, "PINNED_SOURCE_MISMATCH", {}
+        return content, "SOURCE_RETRIEVED", {"source": "PINNED_GITHUB_API"}
+    except (ValueError, TypeError, KeyError):
+        return None, "PINNED_SOURCE_INVALID", {}
+
+
+def _safe_existing_paths():
+    home = Path.home()
+    state = home / ".antigravity_bridge_state"
+    sidecars = home / ".gemini" / "config" / "sidecars"
+    installed = sidecars / "github_bridge"
+    return state, installed / "bridge.py", installed / "sidecar.json", sidecars / "antigravity_bridge" / "sidecar.json"
+
+
+def _read_existing_config(state: Path, workspace: str) -> dict:
+    config_path = state / "config.json"
+    if not config_path.is_file() or config_path.is_symlink():
+        raise BootstrapBlocked("PRIVATE_CONFIG_MISSING")
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        raise BootstrapBlocked("PRIVATE_CONFIG_INVALID")
+    if not isinstance(config, dict) or not isinstance(config.get("conversation_id"), str) or not config["conversation_id"].strip():
+        raise BootstrapBlocked("PRIVATE_CONVERSATION_UNBOUND")
+    if not isinstance(config.get("workspace_dir"), str):
+        raise BootstrapBlocked("PRIVATE_WORKSPACE_MISSING")
+    if os.path.normcase(os.path.abspath(config["workspace_dir"])) != os.path.normcase(os.path.abspath(workspace)):
+        raise BootstrapBlocked("PRIVATE_WORKSPACE_MISMATCH")
+    if config.get("dispatch_enabled") is not False or config.get("allow_dirty_continue") is not False:
+        raise BootstrapBlocked("BROAD_DISPATCH_MUST_BE_DISABLED")
+    if config.get("status_enabled") is not True:
+        raise BootstrapBlocked("STATUS_RECEIPTS_REQUIRED")
+    return config
+
+
+def _require_existing_sidecar(source_path: Path, manifest_path: Path, competing_manifest: Path):
+    if competing_manifest.exists():
+        raise BootstrapBlocked("COMPETING_SIDECAR_PRESENT")
+    if not source_path.is_file() or source_path.is_symlink() or not manifest_path.is_file() or manifest_path.is_symlink():
+        raise BootstrapBlocked("EXISTING_GITHUB_BRIDGE_MISSING")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        raise BootstrapBlocked("SIDECAR_MANIFEST_INVALID")
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("args"), list):
+        raise BootstrapBlocked("SIDECAR_MANIFEST_INVALID")
+    args = manifest["args"]
+    # The known installed service starts bridge.py relative to its own dir.
+    if len(args) != 1 or args[0] not in ("bridge.py", str(source_path)):
+        raise BootstrapBlocked("SIDECAR_TARGET_MISMATCH")
+
+
+def _atomic_replace(target: Path, data: bytes):
+    # Same-directory temp protects atomicity; named file is always cleaned up.
+    temp = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with open(temp, "xb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, target)
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
-    # 5. Backup & Installation Setup
-    state_dir = Path.home() / ".antigravity_bridge_state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    backup_mgr = BackupManager(state_dir)
 
-    installed_bridge_dir = state_dir / "installed"
-    installed_bridge_dir.mkdir(parents=True, exist_ok=True)
-    installed_bridge_path = installed_bridge_dir / "bridge.py"
-
-    config_path = state_dir / "config.json"
-
-    # Backup existing
-    backup_mgr.backup_file(installed_bridge_path)
-    backup_mgr.backup_file(config_path)
-
+def _install_ping_verified(state: Path, source_path: Path, source_data: bytes, config: dict):
+    config_path = state / "config.json"
+    previous_source = source_path.read_bytes()
+    previous_config = config_path.read_bytes()
+    backups = state / "backups" / f"ping_{uuid.uuid4().hex}"
+    backups.mkdir(parents=True, exist_ok=False)
+    (backups / "bridge.py").write_bytes(previous_source)
+    (backups / "config.json").write_bytes(previous_config)
     try:
-        # Write installed bridge.py
-        installed_bridge_path.write_text(source_code, encoding="utf-8")
-
-        # Load or create config
-        existing_config: Dict[str, Any] = {}
-        if config_path.is_file():
-            try:
-                existing_config = json.loads(config_path.read_text(encoding="utf-8"))
-            except Exception:
-                existing_config = {}
-
-        new_config = dict(DEFAULT_CONFIG_DEFAULTS)
-        new_config.update(existing_config)
-        new_config["workspace_dir"] = abs_workspace
-
-        if activate_ping:
-            new_config["ping_enabled"] = True
-            new_config["status_enabled"] = True
-
-        # Enforce safe defaults for dispatch
+        new_config = dict(config)
         new_config["dispatch_enabled"] = False
         new_config["allow_dirty_continue"] = False
-
-        config_path.write_text(json.dumps(new_config, indent=2), encoding="utf-8")
-
-        # Setup Sidecar Configuration
-        sidecar_dir = Path.home() / ".gemini" / "config" / "sidecars" / SIDECAR_ID
-        sidecar_dir.mkdir(parents=True, exist_ok=True)
-        sidecar_json_path = sidecar_dir / "sidecar.json"
-
-        sidecar_config = {
-            "display_name": "Antigravity Bridge",
-            "description": "ChatGPT ↔ GitHub ↔ Windows Antigravity Bridge",
-            "command": sys.executable,
-            "args": [str(installed_bridge_path)],
-            "restart_policy": "on-failure",
-            "env": {
-                "PYTHONUNBUFFERED": "1"
-            }
-        }
-        sidecar_json_path.write_text(json.dumps(sidecar_config, indent=2), encoding="utf-8")
-
-        output["status"] = "READY_TO_INSTALL" if not activate_ping else "BOOTSTRAP_ACTIVATED"
-        return 0, output
-
-    except Exception as exc:
-        backup_mgr.restore()
-        output["status"] = f"BLOCKED: INSTALLATION_FAILED:{str(exc)}"
-        return 1, output
+        new_config["status_enabled"] = True
+        new_config["ping_enabled"] = True
+        _atomic_replace(source_path, source_data)
+        _atomic_replace(config_path, (json.dumps(new_config, indent=2) + "\n").encode("utf-8"))
+    except Exception:
+        try:
+            _atomic_replace(source_path, previous_source)
+            _atomic_replace(config_path, previous_config)
+        except Exception:
+            raise BootstrapBlocked("ROLLBACK_FAILED_CHECK_LOCAL_BACKUP")
+        raise BootstrapBlocked("INSTALLATION_ROLLED_BACK")
+    return "PING_ONLY_INSTALLED_RELOAD_REQUIRED"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Windows Bridge Bootstrap Repair Installer")
-    parser.add_argument("--workspace", required=True, help="Path to workspace directory")
-    parser.add_argument("--defer-metadata-to-sidecar", action="store_true", help="Defer metadata check to sidecar")
-    parser.add_argument("--activate-ping", action="store_true", help="Opt-in ping_enabled")
-    parser.add_argument("--agentapi", default="", help="Custom agentapi executable path")
+def execute_bootstrap(workspace_dir: str, *, activate_ping=False, defer_metadata_to_sidecar=False, runner=None, **_unused):
+    report = {"native_metadata": "DEFERRED_TO_SIDECAR_RUNTIME" if defer_metadata_to_sidecar else "UNVERIFIED",
+              "native_message_sent": "NO", "status": "BLOCKED", "worktree_dirty_preserved": True}
+    try:
+        ok, code, ws = validate_workspace(workspace_dir, runner=runner)
+        if not ok:
+            raise BootstrapBlocked(code)
+        report["worktree_dirty_preserved"] = ws["is_dirty"]
+        auth_ok, auth_code, _ = verify_gh_auth(runner=runner)
+        if not auth_ok:
+            raise BootstrapBlocked(auth_code)
+        source_data, source_code, _ = retrieve_bridge_source(ws["workspace"], runner=runner)
+        if source_data is None:
+            raise BootstrapBlocked(source_code)
+        try:
+            compile(source_data, SAFE_SOURCE_PATH, "exec")
+        except (SyntaxError, ValueError):
+            raise BootstrapBlocked("PINNED_SOURCE_UNCOMPILEABLE")
+        state, sidecar_script, manifest, competing = _safe_existing_paths()
+        _require_existing_sidecar(sidecar_script, manifest, competing)
+        config = _read_existing_config(state, ws["workspace"])
+        if activate_ping:
+            report["status"] = _install_ping_verified(state, sidecar_script, source_data, config)
+        else:
+            report["status"] = "READY_TO_INSTALL_READ_ONLY"
+        return 0, report
+    except BootstrapBlocked as exc:
+        report["status"] = "BLOCKED: " + exc.code
+        return 1, report
+    except OSError:
+        report["status"] = "BLOCKED: HOST_IO_FAILURE"
+        return 1, report
 
-    args = parser.parse_args()
 
-    exit_code, result = execute_bootstrap(
-        workspace_dir=args.workspace,
-        defer_metadata_to_sidecar=args.defer_metadata_to_sidecar,
-        activate_ping=args.activate_ping,
-        custom_agentapi=args.agentapi,
-    )
-
-    print(f"NATIVE_METADATA: {result.get('native_metadata')}")
-    print(f"WORKTREE_DIRTY_PRESERVED: {result.get('worktree_dirty_preserved')}")
-    print(f"{result.get('status')}")
-    print(f"NATIVE_MESSAGE_SENT: {result.get('native_message_sent')}")
-
+def main():
+    parser = argparse.ArgumentParser(description="Fail-closed pinned Antigravity ping-only installer")
+    parser.add_argument("--workspace", required=True)
+    parser.add_argument("--defer-metadata-to-sidecar", action="store_true")
+    parser.add_argument("--activate-ping", action="store_true")
+    opts = parser.parse_args()
+    exit_code, report = execute_bootstrap(opts.workspace, activate_ping=opts.activate_ping,
+                                          defer_metadata_to_sidecar=opts.defer_metadata_to_sidecar)
+    print("NATIVE_METADATA:", report["native_metadata"])
+    print("WORKTREE_DIRTY_PRESERVED:", report["worktree_dirty_preserved"])
+    print(report["status"])
+    print("NATIVE_MESSAGE_SENT:", report["native_message_sent"])
     return exit_code
 
 
