@@ -1,0 +1,57 @@
+name: Excelnt A-B Worker Quota Guard — Offline CI
+
+on:
+  push:
+    branches:
+      - candidate/excelnt-workers-quota-guard-gpt6-20261011
+    paths:
+      - scripts/excelnt_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.py
+      - tests/test_excelnt_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.py
+      - docs/excelnt_ab_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.md
+      - .github/workflows/excelnt_quota_guard_candidate_ci.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/excelnt_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.py
+      - tests/test_excelnt_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.py
+      - docs/excelnt_ab_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.md
+      - .github/workflows/excelnt_quota_guard_candidate_ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: excelnt-worker-guard-review-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  offline_zero_spend:
+    name: Offline only, zero paid APIs — ${{ matrix.os }} — Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Assert no live provider calls
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -E '(requests\.post|urllib\.request|excelnt\.ai/api)' scripts/excelnt_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.py
+      - name: Compile and test offline quota guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile scripts/excelnt_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.py tests/test_excelnt_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.py
+          python -m unittest discover -s tests -p 'test_excelnt_worker_quota_guard__created_by_chatgpt__model_gpt6__task_0085.py' -v
+      - name: Diff whitespace
+        shell: bash
+        run: git diff --check HEAD~1 HEAD
