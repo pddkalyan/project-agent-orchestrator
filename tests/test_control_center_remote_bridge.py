@@ -994,5 +994,178 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         self.assertEqual(res["results"][0]["code"], STATUS_CODES["PING_DISPATCHED"])
 
 
+    def test_continue_issue_rejects_wrong_native_conversation(self):
+        bridge_config = {
+            "workspace_dir": self.workspace_dir, "dispatch_enabled": True,
+            "ping_enabled": False, "status_enabled": True,
+            "conversation_id": "conv-bound", "allow_dirty_continue": False,
+        }
+        self.write_local_config(bridge_config)
+
+        def wrong_identity(args, cwd=None, input_data=None):
+            if args[:2] == ["agentapi", "get-conversation-metadata"]:
+                return 0, json.dumps({"conversation_id": "different-conversation"}), ""
+            return self.mock_runner(args, cwd=cwd, input_data=input_data)
+
+        bridge = AntigravityRemoteBridge(
+            state_dir=self.state_dir, runner=wrong_identity, now_fn=self.mock_now
+        )
+        bridge.set_watermark(100)
+        self.mock_gh_comments_pages = [[
+            self.make_comment(101, command_id="aaaa0000-1111-2222-3333-444444444444",
+                              action="continue_issue", issue_number=47)
+        ]]
+        result = bridge.process_inbox()
+        self.assertEqual(result["results"][0]["code"], STATUS_CODES["DISPATCH_FAILED"])
+        self.assertFalse(result["results"][0]["dispatched"])
+        self.assertFalse(any(c["args"][:2] == ["agentapi", "send-message"]
+                             for c in self.mock_runner_calls))
+
+    def test_continue_issue_accepts_exact_nested_native_metadata(self):
+        self.write_local_config({
+            "workspace_dir": self.workspace_dir, "dispatch_enabled": True,
+            "ping_enabled": False, "status_enabled": True,
+            "conversation_id": "conv-bound", "allow_dirty_continue": False,
+        })
+
+        def nested_identity(args, cwd=None, input_data=None):
+            if args[:2] == ["agentapi", "get-conversation-metadata"]:
+                return 0, json.dumps({
+                    "response": {"conversationMetadata": {
+                        "metadata": {"rootConversationId": args[2]}
+                    }}
+                }), ""
+            return self.mock_runner(args, cwd=cwd, input_data=input_data)
+
+        bridge = AntigravityRemoteBridge(
+            state_dir=self.state_dir, runner=nested_identity, now_fn=self.mock_now
+        )
+        bridge.set_watermark(100)
+        self.mock_gh_comments_pages = [[
+            self.make_comment(101, command_id="bbbb0000-1111-2222-3333-444444444444",
+                              action="continue_issue", issue_number=47)
+        ]]
+        result = bridge.process_inbox()
+        self.assertTrue(result["results"][0]["dispatched"])
+        self.assertEqual(result["results"][0]["code"], STATUS_CODES["DISPATCH_SUCCESS"])
+        sends = [c for c in self.mock_runner_calls if c["args"][:2] == ["agentapi", "send-message"]]
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(sends[0]["args"][2], "conv-bound")
+
+    def test_dispatch_requires_public_receipts_enabled(self):
+        self.write_local_config({
+            "workspace_dir": self.workspace_dir, "dispatch_enabled": True,
+            "status_enabled": False, "conversation_id": "conv-bound",
+        })
+        bridge = AntigravityRemoteBridge(
+            state_dir=self.state_dir, runner=self.mock_runner, now_fn=self.mock_now
+        )
+        bridge.set_watermark(100)
+        self.mock_gh_comments_pages = [[
+            self.make_comment(101, command_id="cccc0000-1111-2222-3333-444444444444",
+                              action="continue_issue", issue_number=47)
+        ]]
+        result = bridge.process_inbox()
+        self.assertEqual(result["results"][0]["code"], STATUS_CODES["DISPATCH_FAILED"])
+        self.assertFalse(any(c["args"][0] == "agentapi" for c in self.mock_runner_calls))
+
+    def test_malformed_or_conflicting_nested_metadata_fails_closed(self):
+        self.write_local_config({
+            "workspace_dir": self.workspace_dir, "dispatch_enabled": False,
+            "ping_enabled": True, "status_enabled": True,
+            "conversation_id": "conv-bound",
+        })
+        corruptions = [
+            {"response": {"conversationMetadata": []}},
+            {"response": {"conversationMetadata": {"metadata": []}}},
+            {"response": {"conversationMetadata": {"metadata": {"rootConversationId": 42}}}},
+            {"conversation_id": "conv-bound", "response": {
+                "conversationMetadata": {"metadata": {"rootConversationId": "different"}}
+            }},
+        ]
+        for idx, data in enumerate(corruptions):
+            with self.subTest(idx=idx):
+                self.mock_runner_calls = []
+
+                def malformed(args, cwd=None, input_data=None):
+                    if args[:2] == ["agentapi", "get-conversation-metadata"]:
+                        return 0, json.dumps(data), ""
+                    return self.mock_runner(args, cwd=cwd, input_data=input_data)
+
+                bridge = AntigravityRemoteBridge(
+                    state_dir=self.state_dir, runner=malformed, now_fn=self.mock_now
+                )
+                bridge.set_watermark(100)
+                self.mock_gh_comments_pages = [[
+                    self.make_comment(101, command_id=f"dddd0000-1111-2222-3333-{idx:012d}",
+                                      action="ping_conversation", issue_number=47)
+                ]]
+                result = bridge.process_inbox()
+                self.assertEqual(result["results"][0]["code"], STATUS_CODES["PING_FAILED"])
+                self.assertFalse(result["results"][0]["dispatched"])
+                self.assertFalse(any(c["args"][:2] == ["agentapi", "send-message"]
+                                     for c in self.mock_runner_calls))
+
+    def test_native_send_blocked_if_head_changes_during_metadata_lookup(self):
+        for idx, action in enumerate(("ping_conversation", "continue_issue")):
+            with self.subTest(action=action):
+                self.mock_git_sha = HEAD_SHA_40
+                self.mock_git_dirty = False
+                self.mock_runner_calls = []
+                self.write_local_config({
+                    "workspace_dir": self.workspace_dir, "dispatch_enabled": True,
+                    "ping_enabled": True, "status_enabled": True,
+                    "conversation_id": "conv-bound", "allow_dirty_continue": False,
+                })
+
+                def moving_head(args, cwd=None, input_data=None):
+                    if args[:2] == ["agentapi", "get-conversation-metadata"]:
+                        self.mock_git_sha = "f" * 40
+                        return 0, json.dumps({"conversation_id": args[2]}), ""
+                    return self.mock_runner(args, cwd=cwd, input_data=input_data)
+
+                bridge = AntigravityRemoteBridge(
+                    state_dir=self.state_dir, runner=moving_head, now_fn=self.mock_now
+                )
+                bridge.set_watermark(100)
+                self.mock_gh_comments_pages = [[
+                    self.make_comment(101, command_id=f"eeee0000-1111-2222-3333-{idx:012d}",
+                                      action=action, issue_number=47)
+                ]]
+                result = bridge.process_inbox()
+                self.assertEqual(result["results"][0]["code"], STATUS_CODES["INVALID_PAYLOAD"])
+                self.assertFalse(result["results"][0]["dispatched"])
+                self.assertFalse(any(c["args"][:2] == ["agentapi", "send-message"]
+                                     for c in self.mock_runner_calls))
+
+    def test_continue_rejects_tree_becoming_dirty_during_metadata(self):
+        self.write_local_config({
+            "workspace_dir": self.workspace_dir, "dispatch_enabled": True,
+            "status_enabled": True, "conversation_id": "conv-bound",
+            "allow_dirty_continue": False,
+        })
+        self.mock_git_dirty = False
+
+        def dirty_during_metadata(args, cwd=None, input_data=None):
+            if args[:2] == ["agentapi", "get-conversation-metadata"]:
+                self.mock_git_dirty = True
+                return 0, json.dumps({"conversation_id": args[2]}), ""
+            return self.mock_runner(args, cwd=cwd, input_data=input_data)
+
+        bridge = AntigravityRemoteBridge(
+            state_dir=self.state_dir, runner=dirty_during_metadata, now_fn=self.mock_now
+        )
+        bridge.set_watermark(100)
+        self.mock_gh_comments_pages = [[
+            self.make_comment(101, command_id="ffff0000-1111-2222-3333-444444444444",
+                              action="continue_issue", issue_number=47)
+        ]]
+        result = bridge.process_inbox()
+        self.assertEqual(result["results"][0]["code"], STATUS_CODES["LOCAL_TREE_DIRTY"])
+        self.assertFalse(result["results"][0]["dispatched"])
+        self.assertFalse(any(c["args"][:2] == ["agentapi", "send-message"]
+                             for c in self.mock_runner_calls))
+
+
 if __name__ == "__main__":
     unittest.main()

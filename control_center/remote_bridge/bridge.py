@@ -557,7 +557,10 @@ class AntigravityRemoteBridge:
 
         action = payload.get("action")
         if action == "continue_issue":
-            if not self.config.get("dispatch_enabled", False):
+            # No silent native coding dispatch: require the authenticated public
+            # receipt channel as well as explicit local dispatch opt-in.
+            if (not self.config.get("dispatch_enabled", False)
+                    or not self.config.get("status_enabled", False)):
                 self._update_claim_status(claim_path, "FAILED", STATUS_CODES["DISPATCH_FAILED"])
                 return False, STATUS_CODES["DISPATCH_FAILED"]
         elif action == "ping_conversation":
@@ -610,47 +613,75 @@ class AntigravityRemoteBridge:
             if not can_continue_dirty:
                 self._update_claim_status(claim_path, "FAILED", STATUS_CODES["LOCAL_TREE_DIRTY"])
                 return False, STATUS_CODES["LOCAL_TREE_DIRTY"]
-        if action == "ping_conversation":
-            if not self.config.get("ping_enabled", False):
-                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
-                return False, STATUS_CODES["PING_FAILED"]
+        # Both coding dispatch and ping require the exact PRIVATE native target.
+        # The former previously skipped this check, even when dispatch_enabled was
+        # opted in. Never trust a public command's target without native evidence.
+        if action == "ping_conversation" and not self.config.get("ping_enabled", False):
+            self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
+            return False, STATUS_CODES["PING_FAILED"]
 
-            conv_id = self.config.get("conversation_id", "").strip()
-            if not conv_id:
-                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["CONFIG_INVALID"])
-                return False, STATUS_CODES["CONFIG_INVALID"]
+        failure_code = (STATUS_CODES["PING_FAILED"] if action == "ping_conversation"
+                        else STATUS_CODES["DISPATCH_FAILED"])
+        conv_id = self.config.get("conversation_id", "").strip()
+        if not conv_id:
+            self._update_claim_status(claim_path, "FAILED", STATUS_CODES["CONFIG_INVALID"])
+            return False, STATUS_CODES["CONFIG_INVALID"]
 
-            # Require authoritative metadata that names the exact intended
-            # conversation. A failed or undecodable response must never authorize
-            # a message to an unverified target.
-            ret_meta, stdout_meta, _ = self.runner(["agentapi", "get-conversation-metadata", conv_id])
-            if ret_meta != 0:
-                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
-                return False, STATUS_CODES["PING_FAILED"]
-            try:
-                meta_data = json.loads(stdout_meta)
-            except (TypeError, ValueError):
-                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
-                return False, STATUS_CODES["PING_FAILED"]
+        ret_meta, stdout_meta, _ = self.runner(["agentapi", "get-conversation-metadata", conv_id])
+        if ret_meta != 0:
+            self._update_claim_status(claim_path, "FAILED", failure_code)
+            return False, failure_code
+        try:
+            meta_data = json.loads(stdout_meta)
             if not isinstance(meta_data, dict):
-                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
-                return False, STATUS_CODES["PING_FAILED"]
+                raise ValueError("Native metadata must be an object")
 
-            actual_conv_id = None
-            if "conversation_id" in meta_data:
-                actual_conv_id = meta_data.get("conversation_id")
-            elif isinstance(meta_data.get("response"), dict):
-                actual_conv_id = (
-                    meta_data["response"]
-                    .get("conversationMetadata", {})
-                    .get("metadata", {})
-                    .get("rootConversationId")
-                )
+            # Reject malformed nested fields and conflicting exact-ID claims.
+            # Never log the private conversation ID or original metadata.
+            matching_ids = []
+            for key in ("conversation_id", "conversationId"):
+                if key in meta_data:
+                    matching_ids.append(meta_data[key])
+            if "response" in meta_data:
+                response = meta_data["response"]
+                if not isinstance(response, dict):
+                    raise ValueError("Invalid response type")
+                if "conversationMetadata" in response:
+                    conversation_metadata = response["conversationMetadata"]
+                    if not isinstance(conversation_metadata, dict):
+                        raise ValueError("Invalid conversation metadata")
+                    metadata = conversation_metadata.get("metadata")
+                    if not isinstance(metadata, dict):
+                        raise ValueError("Invalid native metadata")
+                    matching_ids.append(metadata.get("rootConversationId"))
+            if not matching_ids or any(
+                    not isinstance(value, str) or value != conv_id
+                    for value in matching_ids):
+                raise ValueError("Exact native conversation identity mismatch")
+        except (TypeError, ValueError):
+            self._update_claim_status(claim_path, "FAILED", failure_code)
+            return False, failure_code
 
-            if not actual_conv_id or actual_conv_id != conv_id:
-                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
-                return False, STATUS_CODES["PING_FAILED"]
+        # Metadata lookup can run while HEAD, remote or workspace dirtiness
+        # changes. Revalidate immediately before the fixed native send-message.
+        final_git = self.get_local_git_info()
+        if not (
+            final_git.get("valid_repo") is True
+            and final_git.get("branch") == EXPECTED_BRANCH
+            and final_git.get("head_sha", "").lower() == str(payload.get("expected_head_sha", "")).lower()
+            and final_git.get("head_sha", "").lower() == str(auth_context.get("expected_head_sha", "")).lower()
+            and auth_context.get("expected_branch") == EXPECTED_BRANCH
+            and auth_context.get("issue_number") == payload.get("issue_number")
+        ):
+            self._update_claim_status(claim_path, "FAILED", STATUS_CODES["INVALID_PAYLOAD"])
+            return False, STATUS_CODES["INVALID_PAYLOAD"]
+        if (action == "continue_issue"
+                and final_git.get("is_dirty", True)
+                and not self.config.get("allow_dirty_continue", False)):
+            self._update_claim_status(claim_path, "FAILED", STATUS_CODES["LOCAL_TREE_DIRTY"])
+            return False, STATUS_CODES["LOCAL_TREE_DIRTY"]
 
+        if action == "ping_conversation":
             ret, stdout, stderr = self.runner(["agentapi", "send-message", conv_id, PING_PROMPT_TEXT])
             if ret == 127 or "Binary not found" in stderr:
                 self._update_claim_status(claim_path, "FAILED", STATUS_CODES["AGENTAPI_MISSING"])
@@ -661,11 +692,6 @@ class AntigravityRemoteBridge:
             else:
                 self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
                 return False, STATUS_CODES["PING_FAILED"]
-
-        conv_id = self.config.get("conversation_id", "").strip()
-        if not conv_id:
-            self._update_claim_status(claim_path, "FAILED", STATUS_CODES["CONFIG_INVALID"])
-            return False, STATUS_CODES["CONFIG_INVALID"]
 
         issue_num = payload["issue_number"]
         prompt_template = SAFE_PROMPT_TEMPLATES.get(issue_num)
