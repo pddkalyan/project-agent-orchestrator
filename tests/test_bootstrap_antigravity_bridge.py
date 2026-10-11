@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import bootstrap_antigravity_bridge as mod
+from control_center.remote_bridge import bootstrap_antigravity_bridge as mod
 
 
 class InstallerTests(unittest.TestCase):
