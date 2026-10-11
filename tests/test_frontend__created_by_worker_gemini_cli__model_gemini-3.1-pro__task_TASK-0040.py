@@ -1,0 +1,375 @@
+"""Offline regression coverage for the public Movie Studio UI.
+
+Runtime tests use Node.js with an isolated minimal DOM double, without external
+packages, credentials, network access or browser installation.
+"""
+from pathlib import Path
+import shutil
+import subprocess
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+WEB = ROOT / "control_center" / "web"
+
+
+class FrontendStaticTests(unittest.TestCase):
+    def test_files_exist(self):
+        for name in ("app.js", "index.html", "style.css"):
+            self.assertTrue((WEB / name).is_file(), name)
+
+    def test_read_only_controls_remain_disabled(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertIn('disabled aria-label="Approve Next Step"', html)
+        self.assertIn('disabled aria-label="Halt Execution"', html)
+        self.assertIn('id="command-input" type="text" disabled', html)
+
+    def test_unverified_native_and_quota_state_is_not_fabricated(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="bridge-status"', html)
+        self.assertIn('id="bridge-detail"', html)
+        self.assertIn('Native agent execution:', html)
+        self.assertIn('Live model:', html)
+        self.assertIn('UNKNOWN', html)
+        self.assertNotIn('System Online', html)
+        self.assertNotIn('Quota enforces ₹0 limit.', html)
+        self.assertNotIn('Execution Paused', html)
+
+    def test_css_is_plain_css_not_unsupported_directive(self):
+        css = (WEB / "style.css").read_text(encoding="utf-8")
+        self.assertIn(".status-badge", css)
+        self.assertIn(".status-neutral", css)
+        self.assertNotIn("@apply", css)
+
+    def test_compact_header_keeps_status_metadata_readable(self):
+        # Source regression guard. Exact viewport geometry must also be
+        # verified in the real-browser smoke test at 320px and 390px.
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        css = (WEB / "style.css").read_text(encoding="utf-8")
+        for hook in ('movie-studio-header', 'header-brand', 'header-summary', 'header-meta'):
+            self.assertIn(hook, html, hook)
+            self.assertIn(hook, css, hook)
+        self.assertIn('@media (max-width: 639px)', css)
+        self.assertIn('@media (max-width: 420px)', css)
+        self.assertIn('flex-direction: column', css)
+        self.assertIn('overflow-wrap: anywhere', css)
+
+    def test_no_untrusted_innerhtml_sink(self):
+        js = (WEB / "app.js").read_text(encoding="utf-8")
+        self.assertNotIn(".innerHTML", js)
+        self.assertNotIn("err.message", js)
+        self.assertIn("textContent", js)
+        self.assertIn("noopener noreferrer", js)
+
+    def test_workboard_and_interpretation_guide_exist(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="workboard-container"', html)
+        self.assertIn('id="refresh-workboard"', html)
+        self.assertIn('How to Interpret Status', html)
+        self.assertIn('CI succeeded ≠ worker currently coding', html)
+        self.assertIn('Bridge reported alive ≠ Antigravity executing', html)
+        self.assertIn('Astra review paused', html)
+        self.assertIn('operator-reported as of 2026-10-11', html)
+        self.assertIn('Static task assignments:', html)
+        self.assertIn('Bounded API windows:', html)
+        css = (WEB / "style.css").read_text(encoding="utf-8")
+        self.assertIn('.workboard-card', css)
+
+
+NODE_BEHAVIOR_TESTS = r"""
+'use strict';
+const assert = require('node:assert/strict');
+const app = require(process.argv[1]);
+const elements = new Map();
+class FakeNode {
+    constructor(tag) {
+        this.tagName = tag.toLowerCase();
+        this.textContent = '';
+        this.children = [];
+        this.className = '';
+        this.href = null;
+        this.rel = null;
+        this.target = null;
+        this.events = {};
+    }
+    appendChild(item) { this.children.push(item); return item; }
+    replaceChildren(...items) { this.children = items; }
+    addEventListener(type, handler) { this.events[type] = handler; }
+}
+global.document = {
+    createElement: tag => new FakeNode(tag),
+    getElementById: id => elements.get(id) || null,
+    addEventListener: () => {}
+};
+function node(id) { const n = new FakeNode('div'); elements.set(id, n); return n; }
+function gather(root) {
+    return [root, ...root.children.flatMap(gather)];
+}
+function assertBadURL(value) {
+    assert.equal(app.githubURL(value, 'pr'), null, 'unsafe URL accepted: ' + value);
+}
+for (const url of [
+    'javascript:alert(1)',
+    'https://github.com.attacker.example/pddkalyan/project-agent-orchestrator/pull/10',
+    'http://github.com/pddkalyan/project-agent-orchestrator/pull/10',
+    'https://github.com@evil.example/pddkalyan/project-agent-orchestrator/pull/10',
+    'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/10',
+    'https://github.com/pddkalyan/project-agent-orchestrator/pull/1?redirect=1',
+    'https://github.com:8443/pddkalyan/project-agent-orchestrator/pull/10',
+    'https://github.com/pddkalyan/project-agent-orchestrator/pull/10#section',
+    '/pddkalyan/project-agent-orchestrator/pull/10',
+    '',
+    null,
+]) assertBadURL(url);
+assert.equal(app.githubURL('https://github.com/pddkalyan/project-agent-orchestrator/pull/71', 'pr'),
+    'https://github.com/pddkalyan/project-agent-orchestrator/pull/71');
+assert.equal(app.githubURL('https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/42', 'run'),
+    'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/42');
+assert.equal(app.validDate(null), null);
+assert.equal(app.validDate(false), null);
+assert.equal(app.validDate(''), null);
+assert.equal(app.validDate('   '), null);
+assert.equal(app.validDate(undefined), null);
+assert(app.validDate('2026-10-10T04:44:28Z') instanceof Date);
+const prs = node('pr-container');
+app.addPR(prs, {
+    title: '<img src=x onerror=alert(1)>',
+    html_url: 'javascript:alert(1)',
+    number: 20,
+    draft: true,
+    user: {login: '"><svg onload=alert(1)>'},
+    created_at: 'not-a-date'
+});
+assert.equal(prs.children.length, 1);
+let all = gather(prs);
+assert(!all.some(n => n.tagName === 'a'), 'unsafe URL created anchor');
+assert(all.some(n => n.textContent.includes('<img src=x onerror=')),
+    'external title was not treated as literal text');
+assert(all.some(n => n.textContent.includes('Unknown date')));
+app.addPR(prs, {
+    title: 'Valid link',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/pull/46',
+    number: 46,
+    state: 'open'
+});
+const anchor = gather(prs).find(n => n.tagName === 'a');
+assert(anchor, 'valid GitHub link missing');
+assert.equal(anchor.rel, 'noopener noreferrer');
+assert.equal(anchor.target, '_blank');
+const actions = node('actions-container');
+app.addRun(actions, {
+    name: '<script>alert(1)</script>', display_title: 'dangerous <b>title</b>',
+    html_url: 'data:text/html,<svg/onload=alert(1)>',
+    status: 'completed', conclusion: 'cancelled'
+});
+assert(!gather(actions).some(n => n.tagName === 'a'));
+assert(gather(actions).some(n => n.textContent.includes('CANCELLED')));
+assert.equal(app.runStatus({status: 'queued'})[0], 'RUNNING / QUEUED');
+assert.equal(app.runStatus({status: 'completed', conclusion: 'skipped'})[0], 'SKIPPED');
+assert.equal(app.runStatus({status: 'completed', conclusion: null})[0], 'COMPLETED / UNKNOWN');
+const fence = String.fromCharCode(96).repeat(3);
+const rawReceipt = {
+    receipt_id: 'test',
+    observation_utc: '2026-10-10T04:44:28Z',
+    configured_branch: 'agent/control-center-standalone',
+    git_head_sha: '0e81f5b30f3e344592d1e9bf371ad0faa7c2ea19',
+    git_dirty: true,
+    bridge_process_alive: true
+};
+const comment = {
+    user: {id: 159762630},
+    body: '### Antigravity Bridge Status Receipt\n' +
+        fence + 'json\n' + JSON.stringify(rawReceipt) + '\n' + fence
+};
+assert(app.receiptFromComment(comment));
+assert.equal(app.receiptFromComment({...comment, user: {id: 22}}), null);
+assert.equal(app.receiptFromComment({...comment, body: 'not a receipt'}), null);
+const bridge = node('bridge-status');
+const bridgeDetail = node('bridge-detail');
+const native = node('agent-state');
+const receipt = app.receiptFromComment(comment);
+app.renderBridgeStatus(receipt, receipt.observed.getTime() + 1000);
+assert.equal(bridge.textContent, 'BRIDGE REPORTED ALIVE');
+assert(native.textContent.includes('UNKNOWN'));
+assert(bridgeDetail.textContent.includes('0e81f5b3'));
+app.renderBridgeStatus(receipt, receipt.observed.getTime() + 36 * 60000);
+assert.equal(bridge.textContent, 'STALE');
+app.renderBridgeStatus(null, Date.now());
+assert.equal(bridge.textContent, 'UNKNOWN');
+const workboard = node('workboard-container');
+app.renderWorkboard();
+assert.equal(workboard.children.length, 4, 'workboard must render 4 workstream cards');
+const allCardText = card => gather(card).map(n => n.textContent).join(' ');
+const cardTexts = workboard.children.map(allCardText);
+assert(cardTexts.some(t => t.includes('Control Center UI') && t.includes('Antigravity CLI')));
+assert(cardTexts.some(t => t.includes('Phase 2 Production Pipeline') && t.includes('GPT-6 / Sol Phase 2')));
+assert(cardTexts.some(t => t.includes('Bridge Security') && t.includes('Jules')));
+assert(cardTexts.some(t => t.includes('Inbound Command FIFO Queue') && t.includes('Jules')));
+assert(cardTexts.every(t => t.includes('UNKNOWN — no direct session telemetry')));
+
+// Scheduled green launcher check must be labeled as policy/launcher check, never active coder
+const launcherNode = new FakeNode('div');
+app.addRun(launcherNode, {
+    name: 'Movie Studio TASK-0005 Trusted Jules Launcher',
+    status: 'completed',
+    conclusion: 'success',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/38116279877',
+    display_title: 'Scheduled check',
+    head_branch: 'main',
+    created_at: '2026-10-11T00:00:00Z'
+});
+const launcherText = gather(launcherNode).map(n => n.textContent).join(' ');
+assert(launcherText.includes('Policy / Scheduled Launcher Check — not active agent coding'),
+    'launcher check missing policy/not-coding label');
+
+// Jules is on it bot acknowledgment check
+const julesNode = new FakeNode('div');
+app.addRun(julesNode, {
+    name: 'Jules Work',
+    status: 'in_progress',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/999',
+    display_title: 'Jules is on it',
+    head_branch: 'main',
+    created_at: '2026-10-11T00:00:00Z'
+});
+const julesText = gather(julesNode).map(n => n.textContent).join(' ');
+assert(julesText.includes('(Task acknowledgment only — not ongoing thought)'),
+    'Jules bot comment missing task-acknowledgment note');
+// Contradictory workflows at same SHA (candidate success + worker failure)
+const runCandidateSuccess = {
+    name: 'Movie Studio Jules Candidate CI',
+    status: 'completed',
+    conclusion: 'success',
+    head_sha: '2535300665972d0f598d479ffd0169e5ce61d48b',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/101'
+};
+const runFreeWorkerFailure = {
+    name: '.github/workflows/movie_studio_task_0005_free_worker.yml',
+    path: '.github/workflows/movie_studio_task_0005_free_worker.yml',
+    status: 'completed',
+    conclusion: 'failure',
+    head_sha: '2535300665972d0f598d479ffd0169e5ce61d48b',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/102'
+};
+// Permutation 1: candidate first, worker second
+const evalPerm1 = app.evaluateCIForHead('2535300665972d0f598d479ffd0169e5ce61d48b', [runCandidateSuccess, runFreeWorkerFailure]);
+assert.equal(evalPerm1.label, 'SUCCESS');
+assert.equal(evalPerm1.colorClass, 'text-green-400');
+assert(evalPerm1.detail.includes('Movie Studio Jules Candidate CI (2535300)'));
+assert(evalPerm1.detail.includes('separate trigger: FAILED'));
+assert.equal(evalPerm1.url, 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/101');
+
+// Permutation 2: worker first, candidate second
+const evalPerm2 = app.evaluateCIForHead('2535300665972d0f598d479ffd0169e5ce61d48b', [runFreeWorkerFailure, runCandidateSuccess]);
+assert.equal(evalPerm2.label, 'SUCCESS');
+assert.equal(evalPerm2.colorClass, 'text-green-400');
+assert(evalPerm2.detail.includes('Movie Studio Jules Candidate CI (2535300)'));
+assert(evalPerm2.detail.includes('separate trigger: FAILED'));
+assert.equal(evalPerm2.url, 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/101');
+
+// Conflicting candidate CI runs at same SHA
+const runCandidateFail = {
+    name: 'Movie Studio Jules Candidate CI',
+    status: 'completed',
+    conclusion: 'failure',
+    head_sha: '2535300665972d0f598d479ffd0169e5ce61d48b',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/103'
+};
+const evalConflict = app.evaluateCIForHead('2535300665972d0f598d479ffd0169e5ce61d48b', [runCandidateSuccess, runCandidateFail]);
+assert.equal(evalConflict.label, 'AMBIGUOUS / CONFLICTING CANDIDATE CI');
+
+// Scheduled launcher success only (policy check, not candidate tests)
+const runLauncherOnly = {
+    name: 'Movie Studio TASK-0005 Trusted Jules Launcher',
+    status: 'completed',
+    conclusion: 'success',
+    head_sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/104'
+};
+const evalLauncher = app.evaluateCIForHead('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', [runLauncherOnly]);
+assert.equal(evalLauncher.label, 'NO MATCHING CANDIDATE CI IN RECENT WINDOW');
+assert(evalLauncher.detail.includes('Policy check only: SUCCESS'));
+assert(evalLauncher.detail.includes('not candidate tests for aaaaaaa'));
+
+// Missing CI in recent window
+const evalMissing = app.evaluateCIForHead('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', [runCandidateSuccess]);
+assert.equal(evalMissing.label, 'NO MATCHING CI IN RECENT WINDOW');
+assert.equal(evalMissing.url, null);
+assert(evalMissing.detail.includes('No matching CI in recent 20 runs for bbbbbbb'));
+
+// Async fetch & stale cache handling tests
+global.fetch = async () => ({ok: false, status: 429});
+(async () => {
+    await app.fetchPRs();
+    assert(prs.children[0].textContent.includes('rate limit'));
+    assert(!prs.children[0].textContent.includes('undefined'));
+    await app.fetchActions();
+    assert(actions.children[0].textContent.includes('rate limit'));
+    let requestURL = '';
+    global.fetch = async url => {
+        requestURL = url;
+        return {ok: true, json: async () => []};
+    };
+    await app.fetchBridgeStatus();
+    assert(requestURL.includes('/issues/55/comments?per_page=100&since='),
+        'heartbeat comments must use recent-since window to avoid truncated old page');
+
+    // Fresh fetch followed by 429 stale retention test
+    const initialObserved = new Date('2026-10-11T12:00:00Z');
+    app.feedState.prs.data = [
+        {
+            number: 46,
+            head: { sha: '1111111111111111111111111111111111111111', ref: 'agent/control-center-standalone' },
+            created_at: '2026-10-11T00:00:00Z',
+            state: 'open'
+        }
+    ];
+    app.feedState.prs.status = 'fresh';
+    app.feedState.prs.observedAt = initialObserved;
+    app.feedState.runs.data = [];
+    app.feedState.runs.status = 'fresh';
+    app.feedState.runs.observedAt = initialObserved;
+
+    global.fetch = async () => ({ok: false, status: 429});
+    await app.fetchPRs();
+    assert.equal(app.feedState.prs.status, 'stale');
+    assert.equal(app.feedState.prs.data.length, 1);
+    assert.equal(app.feedState.prs.observedAt, initialObserved);
+    const summary = app.formatFeedSummary(app.feedState);
+    assert(summary.includes('PRs: STALE (observed '));
+
+    // Render workboard with stale PR feed
+    app.renderWorkboard();
+    const staleCardTexts = workboard.children.map(allCardText);
+    assert(staleCardTexts.some(t => t.includes('PRs feed stale (unverified)')));
+    // PR 83 not in recent 30 PRs window
+    assert(staleCardTexts.some(t => t.includes('NOT IN RECENT 30 PRS') && t.includes('PR #83 not in recent 30 PRs window')));
+
+    // Malformed PR record handling
+    app.feedState.prs.data = [
+        { number: 46 },
+        null,
+        { number: 83, head: null }
+    ];
+    app.feedState.runs.data = null;
+    app.renderWorkboard();
+    assert.equal(workboard.children.length, 4);
+
+    console.log('Behavior tests passed: URL injection, DOM escaping, workflow classification, ordering permutations, launcher policy check, heartbeat, recent-page filtering, stale retention on 429, missing CI window, and malformed PRs.');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+
+
+class FrontendBehaviorTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("node"), "Node.js needed for JS behavior tests")
+    def test_node_runtime_dom_and_security(self):
+        process = subprocess.run(
+            ["node", "-e", NODE_BEHAVIOR_TESTS, str(WEB / "app.js")],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        self.assertEqual(process.returncode, 0,
+                         "Node behavior tests failed:\n" + process.stdout + process.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()
