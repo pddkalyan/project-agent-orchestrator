@@ -642,6 +642,44 @@ class TestAntigravityRemoteBridge(unittest.TestCase):
         self.assertEqual(agent_calls[0]["args"][2], "conv-ping-123")
         self.assertIn("Controller connectivity check only.", agent_calls[0]["args"][3])
 
+    def test_ping_conversation_positive_dispatch_nested_native_schema(self):
+        self.write_local_config({
+            "workspace_dir": self.workspace_dir,
+            "dispatch_enabled": True,
+            "ping_enabled": True,
+            "status_enabled": True,
+            "conversation_id": "conv-ping-nested-456",
+            "poll_interval_sec": 900,
+            "min_status_interval_sec": 900,
+            "allow_dirty_continue": False,
+        })
+
+        def mock_runner_nested(args, cwd=None, input_data=None):
+            if args[0] == "agentapi" and args[1] == "get-conversation-metadata":
+                return 0, json.dumps({
+                    "response": {
+                        "conversationMetadata": {
+                            "metadata": {
+                                "rootConversationId": args[2]
+                            }
+                        }
+                    }
+                }), ""
+            return self.mock_runner(args, cwd=cwd, input_data=input_data)
+
+        bridge = AntigravityRemoteBridge(state_dir=self.state_dir, runner=mock_runner_nested, now_fn=self.mock_now)
+        bridge.set_watermark(100)
+
+        cmd_id = "55555555-4444-5555-6666-777777777777"
+        self.mock_gh_comments_pages = [[self.make_comment(101, command_id=cmd_id, action="ping_conversation", issue_number=47)]]
+
+        res = bridge.process_inbox()
+        self.assertEqual(res["status"], "SUCCESS")
+        self.assertEqual(res["processed_count"], 1)
+        self.assertTrue(res["results"][0]["valid"])
+        self.assertTrue(res["results"][0]["dispatched"])
+        self.assertEqual(res["results"][0]["code"], STATUS_CODES["PING_DISPATCHED"])
+
     def test_ping_conversation_disabled_ping_enabled_rejected(self):
         self.write_local_config({
             "workspace_dir": self.workspace_dir,

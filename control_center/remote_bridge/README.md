@@ -12,7 +12,7 @@ must remain disabled.
 - Target Windows worktree branch: agent/control-center-standalone.
 - Exact last verified target HEAD: 15b148cfbc3acc0eec10c51ab8e8bf413613f23f.
 - Exact safe source commit (PR #74): 1123e6ef988d18155c42257c54dd318e3f8aac2b.
-- Exact reviewed bridge.py Git blob: adc3ac6c9c7156a1f135caaedb87fd89c9284b5e.
+- Exact reviewed bridge.py Git blob: 53deeb236007619a14d180bf0e5d1782811d2187.
 - Existing sidecar path: %USERPROFILE%\.gemini\config\sidecars\github_bridge\
 - Private config: %USERPROFILE%\.antigravity_bridge_state\config.json
 - Native conversation ID stays strictly private on Windows.

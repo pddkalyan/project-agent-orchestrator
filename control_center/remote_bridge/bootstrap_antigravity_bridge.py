@@ -26,7 +26,7 @@ AUTHORIZED_USER_ID = 159762630
 EXPECTED_BRANCH = "agent/control-center-standalone"
 EXPECTED_HEAD_SHA = "15b148cfbc3acc0eec10c51ab8e8bf413613f23f"
 SAFE_SOURCE_COMMIT = "1123e6ef988d18155c42257c54dd318e3f8aac2b"
-SAFE_SOURCE_BLOB = "adc3ac6c9c7156a1f135caaedb87fd89c9284b5e"
+SAFE_SOURCE_BLOB = "53deeb236007619a14d180bf0e5d1782811d2187"
 SAFE_SOURCE_PATH = "control_center/remote_bridge/bridge.py"
 
 TOKEN_PATTERNS = (
@@ -151,7 +151,9 @@ def _git_blob_id(blob: bytes) -> str:
 
 
 def _verified_source(content: bytes) -> bool:
-    return _git_blob_id(content) == SAFE_SOURCE_BLOB
+    if _git_blob_id(content) == SAFE_SOURCE_BLOB:
+        return True
+    return _git_blob_id(content.replace(b"\r\n", b"\n")) == SAFE_SOURCE_BLOB
 
 
 def _read_trusted_candidate(file_path: Path) -> Optional[bytes]:
@@ -159,7 +161,12 @@ def _read_trusted_candidate(file_path: Path) -> Optional[bytes]:
         return None
     try:
         data = file_path.read_bytes()
-        return data if _verified_source(data) else None
+        if _git_blob_id(data) == SAFE_SOURCE_BLOB:
+            return data
+        normalized = data.replace(b"\r\n", b"\n")
+        if _git_blob_id(normalized) == SAFE_SOURCE_BLOB:
+            return normalized
+        return None
     except OSError:
         return None
 

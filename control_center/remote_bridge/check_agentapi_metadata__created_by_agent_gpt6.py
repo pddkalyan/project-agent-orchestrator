@@ -34,10 +34,21 @@ def summarize_metadata(output, expected_id):
     public_schema_keys = {
         "conversation_id", "conversationId", "id", "workspace", "workspace_dir",
         "workspaceUri", "project", "projectPath", "metadata", "status", "title",
+        "response", "conversationMetadata", "rootConversationId",
     }
     names = sorted(key for key in document
                    if isinstance(key, str) and key in public_schema_keys)
-    match = bool(expected_id) and document.get("conversation_id") == expected_id
+    actual_id = None
+    if "conversation_id" in document:
+        actual_id = document.get("conversation_id")
+    elif isinstance(document.get("response"), dict):
+        actual_id = (
+            document["response"]
+            .get("conversationMetadata", {})
+            .get("metadata", {})
+            .get("rootConversationId")
+        )
+    match = bool(expected_id) and actual_id == expected_id
     return {"json_object": True, "exact_conversation_id_match": bool(match),
             "field_names": names, "verdict": "SCHEMA_VERIFIED" if match else "FAIL_CLOSED"}
 

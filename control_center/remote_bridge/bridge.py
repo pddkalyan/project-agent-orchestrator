@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import shutil
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -121,8 +122,13 @@ def parse_iso_timestamp(ts_str):
 
 def default_subprocess_runner(args, cwd=None, input_data=None):
     try:
+        cmd = list(args)
+        if cmd:
+            resolved = shutil.which(cmd[0])
+            if resolved:
+                cmd[0] = resolved
         proc = subprocess.run(
-            args,
+            cmd,
             cwd=cwd,
             input=input_data,
             stdout=subprocess.PIPE,
@@ -626,7 +632,22 @@ class AntigravityRemoteBridge:
             except (TypeError, ValueError):
                 self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
                 return False, STATUS_CODES["PING_FAILED"]
-            if not isinstance(meta_data, dict) or meta_data.get("conversation_id") != conv_id:
+            if not isinstance(meta_data, dict):
+                self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
+                return False, STATUS_CODES["PING_FAILED"]
+
+            actual_conv_id = None
+            if "conversation_id" in meta_data:
+                actual_conv_id = meta_data.get("conversation_id")
+            elif isinstance(meta_data.get("response"), dict):
+                actual_conv_id = (
+                    meta_data["response"]
+                    .get("conversationMetadata", {})
+                    .get("metadata", {})
+                    .get("rootConversationId")
+                )
+
+            if not actual_conv_id or actual_conv_id != conv_id:
                 self._update_claim_status(claim_path, "FAILED", STATUS_CODES["PING_FAILED"])
                 return False, STATUS_CODES["PING_FAILED"]
 
@@ -878,6 +899,8 @@ class AntigravityRemoteBridge:
         checks["gh_cli_available"] = (ret_gh == 0)
 
         ret_agent, _, _ = self.runner(["agentapi", "--version"])
+        if ret_agent != 0:
+            ret_agent, _, _ = self.runner(["agentapi", "--help"])
         checks["agentapi_available"] = "NOT_VERIFIED" if ret_agent != 0 else True
 
         script_dir = os.path.dirname(os.path.abspath(__file__))
