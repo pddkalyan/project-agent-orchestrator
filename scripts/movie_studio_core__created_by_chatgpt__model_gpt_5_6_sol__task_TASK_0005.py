@@ -473,8 +473,10 @@ class GenerationJob:
         self, attempt_number: int, provider_job_id: str, asset_version: str
     ) -> None:
         current = self._matching_running_attempt(attempt_number, provider_job_id)
-        if not isinstance(asset_version, str) or not asset_version:
-            raise ProductionPolicyError("asset version must not be empty")
+        # The shot binder enforces this same strict nonblank UTF-8 rule.
+        # Reject invalid callbacks before updating the job/attempt ledger.
+        if not valid_evidence_text(asset_version):
+            raise ProductionPolicyError("asset version must be a nonempty UTF-8 string")
         self.attempt_history = self.attempt_history[:-1] + (
             replace(
                 current,
@@ -1009,6 +1011,21 @@ class ProductionLedger:
         return ("timeline", "master", "master_qc", "archive", "cleanup_authorization")
 
     @staticmethod
+    def _restore_cleanup_artifact(raw):
+        """Restore persisted cleanup evidence without dataclass defaults."""
+        expected = {item.name for item in fields(CleanupArtifact)}
+        if not isinstance(raw, Mapping) or set(raw) != expected:
+            raise ProductionPolicyError("cleanup artifact fields mismatch")
+        if (not valid_evidence_text(raw["artifact_id"])
+                or not valid_evidence_text(raw["owner_run_id"])
+                or raw["temporary"] is not True
+                or not valid_evidence_text(raw["ownership_evidence_id"])
+                or type(raw["creator_id"]) is not str
+                or raw["creator_id"] != "agent"):
+            raise ProductionPolicyError("invalid cleanup artifact ownership evidence")
+        return CleanupArtifact(**dict(raw))
+
+    @staticmethod
     def _restore_master_evidence(name, raw):
         if raw is None:
             return None
@@ -1029,7 +1046,10 @@ class ProductionLedger:
         elif name == "cleanup_authorization":
             if type(data["artifacts"]) is not list:
                 raise ProductionPolicyError("invalid cleanup artifact collection")
-            data["artifacts"] = tuple(CleanupArtifact(**artifact) for artifact in data["artifacts"])
+            data["artifacts"] = tuple(
+                ProductionLedger._restore_cleanup_artifact(artifact)
+                for artifact in data["artifacts"]
+            )
         return record_type(**data)
 
     def _publish_master_evidence(self, name, record):
@@ -1704,6 +1724,10 @@ class ProductionLedger:
             raise ProductionPolicyError("conflicting duplicate success callback")
         self._validate_generation_owner(job)
         self._require_lifecycle_mutable(self.shots[job.shot_id].scene_id, allow_blocked=True)
+        # Validate before mutating job, attempt, or shot: invalid success tokens
+        # must leave the running callback retryable and its checkpoint unchanged.
+        if not valid_evidence_text(asset_version):
+            raise ProductionPolicyError("asset version must be a nonempty UTF-8 string")
         job._succeed(attempt_number, provider_job_id, asset_version)
         self.shots[job.shot_id].bind_generated_asset(asset_version)
 
@@ -2327,7 +2351,10 @@ class ProductionLedger:
         object.__setattr__(ledger, "reference_assets", tuple(ReferenceMediaRecord(**reference) for reference in data["reference_assets"]))
         if type(data["temporary_artifacts"]) is not list:
             raise ProductionPolicyError("invalid owned temporary artifact registry")
-        object.__setattr__(ledger, "temporary_artifacts", tuple(CleanupArtifact(**artifact) for artifact in data["temporary_artifacts"]))
+        object.__setattr__(
+            ledger, "temporary_artifacts",
+            tuple(cls._restore_cleanup_artifact(artifact) for artifact in data["temporary_artifacts"]),
+        )
         for name in cls._master_evidence_fields():
             object.__setattr__(ledger, name, cls._restore_master_evidence(name, data[name]))
         object.__setattr__(ledger, "episode_status_history", episode_history)
