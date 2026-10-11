@@ -10,10 +10,20 @@ This review candidate implements an **offline**, Python-standard-library, fail-c
 
 A screenshot is not a live authenticated usage feed. Do not use another similarly named API provider's endpoints or invent Excelnt URLs. DO NOT automatically install scripts from remote websites or request paid top-ups.
 
+## New owner-provided billing evidence — 2026-10-11
+
+The **Excelnt Power billing page** supplied by the owner explicitly says that **Balance funds API usage once the plan allowance runs out**. It shows account balance **$600.00** available for API usage, separately from the included **$600 / five hours** and **$4,200 / week** counters, with **0 top-ups**, **$0 paid in total**, and a **$240 / 30-day** active Power plan until 2026-11-10.
+
+**Critical distinction:** zero top-ups and zero paid-in-total do not mean that the $600 account balance cannot be automatically depleted; unused plan allowance, prepaid available balance and top-up purchases are different. The exact source/origin of that balance is unknown. The billing page also says *Plans are paid from balance*, so future plan renewal/switching may debit funds; automatic renewal/paid fallback controls are not documented by the supplied view.
+
+Therefore `QuotaSnapshot.balance_fallback_disabled` is **independently required to be exactly True**, in addition to `paid_overage_disabled=True` and `auto_topup_disabled=True`. Its default is **False** (DENY). No adapter may set it True merely because Top-ups is 0 or the five-hour usage is 0. Only a verifiable official provider-enforced setting/account configuration preventing API spend from available balance can establish it. A client-side 90% cutoff is defense-in-depth, not a provider-enforced spending guarantee. We require **no deduction from existing $600 account balance**, not merely no new card charge.
+
+Do not publish owner login/email, balances by user identity, tokens or keys in task logs. There is no proof of the official zero-balance-spend switch, so both Excelnt workers remain offline and unconnected.
+
 ## Per-worker algorithm
 
 - Each of workers A and B requires its **own** future reviewed TrustedQuotaFeed adapter bound to its own account, its own private application-state directory, separate Git worktree/branch and nonoverlapping task assignment. No automatic switching between accounts or opening more accounts.
-- Immediately before EVERY inference request, obtain a verified authenticated observation for that account, at most 5 minutes old, with accurate five-hour and weekly usage windows. Confirm both paid overages and automatic top-ups disabled. Missing/invalid/stale data **blocks** the request.
+- Immediately before EVERY inference request, obtain a verified authenticated observation for that account, at most 5 minutes old, with accurate five-hour and weekly usage windows. Confirm paid overages, **balance-funded fallback**, and automatic top-ups are all independently and provider-enforced disabled. Missing/invalid/stale data **blocks** the request.
 - The caller must supply a proven worst-case upper bound in the provider's same accounting units and the provider must offer an actual server-enforced nonpaid spending limit. No unbounded editor/model requests.
 - At 80% of either allowance, return WARNING; at 90%, or if the next worst-case request could cross 90%, retain the task checkpoint and stop. On a quota refusal, WAITING_FOR_RESET with the current window identity retained.
 - A genuinely newer authenticated reset window plus a fresh allowance can unblock the SAME worker and task. An unchanged window, fake low balance, telemetry outage or expired observation never unblocks waiting work.
@@ -36,7 +46,7 @@ The 33 deterministic test methods cover both accounts; 80/90% thresholds; five-h
 
 1. Official provider model list, billing terms, concurrent account terms, extension publisher and VSIX SHA-256 need verification. No account rotation to circumvent restrictions.
 2. Design/review a read-only authenticated Excelnt usage adapter using **actual documented** API or supported local extension events; no scraping authenticated pages, no embedded credentials or local private IDs in public issues.
-3. Verify actual paid balance, automatic top-up and overage controls are disabled, PLUS a hard per-request provider cap. If the VS Code extension offers no supported per-call guard/interceptor, this library cannot control its automatic usage and should remain OFFLINE ONLY.
+3. Verify that API requests CANNOT spend any existing paid/prepaid account balance after included allowance runs out; also disable automatic top-ups and paid overages, PLUS require a hard per-request provider cap. If the VS Code extension offers no supported per-call guard/interceptor, this library cannot control its automatic usage and should remain OFFLINE ONLY.
 4. Run the exact candidate offline suite in GitHub CI on Linux and Windows. After independent review and user consent, run one harmless included-allowance request on worker A, confirm request logs, actual model identity and usage decrement. Then authorize a tiny isolated task. Repeat for B separately if provider terms permit.
 5. Connect only verified sanitized observations to the existing hourly Movie Studio supervisor; this scheduler cannot itself stop a request mid-execution. The worker-side synchronous guard is required.
 
