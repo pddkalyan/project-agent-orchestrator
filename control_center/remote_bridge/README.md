@@ -1,171 +1,77 @@
-# Antigravity Sidecar GitHub Command & Status Bridge
+# Antigravity ChatGPT GitHub Sidecar — Ping-Only Recovery
 
-Owner-approved bridge development (Issue #44 subtask) allowing supervision of Windows Antigravity via GitHub issues using Antigravity local sidecars and `agentapi send-message <conversation_id>`.
+**Review candidate. Not installed; native delivery is not yet verified.**
+The existing Windows status-only sidecar reads authenticated GitHub Issue #54
+commands and writes rate-limited receipts to Issue #55. General native dispatch
+must remain disabled.
 
-> **Disclaimer**: ChatGPT does NOT have a direct Google Remote Control API. The sidecar is NOT installed or enabled automatically. The user must manually inspect code and authorize local installation after security review.
+## Pinned identity and source
 
-## Overview & Principles
-- **Disabled by Default**: The bridge is purely opt-in and disabled by default (`dispatch_enabled: false`, `ping_enabled: false`, `status_enabled: false`). Safe initial status monitoring uses `status_enabled: true`, `dispatch_enabled: false`, `ping_enabled: false`.
-- **Strict Rate Limits & Bounds**:
-  - `poll_interval_sec`: Must be an integer between 60 and 3600 seconds (default 900).
-  - `min_status_interval_sec`: Must be an integer >= 900 seconds (15 minutes). No force/status request can bypass the 15-minute rate limit cap.
-- **Strict Boolean Consent**: Config boolean values must be JSON boolean `true`/`false` types. String values like `"false"` or `"true"` and unknown JSON keys are strictly rejected (no boolean coercion).
-- **No Direct Secret Storage**: Authenticated using existing local host GitHub CLI (`gh`) session. No GitHub tokens or secrets are stored in code or repository files.
-- **Strict Scope & Allowlist**:
-  - Repo: `pddkalyan/project-agent-orchestrator`
-  - Authorized Owner User ID: `159762630`
-  - Command Inbox Issue: `#54`
-  - Status Receipt Sink Issue: `#55`
-  - Allowed Target Issues: `#44`, `#47`
-  - Expected Branch: `agent/control-center-standalone`
+- Owner: pddkalyan, numeric user ID 159762630.
+- Repository: pddkalyan/project-agent-orchestrator.
+- Target Windows worktree branch: agent/control-center-standalone.
+- Exact last verified target HEAD: 15b148cfbc3acc0eec10c51ab8e8bf413613f23f.
+- Exact safe source commit (PR #74): 1123e6ef988d18155c42257c54dd318e3f8aac2b.
+- Exact reviewed bridge.py Git blob: adc3ac6c9c7156a1f135caaedb87fd89c9284b5e.
+- Existing sidecar path: %USERPROFILE%\.gemini\config\sidecars\github_bridge\
+- Private config: %USERPROFILE%\.antigravity_bridge_state\config.json
+- Native conversation ID stays strictly private on Windows.
+- Keep dispatch_enabled=false, allow_dirty_continue=false, status_enabled=true.
+- Keep ping_enabled=false until explicit local opt-in.
+- Only the existing prewritten, non-coding Issue #47 ping is eligible.
 
-## Prerequisites & One-Time Windows Setup
+## Read-only preflight (after security review)
 
-### 1. Python & GitHub CLI Verification
-Verify Python 3.9+ and GitHub CLI (`gh`) on the Windows host machine:
-```powershell
-python --version
-gh auth status
-```
-*Note*: `gh` may NOT be installed or authenticated by default. Do NOT claim the system is ready until `gh auth status` returns 0 with an authenticated session for owner `pddkalyan`.
+Run this script **from a separate, clean checkout containing this reviewed
+installer and the pinned bridge.py**. Do not check out another branch inside
+the user's dirty Control Center worktree.
 
-### 2. In-Repo Windows Bootstrap Repair Installer (`bootstrap_antigravity_bridge.py`)
+    python control_center\remote_bridge\bootstrap_antigravity_bridge.py --workspace "D:\Documents\Movie-Studio-Control-Center-Agent" --defer-metadata-to-sidecar
 
-To repair or perform a one-time bootstrap installation on Windows host without relying on `raw.githubusercontent.com` or external ZIP packages:
+Expected: READY_TO_INSTALL_READ_ONLY. This does NOT install, create any state,
+register a sidecar, or send any message. It checks exact remote, branch and HEAD,
+the authenticated owner, pinned source, existing registered github_bridge sidecar
+and existing privately bound config. It never touches report.md/report_final.md.
 
-```powershell
-python control_center\remote_bridge\bootstrap_antigravity_bridge.py --workspace "D:\Documents\Movie-Studio-Control-Center-Agent" --defer-metadata-to-sidecar
-```
+## Opt-in installation only after reviewed preflight
 
-To opt-in and activate `ping_enabled`:
-```powershell
-python control_center\remote_bridge\bootstrap_antigravity_bridge.py --workspace "D:\Documents\Movie-Studio-Control-Center-Agent" --defer-metadata-to-sidecar --activate-ping
-```
+Explicit Windows operator consent is required. Installation replaces ONLY the
+script in the existing registered github_bridge directory and the private
+config; it makes unique local backups and uses atomic file replacement.
+It does NOT register the second antigravity_bridge sidecar.
 
-Features & Safeguards:
-- **Offline & Pinned Source Handling**: Prefers local repository checkout (`control_center/remote_bridge/bridge.py`) or GitHub CLI API with bounded retry and backoff before HTTP fallbacks.
-- **GitHub CLI Auth Verification**: Retries `gh api user` up to 3 times with sanitized diagnostic errors and verifies owner user ID (`159762630`).
-- **Backup & Rollback**: Stages backups in `~/.antigravity_bridge_state/backups/` and automatically restores existing `bridge.py` and `config.json` on any installation failure.
-- **Preserves Worktree**: Leaves user untracked report files and dirty worktree untouched without stashing or deleting.
-- **Safe Defaults**: Maintains `dispatch_enabled=false` and `allow_dirty_continue=false`.
+    python control_center\remote_bridge\bootstrap_antigravity_bridge.py --workspace "D:\Documents\Movie-Studio-Control-Center-Agent" --defer-metadata-to-sidecar --activate-ping
 
-### 3. Manual Sidecar Location & Installation
-Official Antigravity sidecars run from their dedicated configuration folder on Windows:
-`%USERPROFILE%\.gemini\config\sidecars\github_bridge\`
+Expected: PING_ONLY_INSTALLED_RELOAD_REQUIRED. No native message has been sent.
+Reload the one known existing sidecar only after active work has finished.
+If rollback fails, inspect private backups and do not send the ping.
 
-Windows PowerShell setup commands (run once after local security approval):
-```powershell
-# Create dedicated sidecar folder
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.gemini\config\sidecars\github_bridge"
+Installer refuses changed SHA, unknown or insecure Git remote, different branch,
+corrupt private config, missing bound conversation, broad dispatch permission,
+conflicting sidecars and unexpected sidecar manifest.
 
-# Copy sidecar script and sidecar manifest
-Copy-Item "control_center\remote_bridge\bridge.py" "$env:USERPROFILE\.gemini\config\sidecars\github_bridge\bridge.py"
-Copy-Item "control_center\remote_bridge\sidecar.json.example" "$env:USERPROFILE\.gemini\config\sidecars\github_bridge\sidecar.json"
-```
+Source resolution: verify local bridge.py against exact Git blob first. If local
+source is missing, fetch through authenticated gh api at the exact reviewed
+commit; never use default-branch content or raw.githubusercontent.com fallbacks.
+Transient gh child-process errors receive bounded retries with redacted,
+non-secret error classifications. Corrupted source fails closed.
 
-Alternatively, native Antigravity UI settings can be used to add the sidecar without manual terminal invocation. Routine manual Git commands are NOT required once configured.
+## Test and acceptance gates
 
-### 3. Local Opt-In Configuration Setup
-Create local state directory and configuration file at `%USERPROFILE%\.antigravity_bridge_state\config.json`:
-```powershell
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.antigravity_bridge_state"
-```
+From the isolated candidate root, run:
 
-Save initial safe configuration to `%USERPROFILE%\.antigravity_bridge_state\config.json`:
-```json
-{
-  "workspace_dir": "C:\\path\\to\\project-agent-orchestrator",
-  "dispatch_enabled": false,
-  "ping_enabled": false,
-  "status_enabled": true,
-  "conversation_id": "conv-your-active-id",
-  "poll_interval_sec": 900,
-  "min_status_interval_sec": 900,
-  "allow_dirty_continue": false
-}
-```
+    python -m unittest discover -s tests -p "test_bootstrap_antigravity_bridge.py" -v
+    python -m unittest discover -s tests -p "test_control_center_remote_bridge.py" -v
+    python -m unittest discover -s tests -p "test_bridge_metadata_schema__created_by_agent_gpt6.py" -v
+    python -m py_compile control_center/remote_bridge/bootstrap_antigravity_bridge.py control_center/remote_bridge/bridge.py
+    git diff --check
 
-#### Configuration Options:
-- `workspace_dir` (string): Absolute path to local repository workspace directory.
-- `dispatch_enabled` (boolean): `true` to allow `continue_issue` prompts; default `false`.
-- `ping_enabled` (boolean): `true` to allow prewritten benign `ping_conversation` prompts; default `false`.
-- `status_enabled` (boolean): `true` to post status receipts to Issue #55; default `false`.
-- `conversation_id` (string): Native active Antigravity conversation ID for `send-message`.
-- `poll_interval_sec` (integer): Polling frequency in seconds (60 to 3600).
-- `min_status_interval_sec` (integer): Minimum status posting interval in seconds (>= 900).
-- `allow_dirty_continue` (boolean): When `true` and working tree is dirty, permits prompt continuation for existing Issue #44/#47 conversations on matching branch and SHA without shell/repo writes. Automatic new work remains blocked.
+Container regression tests are **not** a substitute for native Windows
+verification: the installer was not run on the user's host. The reviewed
+bridge must obtain a matching exact native conversation_id from authoritative
+agentapi get-conversation-metadata before ANY message is dispatched.
+Then require BOTH a PING_DISPATCHED Issue #55 receipt (15-minute rate limit)
+and a genuine visible acknowledgment in the correct Antigravity conversation.
 
-### Windows Operator Command Flow & Sidecar Deployment
-For zero-spend, one-time local opt-in on the Windows host machine:
-1. **Inbox & Sink Designation**: Issue #54 is the command inbox where incoming envelopes are polled. Issue #55 is the status receipt sink where public receipts are published. Issue #55 must NOT be used as a command inbox.
-2. **Local Script Copy**: After candidate code review, copy the verified `bridge.py` script from the exact candidate commit SHA to the installed sidecar directory:
-   ```powershell
-   Copy-Item "control_center\remote_bridge\bridge.py" "$env:USERPROFILE\.gemini\config\sidecars\github_bridge\bridge.py" -Force
-   ```
-3. **Controlled Reload & Configuration Opt-In**: Update `%USERPROFILE%\.antigravity_bridge_state\config.json` with `"ping_enabled": true` or `"dispatch_enabled": true` by explicit user action, and trigger a controlled sidecar reload if required.
-4. **Two-Way Verification**: A public Issue #55 receipt code of `PING_DISPATCHED` confirms successful command processing and `agentapi send-message` invocation. However, an `agentapi` zero exit code alone is not full two-way proof; the operator/system must independently verify receipt of the prewritten acknowledgement ("Controller connectivity check only...") inside the active Antigravity conversation interface. The bridge preserves a result blocked by the 15-minute receipt cooldown or a temporary GitHub API error in `pending_status_result.json` and publishes it on the next successful heartbeat; an immediate absence of `PING_DISPATCHED` is not proof of failure. Never clear this state to force a retry.
-
-   **Hard activation gate:** The local `agentapi get-conversation-metadata <conversation_id>` response must exit successfully and return a JSON object with an exact `conversation_id` matching the configured active conversation. A CLI success with an unexpected/malformed schema is **not sufficient**. Investigate schema safely, fix/test the parser in a reviewable draft, and do not loosen this check or send a speculative ping. Check the actual sidecar process uses the pinned and tested script before adding any command. Keep `dispatch_enabled: false` while exercising `ping_enabled: true` for the one-time benign test.
-
-   **Last-moment safety:** Immediately before each native send, the bridge revalidates Git origin, exact `agent/control-center-standalone` branch, and exact expected HEAD SHA against the authenticated command. The ping can tolerate a dirty working tree on that verified commit, but cannot tolerate a changed branch, unverified remote, or HEAD drift.
-
-### 4. Dry-Run Setup Verification & Offline Unit Testing
-To verify setup without creating GitHub comments or sending messages:
-```powershell
-python "$env:USERPROFILE\.gemini\config\sidecars\github_bridge\bridge.py" --dry-run
-```
-
-Run offline unit tests:
-```powershell
-PYTHONPATH=. python -m unittest -v tests/test_control_center_remote_bridge.py
-```
-
-### 4b. Exact-Candidate Offline Test + Redacted Native Probe
-
-**Do not test by replacing the installed sidecar first.** On Windows, use a
-separate checkout of PR #71 with its **exact reviewed commit SHA**. The current
-working frontend repository/PR #46 should not be reset or checked out.
-
-From the *root of the isolated candidate checkout* (PowerShell):
-
-```powershell
-python -m unittest discover -s tests -p "test_control_center_remote_bridge.py" -v
-python -m unittest discover -s tests -p "test_bridge_metadata_schema__created_by_agent_gpt6.py" -v
-python -m py_compile "control_center/remote_bridge/bridge.py" "control_center/remote_bridge/check_agentapi_metadata__created_by_agent_gpt6.py"
-git diff --check HEAD~1 HEAD
-```
-
-The redacted schema probe is also read-only; it reads the existing *local*
-`~/.antigravity_bridge_state/config.json` conversation ID, runs only
-`agentapi get-conversation-metadata` and prints field names and Boolean
-match results—**never raw metadata, IDs, prompts, paths or credentials**:
-
-```powershell
-python "control_center/remote_bridge/check_agentapi_metadata__created_by_agent_gpt6.py"
-```
-
-If the probe returns `FAIL_CLOSED`, `AGENTAPI_UNAVAILABLE` or any other
-non-`SCHEMA_VERIFIED` verdict, **do not enable or send a ping**. Verify
-`agentapi` location with trusted local read-only tools; if the actual
-metadata schema differs, correct the reviewed bridge parser and regression
-tests **before** installation. Do not work around this with skipped metadata
-checks or arbitrary commands.
-
-PR #71's current development branch has *diverged in Git history* from the
-already installed PR #69 stable bridge. A file-by-file audit found the prior
-bridge/security behavior retained in candidate source, but this is **not** a
-substitute for an exact-SHA offline suite and a safe local staging comparison.
-Never blindly merge both PRs or reinstall over the working process.
-
-### 5. Revocation & Disabling
-To immediately disable the bridge:
-- Set `"dispatch_enabled": false` and `"status_enabled": false` in `%USERPROFILE%\.antigravity_bridge_state\config.json`.
-- Or set `"enabled": false` in `%USERPROFILE%\.gemini\config\config.json`.
-
-## Technical & Security Safeguards
-1. **`send-message` Support Only**: The Antigravity local CLI / sidecar interface officially supports `agentapi send-message <conversation_id>`.
-2. **Normalized Git Origin Verification**: Exact match required for `pddkalyan/project-agent-orchestrator` (HTTPS or canonical `git@github.com:` SSH). HTTP, embedded URL credentials, or lookalike hosts (e.g. `github.com.attacker.com`) are rejected.
-3. **Private Dispatch Authorization**: Dispatch requires explicit authorization context and matching branch and HEAD SHA.
-4. **Dirty Working Tree Protection**: Automatic new work is blocked while dirty. Prompt continuation is permitted only if `allow_dirty_continue: true` is explicitly opted-in for the same existing conversation and allowlisted task.
-5. **Periodic Heartbeat & Rate Limiting**: Status posting is strictly capped to at most once per 15 minutes (`min_status_interval_sec >= 900`). Public status receipts omit raw paths, stderr, tokens, or prompts, reporting execution status as `UNKNOWN`.
-6. **No Direct Writes / Merges**: The bridge script NEVER performs direct Git writes, merges, or force pushes.
+Do not merge automatically, force-push, spend money, delete local files,
+weaken metadata checks, or turn on unrestricted remote command execution.
