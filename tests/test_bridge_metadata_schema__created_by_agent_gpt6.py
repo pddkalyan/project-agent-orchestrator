@@ -43,6 +43,23 @@ class TestReadOnlyMetadataSchema(unittest.TestCase):
         self.assertNotIn("private-data", json.dumps(report))
         self.assertFalse(report["exact_conversation_id_match"])
 
+    def test_native_nested_schema_reports_match_without_exposing_id(self):
+        expected = "private-conversation-value"
+        report = summarize_metadata(json.dumps({
+            "response": {
+                "conversationMetadata": {
+                    "metadata": {
+                        "rootConversationId": expected
+                    }
+                }
+            }
+        }), expected)
+        self.assertEqual(report["verdict"], "SCHEMA_VERIFIED")
+        self.assertTrue(report["exact_conversation_id_match"])
+        serialized = json.dumps(report)
+        self.assertNotIn(expected, serialized)
+        self.assertIn("response", report["field_names"])
+
 
 if __name__ == "__main__":
     unittest.main()
