@@ -3486,5 +3486,161 @@ class MovieStudioCoreTests(unittest.TestCase):
             ProductionLedger.from_dict(corrupt)
         self.assertEqual(ledger.to_dict(), before)
 
+
+    def test_astra_f1_cleanup_evidence_missing_fields_rejected_without_fabrication(self):
+        ledger, *_ = self.completed_master_fixture()
+        baseline = ledger.to_dict()
+        self.assertTrue(ledger.cleanup_eligible())
+        field_names = ("artifact_id", "owner_run_id", "temporary", "ownership_evidence_id", "creator_id")
+        targets = ("temporary_artifacts", "cleanup_authorization")
+        for target in targets:
+            for missing in field_names:
+                with self.subTest(target=target, missing=missing):
+                    damaged = copy.deepcopy(baseline)
+                    record = (
+                        damaged["temporary_artifacts"][0]
+                        if target == "temporary_artifacts"
+                        else damaged["cleanup_authorization"]["artifacts"][0]
+                    )
+                    del record[missing]
+                    unchanged = copy.deepcopy(damaged)
+                    with self.assertRaises(ProductionPolicyError):
+                        ProductionLedger.from_dict(damaged)
+                    self.assertEqual(damaged, unchanged)
+                    self.assertEqual(ledger.to_dict(), baseline)
+        self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(baseline)).to_dict(), baseline)
+
+    def test_astra_f1_cleanup_evidence_malformed_unknown_and_wrong_types_reject(self):
+        ledger, *_ = self.completed_master_fixture()
+        baseline = ledger.to_dict()
+        malformed = (
+            {"artifact_id": None},
+            {"artifact_id": 123},
+            {"artifact_id": ""},
+            {"owner_run_id": None},
+            {"owner_run_id": "  "},
+            {"temporary": False},
+            {"temporary": 1},
+            {"temporary": None},
+            {"ownership_evidence_id": ""},
+            {"ownership_evidence_id": 123},
+            {"creator_id": None},
+            {"creator_id": "user"},
+            {"creator_id": ""},
+            {"unexpected_field": "untrusted"},
+        )
+        for target in ("temporary_artifacts", "cleanup_authorization"):
+            for invalid in malformed:
+                with self.subTest(target=target, invalid=invalid):
+                    damaged = copy.deepcopy(baseline)
+                    record = (
+                        damaged["temporary_artifacts"][0]
+                        if target == "temporary_artifacts"
+                        else damaged["cleanup_authorization"]["artifacts"][0]
+                    )
+                    record.update(invalid)
+                    with self.assertRaises(ProductionPolicyError):
+                        ProductionLedger.from_dict(damaged)
+            for other in (None, 99, "malformed", []):
+                with self.subTest(target=target, record=other):
+                    damaged = copy.deepcopy(baseline)
+                    if target == "temporary_artifacts":
+                        damaged["temporary_artifacts"][0] = other
+                    else:
+                        damaged["cleanup_authorization"]["artifacts"][0] = other
+                    with self.assertRaises(ProductionPolicyError):
+                        ProductionLedger.from_dict(damaged)
+        self.assertEqual(ledger.to_dict(), baseline)
+
+    def test_astra_f1_durable_cleanup_corruption_is_not_normalized(self):
+        ledger, *_ = self.completed_master_fixture()
+        baseline = ledger.to_dict()
+        with tempfile.TemporaryDirectory() as directory:
+            store = AtomicCheckpointStore(Path(directory) / "checkpoint.json")
+            store.save(ledger)
+            safe_bytes = store.path.read_bytes()
+            self.assertEqual(store.load().to_dict(), baseline)
+            for target in ("temporary_artifacts", "cleanup_authorization"):
+                for missing in ("artifact_id", "owner_run_id", "temporary",
+                                "ownership_evidence_id", "creator_id"):
+                    with self.subTest(target=target, missing=missing):
+                        damaged = copy.deepcopy(baseline)
+                        record = (
+                            damaged["temporary_artifacts"][0]
+                            if target == "temporary_artifacts"
+                            else damaged["cleanup_authorization"]["artifacts"][0]
+                        )
+                        del record[missing]
+                        corrupt_bytes = json.dumps(damaged, sort_keys=True).encode("utf-8")
+                        store.path.write_bytes(corrupt_bytes)
+                        with self.assertRaises(ProductionPolicyError):
+                            store.load()
+                        self.assertEqual(store.path.read_bytes(), corrupt_bytes)
+                        self.assertEqual(ledger.to_dict(), baseline)
+            store.path.write_bytes(safe_bytes)
+            self.assertEqual(store.load().to_dict(), baseline)
+            self.assertTrue(store.load().cleanup_eligible())
+
+    def test_astra_f2_invalid_success_callback_is_atomic_then_valid_replay_and_restore(self):
+        invalid_tokens = (" ", "", "\ud800", None, 7, False)
+        for invalid in invalid_tokens:
+            with self.subTest(invalid_repr=repr(invalid)), tempfile.TemporaryDirectory() as directory:
+                ledger, quote, store, adapter, coordinator = self.recovery_fixture(directory)
+                ledger = coordinator.dispatch("J1", quote)
+                job = ledger.jobs["J1"]
+                self.assertIs(job.status, JobStatus.RUNNING)
+                provider_id = job.provider_job_id
+                before = ledger.to_dict()
+                checkpoint_bytes = store.path.read_bytes()
+                with self.assertRaises(ProductionPolicyError):
+                    ledger.finish_generation("J1", 1, provider_id, invalid)
+                self.assertEqual(ledger.to_dict(), before)
+                self.assertEqual(store.path.read_bytes(), checkpoint_bytes)
+                self.assertIs(ledger.jobs["J1"].attempt_history[-1].status, AttemptStatus.RUNNING)
+                self.assertIs(ledger.shots["S1"].status, ShotStatus.GENERATING)
+                ledger.validate()
+                self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+                # Exact same authorized current callback may succeed after rejection.
+                ledger.finish_generation("J1", 1, provider_id, "映像-v1")
+                self.assertIs(ledger.jobs["J1"].status, JobStatus.SUCCEEDED)
+                self.assertIs(ledger.shots["S1"].status, ShotStatus.GENERATED)
+                self.assertEqual(ledger.shots["S1"].asset_version, "映像-v1")
+                after = ledger.to_dict()
+                ledger.finish_generation("J1", 1, provider_id, "映像-v1")
+                self.assertEqual(ledger.to_dict(), after)
+                with self.assertRaises(ProductionPolicyError):
+                    ledger.finish_generation("J1", 1, provider_id, "different")
+                self.assertEqual(ledger.to_dict(), after)
+                store.save(ledger)
+                self.assertEqual(store.load().to_dict(), after)
+                self.assertEqual(ledger.to_dict(), after)
+
+    def test_astra_f1_exhaustive_nested_terminal_evidence_field_deletion(self):
+        ledger, *_ = self.completed_master_fixture()
+        original = ledger.to_dict()
+        missing_fields = []
+        def enumerate_fields(value, path):
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    missing_fields.append(path + (key,))
+                    enumerate_fields(nested, path + (key,))
+            elif isinstance(value, list):
+                for index, nested in enumerate(value):
+                    enumerate_fields(nested, path + (index,))
+        for field in ("timeline", "master", "master_qc", "archive",
+                      "cleanup_authorization", "temporary_artifacts"):
+            enumerate_fields(original[field], (field,))
+        self.assertGreaterEqual(len(missing_fields), 60)
+        for path in missing_fields:
+            with self.subTest(deleted=".".join(map(str, path))):
+                damaged = copy.deepcopy(original)
+                record = damaged
+                for segment in path[:-1]:
+                    record = record[segment]
+                del record[path[-1]]
+                with self.assertRaises(ProductionPolicyError):
+                    ProductionLedger.from_dict(damaged)
+        self.assertEqual(ledger.to_dict(), original)
+
 if __name__ == "__main__":
     unittest.main()
