@@ -48,6 +48,7 @@ function clearWithMessage(container, message, className) {
 }
 
 function validDate(value) {
+    if (value == null || typeof value === 'boolean' || (typeof value === 'string' && !value.trim())) return null;
     const date = new Date(value);
     return Number.isFinite(date.getTime()) ? date : null;
 }
@@ -86,12 +87,14 @@ function addPR(container, pr) {
     wrapper.className = 'border-b border-cinematic-border/50 py-3 last:border-0 px-2';
     const top = document.createElement('div');
     top.className = 'flex justify-between items-start mb-1 gap-3';
-    top.appendChild(linkOrText(pr.title || 'Untitled pull request', pr.html_url, 'pr',
+    const title = (typeof pr.title === 'string' && pr.title.trim()) ? pr.title.trim() : 'Untitled pull request';
+    top.appendChild(linkOrText(title, pr.html_url, 'pr',
         'text-sm font-semibold text-white truncate'));
     top.appendChild(textElement('span', status, 'status-badge ' + statusClass));
+    const author = (pr.user && typeof pr.user.login === 'string' && pr.user.login.trim()) ? pr.user.login.trim() : 'Unknown';
     const detail = textElement('div',
         '#' + (Number.isSafeInteger(pr.number) ? pr.number : '?') +
-        ' by ' + (pr.user && pr.user.login || 'Unknown') +
+        ' by ' + author +
         ' · ' + dateLabel(pr.created_at),
         'text-xs text-cinematic-muted font-mono');
     wrapper.appendChild(top);
@@ -132,13 +135,16 @@ function addRun(container, run) {
     wrapper.className = 'border-b border-cinematic-border/50 py-3 last:border-0 px-2';
     const top = document.createElement('div');
     top.className = 'flex justify-between items-start gap-3';
-    top.appendChild(linkOrText(run.name || 'Unnamed workflow', run.html_url, 'run',
+    const name = (typeof run.name === 'string' && run.name.trim()) ? run.name.trim() : 'Unnamed workflow';
+    top.appendChild(linkOrText(name, run.html_url, 'run',
         'text-sm font-semibold text-white truncate'));
     top.appendChild(textElement('span', state, 'text-xs font-mono ' + color));
     wrapper.appendChild(top);
+    const displayTitle = (typeof run.display_title === 'string' && run.display_title.trim()) ? run.display_title.trim() : 'No title';
+    const headBranch = (typeof run.head_branch === 'string' && run.head_branch.trim()) ? run.head_branch.trim() : 'Unknown branch';
     wrapper.appendChild(textElement('div',
-        (run.display_title || 'No title') + ' · ' +
-        (run.head_branch || 'Unknown branch') + ' · ' + dateLabel(run.created_at),
+        displayTitle + ' · ' +
+        headBranch + ' · ' + dateLabel(run.created_at),
         'text-xs text-cinematic-muted font-mono'));
     container.appendChild(wrapper);
 }

@@ -101,12 +101,22 @@ for (const url of [
     'https://github.com@evil.example/pddkalyan/project-agent-orchestrator/pull/10',
     'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/10',
     'https://github.com/pddkalyan/project-agent-orchestrator/pull/1?redirect=1',
+    'https://github.com:8443/pddkalyan/project-agent-orchestrator/pull/10',
+    'https://github.com/pddkalyan/project-agent-orchestrator/pull/10#section',
+    '/pddkalyan/project-agent-orchestrator/pull/10',
+    '',
     null,
 ]) assertBadURL(url);
 assert.equal(app.githubURL('https://github.com/pddkalyan/project-agent-orchestrator/pull/71', 'pr'),
     'https://github.com/pddkalyan/project-agent-orchestrator/pull/71');
 assert.equal(app.githubURL('https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/42', 'run'),
     'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/42');
+assert.equal(app.validDate(null), null);
+assert.equal(app.validDate(false), null);
+assert.equal(app.validDate(''), null);
+assert.equal(app.validDate('   '), null);
+assert.equal(app.validDate(undefined), null);
+assert(app.validDate('2026-10-10T04:44:28Z') instanceof Date);
 const prs = node('pr-container');
 app.addPR(prs, {
     title: '<img src=x onerror=alert(1)>',

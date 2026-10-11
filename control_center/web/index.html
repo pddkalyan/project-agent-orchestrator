@@ -110,7 +110,7 @@
             <section class="glass-panel rounded-xl border border-cinematic-border bg-cinematic-panel flex flex-col">
                 <div class="p-3 border-b border-cinematic-border bg-black/20 flex justify-between items-center">
                     <h2 class="text-sm font-semibold uppercase tracking-wider">Bridge heartbeat</h2>
-                    <button id="refresh-bridge" aria-label="Refresh bridge status" class="text-cinematic-muted hover:text-white">
+                    <button id="refresh-bridge" aria-label="Refresh bridge status" class="text-cinematic-muted hover:text-white transition-colors">
                         <i class="fa-solid fa-sync" aria-hidden="true"></i>
                     </button>
                 </div>
@@ -127,7 +127,7 @@
                     </h2>
                     <button id="refresh-prs" aria-label="Refresh Pull Requests" class="text-cinematic-muted hover:text-white transition-colors"><i class="fa-solid fa-sync" aria-hidden="true"></i></button>
                 </div>
-                <div class="p-4 overflow-y-auto flex-1 custom-scrollbar" id="pr-container">
+                <div class="p-4 overflow-y-auto flex-1 custom-scrollbar" id="pr-container" aria-live="polite">
                     <div class="flex items-center justify-center h-full text-cinematic-muted font-mono text-sm">
                         <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Loading PRs...
                     </div>
@@ -142,7 +142,7 @@
                     </h2>
                     <button id="refresh-actions" aria-label="Refresh Actions" class="text-cinematic-muted hover:text-white transition-colors"><i class="fa-solid fa-sync" aria-hidden="true"></i></button>
                 </div>
-                <div class="p-4 overflow-y-auto flex-1 custom-scrollbar" id="actions-container">
+                <div class="p-4 overflow-y-auto flex-1 custom-scrollbar" id="actions-container" aria-live="polite">
                     <div class="flex items-center justify-center h-full text-cinematic-muted font-mono text-sm">
                         <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Loading Actions...
                     </div>
