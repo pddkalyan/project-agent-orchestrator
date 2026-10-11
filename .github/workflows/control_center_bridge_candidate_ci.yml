@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: control-center-bridge-candidate-${{ github.ref }}
@@ -55,3 +56,14 @@ jobs:
           assert blob == bootstrap.SAFE_SOURCE_BLOB, (blob, bootstrap.SAFE_SOURCE_BLOB)
           print('Verified exact pinned candidate bridge Git blob:', blob)
           PY
+      - name: Publish sanitized candidate CI receipt
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_STATUS: ${{ job.status }}
+          RUN_ID: ${{ github.run_id }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          body="Control Center bridge PR #79 candidate CI: ${CI_STATUS}; exact SHA: ${COMMIT}; GitHub Actions run: https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/${RUN_ID}. Review-only. No Windows installation, no dispatch opt-in, no secret metadata."
+          gh api repos/pddkalyan/project-agent-orchestrator/issues/79/comments -f "body=${body}" >/dev/null || echo "RESULT_COMMENT_BLOCKED (tests result remains in this Actions run)"
