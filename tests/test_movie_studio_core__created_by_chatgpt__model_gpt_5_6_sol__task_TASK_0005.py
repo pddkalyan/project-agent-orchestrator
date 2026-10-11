@@ -3426,5 +3426,65 @@ class MovieStudioCoreTests(unittest.TestCase):
         ledger.start_generation("job-1", receipt)
         self.assertEqual(ledger.jobs["job-1"].status, JobStatus.RETRYABLE)
 
+
+    def test_frozen_plan_with_unrepresented_scene_rejects_submission_atomically(self):
+        ledger = ProductionLedger("scene-coverage-reject")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_scene(Scene("SC2"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        ledger.add_shot_plan(ShotPlan("S1", "SC1", 0, 1000, "prompt-s1", False))
+        ledger.add_shot_continuity_binding(ShotContinuityBinding(
+            "S1", ledger.bible.revision, frozenset(), frozenset(), "",
+            frozenset(), frozenset(), frozenset()))
+        ledger.freeze_plan()
+        before = ledger.to_dict()
+        self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+        with self.assertRaisesRegex(ProductionPolicyError, "at least one planned shot in every scene"):
+            ledger.submit_generation(
+                job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        self.assertEqual(ledger.to_dict(), before)
+        self.assertEqual(ledger.jobs, {})
+        self.assertEqual(ledger.idempotency_index, {})
+
+    def test_valid_multiscene_frozen_plan_generation_and_roundtrip(self):
+        ledger = ProductionLedger("scene-coverage-valid")
+        for index in (1, 2):
+            scene_id = f"SC{index}"
+            shot_id = f"S{index}"
+            ledger.add_scene(Scene(scene_id))
+            ledger.add_shot(Shot(shot_id, scene_id=scene_id))
+            ledger.add_shot_plan(ShotPlan(
+                shot_id, scene_id, 0, 1000, f"prompt-{shot_id}", False))
+            ledger.add_shot_continuity_binding(ShotContinuityBinding(
+                shot_id, ledger.bible.revision, frozenset(), frozenset(), "",
+                frozenset(), frozenset(), frozenset()))
+        ledger.freeze_plan()
+        first = ledger.submit_generation(
+            job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        second = ledger.submit_generation(
+            job_id="J2", shot_id="S2", idempotency_key="K2", input_fingerprint="F2")
+        self.assertEqual({first.job_id, second.job_id}, {"J1", "J2"})
+        before = ledger.to_dict()
+        self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+        same = ledger.submit_generation(
+            job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        self.assertEqual(same.job_id, "J1")
+        self.assertEqual(ledger.to_dict(), before)
+
+    def test_job_checkpoint_rejects_extra_unplanned_scene_on_restore(self):
+        ledger = ProductionLedger("scene-coverage-checkpoint")
+        ledger.add_scene(Scene("SC1"))
+        ledger.add_shot(Shot("S1", scene_id="SC1"))
+        self.submit_planned_fixture(ledger,
+            job_id="J1", shot_id="S1", idempotency_key="K1", input_fingerprint="F1")
+        before = ledger.to_dict()
+        self.assertEqual(ProductionLedger.from_dict(copy.deepcopy(before)).to_dict(), before)
+        corrupt = copy.deepcopy(before)
+        corrupt["scenes"]["SC2"] = copy.deepcopy(corrupt["scenes"]["SC1"])
+        corrupt["scenes"]["SC2"]["scene_id"] = "SC2"
+        with self.assertRaisesRegex(ProductionPolicyError, "at least one planned shot in every scene"):
+            ProductionLedger.from_dict(corrupt)
+        self.assertEqual(ledger.to_dict(), before)
+
 if __name__ == "__main__":
     unittest.main()
