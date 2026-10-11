@@ -24,12 +24,14 @@ def iso(ts):
 
 def snapshot(worker='A', used5=100, usedweek=100, limit5=600, limitweek=4200,
              observed=NOW, reset5=NOW+timedelta(hours=4),
-             resetweek=NOW+timedelta(days=6), paid_off=True, topup_off=True):
+             resetweek=NOW+timedelta(days=6), paid_off=True, topup_off=True,
+             balance_fallback_off=True):
     return QuotaSnapshot(worker=worker, observed_at=iso(observed),
                          five_hour_reset_at=iso(reset5), weekly_reset_at=iso(resetweek),
                          five_hour_used=used5, five_hour_limit=limit5,
                          weekly_used=usedweek, weekly_limit=limitweek,
-                         paid_overage_disabled=paid_off, auto_topup_disabled=topup_off)
+                         paid_overage_disabled=paid_off, auto_topup_disabled=topup_off,
+                         balance_fallback_disabled=balance_fallback_off)
 
 
 class FakeFeed:
@@ -172,10 +174,19 @@ class OfflineGuardTests(unittest.TestCase):
                 with self.assertRaises(FeedUnavailable):self.preflight(f'req-{n}')
 
     def test_no_overage_or_topup_proof_no_request(self):
-        for s in [snapshot(paid_off=False),snapshot(topup_off=False)]:
+        for s in [snapshot(paid_off=False),snapshot(topup_off=False),
+                  snapshot(balance_fallback_off=False)]:
             self.feed.snapshots['A']=s
             with self.assertRaises(GuardBlocked):self.preflight('req-b')
             self.assertEqual(self.guard.read_status('A')['status'],'AUTH_ERROR')
+
+    def test_balance_fallback_default_is_unsafe_even_if_other_flags_are_true(self):
+        # Provider documentation: balance funds usage after plan allowance runs out.
+        # Omission must block even if top-ups=0 and no overage was explicitly enabled.
+        self.feed.snapshots['A']=dataclasses.replace(snapshot(), balance_fallback_disabled=False)
+        with self.assertRaises(GuardBlocked):self.preflight('req-balance')
+        self.assertEqual(self.guard.read_status('A')['status'],'AUTH_ERROR')
+        self.assertIsNone(self.guard.read_status('A')['pending_request_id'])
 
     def test_bad_usage_counters_boolean_negative_nan_inf_missing(self):
         variants=[
