@@ -1,7 +1,7 @@
 # Antigravity ChatGPT GitHub Sidecar — Ping-Only Recovery
 
 **Review candidate for enhanced coding-dispatch security. Not installed.** The previously installed **ping-only** bridge has now been verified end-to-end; this stricter draft candidate has not been deployed. Never enable coding dispatch until a separate local authorization and full review.
-The existing Windows status-only sidecar reads authenticated GitHub Issue #54
+The existing Windows ping-enabled sidecar reads authenticated GitHub Issue #54
 commands and writes rate-limited receipts to Issue #55. General native dispatch
 must remain disabled.
 
@@ -11,14 +11,16 @@ must remain disabled.
 - Repository: pddkalyan/project-agent-orchestrator.
 - Target Windows worktree branch: agent/control-center-standalone.
 - Exact last verified target HEAD: 15b148cfbc3acc0eec10c51ab8e8bf413613f23f.
-- Exact safe source commit (PR #74): af71a090d30e5247393bb02bd4317e09a9678b57.
+- Pinned reviewed candidate source commit (this draft): af71a090d30e5247393bb02bd4317e09a9678b57.
 - Exact reviewed bridge.py Git blob: 4baa551e3ab224931ac401d3852c7f025f7091ed.
 - Existing sidecar path: %USERPROFILE%\.gemini\config\sidecars\github_bridge\
 - Private config: %USERPROFILE%\.antigravity_bridge_state\config.json
 - Native conversation ID stays strictly private on Windows.
 - Keep dispatch_enabled=false, allow_dirty_continue=false, status_enabled=true.
-- The existing host ping-only integration was locally opted in and confirmed; keep\n  ping_enabled=true only where already approved. For fresh hosts, start with false.
-- Only the existing prewritten, non-coding Issue #47 ping is currently eligible.\n- This candidate adds **mandatory authoritative exact native metadata matching** to the separate `continue_issue` path, rejects silent code dispatch, and rechecks Git identity and dirty-tree state after metadata lookup. `dispatch_enabled` stays false on the live host.
+- The existing host ping-only integration was locally opted in and confirmed; keep
+  ping_enabled=true only where already approved. For fresh hosts, start with false.
+- Only the existing prewritten, non-coding Issue #47 ping is currently eligible.
+- This candidate adds **mandatory authoritative exact native metadata matching** to the separate `continue_issue` path, rejects silent code dispatch, and rechecks Git identity and dirty-tree state after metadata lookup. `dispatch_enabled` stays false on the live host.
 
 ## Read-only preflight (after security review)
 
