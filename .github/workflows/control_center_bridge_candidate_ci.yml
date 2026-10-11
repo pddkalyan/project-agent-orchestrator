@@ -1,0 +1,57 @@
+name: Control Center Bridge Candidate CI
+
+on:
+  push:
+    branches:
+      - candidate/antigravity-dispatch-auth-race-gpt6-20261011
+    paths:
+      - '.github/workflows/control_center_bridge_candidate_ci.yml'
+      - 'control_center/remote_bridge/**'
+      - 'tests/test_control_center_remote_bridge.py'
+      - 'tests/test_bootstrap_antigravity_bridge.py'
+      - 'tests/test_bridge_metadata_schema__created_by_agent_gpt6.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-center-bridge-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  offline_bridge_regression:
+    name: "REVIEW ONLY · zero-spend bridge regression"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout isolated candidate
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Use Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate source and regression test syntax
+        run: |
+          python -m py_compile control_center/remote_bridge/bridge.py control_center/remote_bridge/bootstrap_antigravity_bridge.py control_center/remote_bridge/check_agentapi_metadata__created_by_agent_gpt6.py tests/test_control_center_remote_bridge.py tests/test_bootstrap_antigravity_bridge.py tests/test_bridge_metadata_schema__created_by_agent_gpt6.py
+      - name: Full bridge and bootstrap regression
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests -p 'test_control_center_remote_bridge.py' -v
+          python -m unittest discover -s tests -p 'test_bootstrap_antigravity_bridge.py' -v
+          python -m unittest discover -s tests -p 'test_bridge_metadata_schema__created_by_agent_gpt6.py' -v
+      - name: Diff whitespace and source pin check
+        run: |
+          set -euo pipefail
+          git diff --check 44b1c0756e00b6bae4665ea83714f31280eda28a HEAD
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          from control_center.remote_bridge import bootstrap_antigravity_bridge as bootstrap
+          source = Path('control_center/remote_bridge/bridge.py').read_bytes()
+          blob = hashlib.sha1(b'blob '+str(len(source)).encode()+b'\0'+source).hexdigest()
+          assert blob == bootstrap.SAFE_SOURCE_BLOB, (blob, bootstrap.SAFE_SOURCE_BLOB)
+          print('Verified exact pinned candidate bridge Git blob:', blob)
+          PY
