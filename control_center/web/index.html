@@ -58,6 +58,43 @@
     <!-- Main Content -->
     <main class="flex-1 p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 relative">
 
+        <!-- Top Section: Concurrent Agent Workboard (lg:col-span-12) -->
+        <section class="lg:col-span-12 glass-panel rounded-xl border border-cinematic-border bg-cinematic-panel flex flex-col overflow-hidden">
+            <div class="p-3 border-b border-cinematic-border bg-black/20 flex flex-wrap justify-between items-center gap-3">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-users-gear text-cinematic-accent2"></i>
+                    <h2 class="text-sm font-semibold uppercase tracking-wider">Concurrent Agent Workboard</h2>
+                    <span class="text-xs bg-cinematic-border px-2 py-0.5 rounded font-mono text-cinematic-muted">READ ONLY EVIDENCE</span>
+                </div>
+                <div class="flex items-center gap-4 text-xs font-mono text-cinematic-muted">
+                    <span id="workboard-updated">Public GitHub evidence only</span>
+                    <button id="refresh-workboard" aria-label="Refresh Agent Workboard" class="text-cinematic-muted hover:text-white transition-colors">
+                        <i class="fa-solid fa-sync" aria-hidden="true"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- "How to Interpret Status" Guide -->
+            <div class="p-3 bg-black/30 border-b border-cinematic-border/50 text-xs font-mono space-y-1.5">
+                <div class="text-cinematic-accent2 font-bold uppercase tracking-wider flex items-center gap-2">
+                    <i class="fa-solid fa-circle-info"></i> How to Interpret Status &amp; Evidence
+                </div>
+                <ul class="list-disc list-inside space-y-1 text-cinematic-muted text-[11px] leading-relaxed">
+                    <li><strong class="text-white">CI succeeded ≠ worker currently coding:</strong> Scheduled workflows (such as <em>Trusted Jules Launcher</em>) test policy triggers or static commits; green checks are policy validations, not proof an AI agent is running or generating code.</li>
+                    <li><strong class="text-white">Bridge reported alive ≠ Antigravity executing:</strong> A verified heartbeat receipt proves the local bridge daemon loop is running, not that a native agent is actively processing tasks.</li>
+                    <li><strong class="text-white">Astra review paused:</strong> Review state reflects operator-sourced reports (e.g. 5-hour work limit reset window); it is never inferred from automated CI.</li>
+                    <li><strong class="text-white">No fabricated telemetry:</strong> Every card reflects verifiable public GitHub PR/workflow/receipt data. Quota, thinking logs, and live model execution remain <span class="text-yellow-400">UNKNOWN</span>.</li>
+                </ul>
+            </div>
+
+            <!-- 4 Workstream Cards Grid -->
+            <div id="workboard-container" aria-live="polite" class="p-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                <div class="text-xs text-cinematic-muted font-mono col-span-full text-center py-4">
+                    <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Loading Concurrent Agent Workboard…
+                </div>
+            </div>
+        </section>
+
         <!-- Left Column: Tasks & Agent Info -->
         <div class="lg:col-span-3 flex flex-col gap-6">
             <!-- Active Task -->

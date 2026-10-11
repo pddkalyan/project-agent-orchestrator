@@ -61,6 +61,17 @@ class FrontendStaticTests(unittest.TestCase):
         self.assertIn("textContent", js)
         self.assertIn("noopener noreferrer", js)
 
+    def test_workboard_and_interpretation_guide_exist(self):
+        html = (WEB / "index.html").read_text(encoding="utf-8")
+        self.assertIn('id="workboard-container"', html)
+        self.assertIn('id="refresh-workboard"', html)
+        self.assertIn('How to Interpret Status', html)
+        self.assertIn('CI succeeded ≠ worker currently coding', html)
+        self.assertIn('Bridge reported alive ≠ Antigravity executing', html)
+        self.assertIn('Astra review paused', html)
+        css = (WEB / "style.css").read_text(encoding="utf-8")
+        self.assertIn('.workboard-card', css)
+
 
 NODE_BEHAVIOR_TESTS = r"""
 'use strict';
@@ -182,6 +193,45 @@ app.renderBridgeStatus(receipt, receipt.observed.getTime() + 36 * 60000);
 assert.equal(bridge.textContent, 'STALE');
 app.renderBridgeStatus(null, Date.now());
 assert.equal(bridge.textContent, 'UNKNOWN');
+const workboard = node('workboard-container');
+app.renderWorkboard();
+assert.equal(workboard.children.length, 4, 'workboard must render 4 workstream cards');
+const allCardText = card => gather(card).map(n => n.textContent).join(' ');
+const cardTexts = workboard.children.map(allCardText);
+assert(cardTexts.some(t => t.includes('Control Center UI') && t.includes('Antigravity CLI')));
+assert(cardTexts.some(t => t.includes('Phase 2 Production Pipeline') && t.includes('GPT-6 / Sol Phase 2')));
+assert(cardTexts.some(t => t.includes('Bridge Security') && t.includes('Jules')));
+assert(cardTexts.some(t => t.includes('Inbound Command FIFO Queue') && t.includes('Jules')));
+assert(cardTexts.every(t => t.includes('UNKNOWN — no direct session telemetry')));
+
+// Scheduled green launcher check must be labeled as policy/launcher check, never active coder
+const launcherNode = new FakeNode('div');
+app.addRun(launcherNode, {
+    name: 'Movie Studio TASK-0005 Trusted Jules Launcher',
+    status: 'completed',
+    conclusion: 'success',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/38116279877',
+    display_title: 'Scheduled check',
+    head_branch: 'main',
+    created_at: '2026-10-11T00:00:00Z'
+});
+const launcherText = gather(launcherNode).map(n => n.textContent).join(' ');
+assert(launcherText.includes('Policy / Scheduled Launcher Check — not active agent coding'),
+    'launcher check missing policy/not-coding label');
+
+// Jules is on it bot acknowledgment check
+const julesNode = new FakeNode('div');
+app.addRun(julesNode, {
+    name: 'Jules Work',
+    status: 'in_progress',
+    html_url: 'https://github.com/pddkalyan/project-agent-orchestrator/actions/runs/999',
+    display_title: 'Jules is on it',
+    head_branch: 'main',
+    created_at: '2026-10-11T00:00:00Z'
+});
+const julesText = gather(julesNode).map(n => n.textContent).join(' ');
+assert(julesText.includes('(Task acknowledgment only — not ongoing thought)'),
+    'Jules bot comment missing task-acknowledgment note');
 global.fetch = async () => ({ok: false, status: 429});
 (async () => {
     await app.fetchPRs();

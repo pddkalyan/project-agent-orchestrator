@@ -63,6 +63,18 @@ body {
 /* Glow effects */
 .glow-text { text-shadow: 0 0 10px rgba(0, 229, 255, 0.5); }
 
+/* Concurrent Agent Workboard Cards */
+.workboard-card {
+    background-color: rgba(10, 10, 12, 0.5);
+    border: 1px solid rgba(42, 42, 53, 0.7);
+    border-radius: 0.5rem;
+    transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+.workboard-card:hover {
+    border-color: rgba(0, 229, 255, 0.4);
+    background-color: rgba(15, 15, 20, 0.7);
+}
+
 /* Avoid clipped model/status text on compact displays. A 320px screenshot
    can hide clipped content despite reporting zero horizontal scroll. */
 @media (max-width: 639px) {
